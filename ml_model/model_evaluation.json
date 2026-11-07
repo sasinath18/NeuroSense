@@ -1,0 +1,63 @@
+{
+    "project": "NeuroSense",
+    "model": "RandomForestClassifier",
+    "dataset": "D:\\NeuroSense\\data\\stress_dataset.csv",
+    "total_records": 1780,
+    "training_records": 1422,
+    "testing_records": 358,
+    "participant_level_split": true,
+    "features": [
+        "heart_rate_bpm",
+        "hrv_ms",
+        "gsr_raw",
+        "skin_temperature_c",
+        "heart_rate_delta",
+        "hrv_delta",
+        "gsr_delta",
+        "skin_temperature_delta"
+    ],
+    "classes": [
+        "baseline",
+        "stress"
+    ],
+    "accuracy": 0.8687150837988827,
+    "macro_f1": 0.8563586849810908,
+    "confusion_matrix": [
+        [
+            208,
+            20
+        ],
+        [
+            27,
+            103
+        ]
+    ],
+    "classification_report": {
+        "baseline": {
+            "precision": 0.8851063829787233,
+            "recall": 0.9122807017543859,
+            "f1-score": 0.8984881209503239,
+            "support": 228.0
+        },
+        "stress": {
+            "precision": 0.8373983739837398,
+            "recall": 0.7923076923076923,
+            "f1-score": 0.8142292490118577,
+            "support": 130.0
+        },
+        "accuracy": 0.8687150837988827,
+        "macro avg": {
+            "precision": 0.8612523784812316,
+            "recall": 0.8522941970310391,
+            "f1-score": 0.8563586849810908,
+            "support": 358.0
+        },
+        "weighted avg": {
+            "precision": 0.8677822456341763,
+            "recall": 0.8687150837988827,
+            "f1-score": 0.8678913238776965,
+            "support": 358.0
+        }
+    },
+    "evaluation_note": "Performance on this test split only. Independent validation is still required."
+}

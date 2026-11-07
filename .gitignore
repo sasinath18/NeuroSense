@@ -1,0 +1,70 @@
+
+# ===================================
+# Python
+# ===================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing and cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ===================================
+# Environment variables and secrets
+# ===================================
+.env
+.env.*
+!.env.example
+
+# Firebase credentials and private keys
+*serviceAccount*.json
+firebase-credentials*.json
+*.pem
+*.key
+
+# Local firmware secrets
+firmware/secrets.py
+
+# ===================================
+# Local datasets and databases
+# ===================================
+data/local/
+data/wesad/
+data/stress_dataset.csv
+*.db
+*.sqlite
+*.sqlite3
+
+# ===================================
+# Logs and temporary files
+# ===================================
+*.log
+*.tmp
+*.bak
+
+# ===================================
+# IDE and operating system
+# ===================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===================================
+# Build files
+# ===================================
+build/
+dist/
+*.egg-info/

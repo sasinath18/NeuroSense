@@ -1,0 +1,3502 @@
+
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#111318">
+    <title>NeuroSense | Stress Monitoring</title>
+
+    <style>
+        /* =================================================
+           1. THEME VARIABLES
+        ================================================= */
+
+        :root,
+        [data-theme="dark"] {
+            color-scheme: dark;
+            --bg: #101216;
+            --sidebar: #14171d;
+            --surface: #1a1e26;
+            --surface-2: #202631;
+            --surface-hover: #272e39;
+            --text: #f4f6fa;
+            --muted: #a1aabd;
+            --subtle: #778298;
+            --border: #2b3240;
+            --accent: #5285cf;
+            --accent-hover: #6798df;
+            --accent-soft: rgba(82,133,207,.14);
+            --green: #35b98b;
+            --yellow: #e7b65b;
+            --red: #e47777;
+            --grid: #303746;
+            --chart-1: #69a5f2;
+            --chart-2: #43c5a1;
+            --chart-3: #e7b65b;
+            --shadow: 0 12px 35px rgba(0,0,0,.20);
+            --input: #151922;
+            --ring-track: #303746;
+        }
+
+        [data-theme="light"] {
+            color-scheme: light;
+            --bg: #f3f5f9;
+            --sidebar: #ffffff;
+            --surface: #ffffff;
+            --surface-2: #f1f4f9;
+            --surface-hover: #e9eef6;
+            --text: #192335;
+            --muted: #53627a;
+            --subtle: #748198;
+            --border: #dce2eb;
+            --accent: #326db9;
+            --accent-hover: #235caa;
+            --accent-soft: rgba(50,109,185,.10);
+            --green: #14855e;
+            --yellow: #a87318;
+            --red: #c34d4d;
+            --grid: #dce2eb;
+            --chart-1: #286cbd;
+            --chart-2: #14855e;
+            --chart-3: #a87318;
+            --shadow: 0 10px 28px rgba(40,55,80,.07);
+            --input: #f7f9fc;
+            --ring-track: #e0e6ef;
+        }
+
+        /* =================================================
+           2. COMMON STYLES
+        ================================================= */
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            min-height: 100vh;
+            background: var(--bg);
+            color: var(--text);
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            font-size: 14px;
+            transition: background .25s, color .25s;
+        }
+
+        button,
+        input,
+        select {
+            font: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        button:focus-visible,
+        input:focus-visible,
+        select:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 3px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .muted {
+            color: var(--muted);
+        }
+
+        .small {
+            font-size: 12px;
+        }
+
+        .eyebrow {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .09em;
+            text-transform: uppercase;
+        }
+
+        .primary-btn,
+        .secondary-btn,
+        .danger-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 40px;
+            padding: 9px 15px;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            font-weight: 650;
+            transition: .2s;
+        }
+
+        .primary-btn {
+            color: #ffffff;
+            background: var(--accent);
+        }
+
+        .primary-btn:hover {
+            background: var(--accent-hover);
+        }
+
+        .secondary-btn {
+            color: var(--text);
+            background: var(--surface-2);
+            border-color: var(--border);
+        }
+
+        .secondary-btn:hover {
+            background: var(--surface-hover);
+        }
+
+        .danger-btn {
+            color: var(--red);
+            background: transparent;
+            border-color: var(--border);
+        }
+
+        .icon-btn {
+            width: 42px;
+            height: 42px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            color: var(--text);
+            transition: .2s;
+        }
+
+        .icon-btn:hover {
+            background: var(--surface-hover);
+            border-color: var(--accent);
+        }
+
+        .icon-btn svg {
+            width: 19px;
+            height: 19px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 5px 9px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--muted);
+            background: var(--surface-2);
+            white-space: nowrap;
+        }
+
+        .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            display: inline-block;
+            background: var(--muted);
+        }
+
+        .dot.green { background: var(--green); }
+        .dot.yellow { background: var(--yellow); }
+        .dot.red { background: var(--red); }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 19px;
+            box-shadow: var(--shadow);
+            min-width: 0;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .card-header h3 {
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        .card-header p {
+            color: var(--muted);
+            margin-top: 5px;
+            font-size: 12px;
+        }
+
+        .section-title {
+            font-size: 22px;
+            font-weight: 750;
+            letter-spacing: -.4px;
+        }
+
+        .section-subtitle {
+            color: var(--muted);
+            margin-top: 7px;
+            line-height: 1.6;
+        }
+
+        .page-heading {
+            margin-bottom: 23px;
+        }
+
+        .form-control {
+            width: 100%;
+            min-height: 42px;
+            padding: 10px 12px;
+            border-radius: 9px;
+            border: 1px solid var(--border);
+            background: var(--input);
+            color: var(--text);
+        }
+
+        .form-control::placeholder {
+            color: var(--subtle);
+        }
+
+        .field {
+            display: grid;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        .field label {
+            font-weight: 650;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .notice {
+            padding: 12px 14px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface-2);
+            color: var(--muted);
+            line-height: 1.55;
+            font-size: 12px;
+        }
+
+        /* =================================================
+           3. LOGIN SCREEN
+        ================================================= */
+
+        .login-screen {
+            min-height: 100vh;
+            display: grid;
+            grid-template-columns: 1.15fr .85fr;
+            background: var(--bg);
+        }
+
+        .login-visual {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 55px 8%;
+            background:
+                radial-gradient(ellipse at 20% 30%, rgba(69,115,185,.18), transparent 55%),
+                var(--sidebar);
+            border-right: 1px solid var(--border);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-mark {
+            width: 43px;
+            height: 43px;
+            display: grid;
+            place-items: center;
+            color: white;
+            font-size: 20px;
+            font-weight: 800;
+            border-radius: 13px;
+            background: linear-gradient(145deg, #6093d9, #315e9c);
+        }
+
+        .brand-name {
+            font-weight: 800;
+            font-size: 18px;
+            letter-spacing: .3px;
+        }
+
+        .brand-caption {
+            color: var(--muted);
+            font-size: 11px;
+            margin-top: 3px;
+        }
+
+        .login-hero {
+            max-width: 540px;
+            padding: 50px 0;
+        }
+
+        .login-hero h1 {
+            font-size: clamp(35px, 5vw, 60px);
+            line-height: 1.12;
+            letter-spacing: -2px;
+            margin: 17px 0;
+        }
+
+        .login-hero h1 span {
+            color: var(--accent-hover);
+        }
+
+        .login-hero p {
+            color: var(--muted);
+            font-size: 15px;
+            line-height: 1.8;
+            max-width: 440px;
+        }
+
+        .login-feature-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .login-feature-row span {
+            padding: 9px 12px;
+            border: 1px solid var(--border);
+            border-radius: 30px;
+            background: var(--surface);
+        }
+
+        .login-panel {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 35px;
+        }
+
+        .login-box {
+            width: min(100%, 390px);
+        }
+
+        .login-box h2 {
+            font-size: 25px;
+            margin-bottom: 8px;
+        }
+
+        .login-box > p {
+            color: var(--muted);
+            line-height: 1.6;
+            margin-bottom: 25px;
+        }
+
+        .login-box .primary-btn {
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .login-box .secondary-btn {
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .login-footer {
+            color: var(--subtle);
+            font-size: 11px;
+            line-height: 1.6;
+            margin-top: 20px;
+        }
+
+        /* =================================================
+           4. APPLICATION LAYOUT
+        ================================================= */
+
+        .app-shell {
+            min-height: 100vh;
+            display: grid;
+            grid-template-columns: 245px minmax(0, 1fr);
+        }
+
+        .sidebar {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding: 22px 15px;
+            background: var(--sidebar);
+            border-right: 1px solid var(--border);
+            z-index: 20;
+        }
+
+        .sidebar-brand {
+            padding: 0 9px 25px;
+        }
+
+        .sidebar-nav {
+            display: grid;
+            gap: 5px;
+        }
+
+        .nav-label {
+            padding: 17px 10px 8px;
+            color: var(--subtle);
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: .1em;
+        }
+
+        .nav-btn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            padding: 12px 11px;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            color: var(--muted);
+            text-align: left;
+            font-weight: 600;
+            transition: .2s;
+        }
+
+        .nav-btn:hover {
+            color: var(--text);
+            background: var(--surface);
+        }
+
+        .nav-btn.active {
+            background: var(--accent-soft);
+            color: var(--accent-hover);
+            border-color: rgba(82,133,207,.22);
+        }
+
+        .nav-btn svg {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .sidebar-bottom {
+            margin-top: auto;
+        }
+
+        .sidebar-device {
+            padding: 13px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--surface);
+        }
+
+        .sidebar-device strong {
+            font-size: 12px;
+            display: block;
+            margin-bottom: 7px;
+        }
+
+        .sidebar-device p {
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--muted);
+        }
+
+        .app-main {
+            min-width: 0;
+            padding: 0 30px 35px;
+        }
+
+        .topbar {
+            min-height: 76px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 15px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 27px;
+        }
+
+        .topbar-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .topbar-left p {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .profile-button {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 5px 8px 5px 5px;
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 30px;
+        }
+
+        .avatar {
+            width: 31px;
+            height: 31px;
+            display: grid;
+            place-items: center;
+            border-radius: 50%;
+            background: var(--accent-soft);
+            color: var(--accent-hover);
+            font-weight: 800;
+        }
+
+        .profile-button span:last-child {
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .menu-button {
+            display: none;
+        }
+
+        .page {
+            display: none;
+            animation: pageIn .22s ease;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        @keyframes pageIn {
+            from { opacity: .55; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* =================================================
+           5. DASHBOARD
+        ================================================= */
+
+        .demo-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding: 12px 15px;
+            border: 1px solid rgba(231,182,91,.28);
+            border-radius: 11px;
+            color: var(--muted);
+            background: rgba(231,182,91,.07);
+            font-size: 12px;
+            margin-bottom: 20px;
+        }
+
+        .demo-banner strong {
+            color: var(--yellow);
+        }
+
+        .dashboard-heading-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 15px;
+            flex-wrap: wrap;
+            margin-bottom: 21px;
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0,1fr));
+            gap: 15px;
+            margin-bottom: 17px;
+        }
+
+        .metric-card {
+            min-height: 143px;
+        }
+
+        .metric-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .metric-icon {
+            width: 35px;
+            height: 35px;
+            display: grid;
+            place-items: center;
+            border-radius: 10px;
+            background: var(--accent-soft);
+            color: var(--accent-hover);
+        }
+
+        .metric-icon svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        .metric-value {
+            font-size: 29px;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin: 13px 0 4px;
+        }
+
+        .metric-unit {
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 0;
+        }
+
+        .metric-foot {
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: minmax(0,1.6fr) minmax(265px,.85fr);
+            gap: 17px;
+            align-items: start;
+        }
+
+        .chart-card {
+            margin-bottom: 17px;
+        }
+
+        .chart-wrap {
+            position: relative;
+            width: 100%;
+            height: 245px;
+        }
+
+        .chart-wrap canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .chart-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-top: 12px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend-line {
+            width: 17px;
+            height: 3px;
+            border-radius: 3px;
+        }
+
+        .stress-card {
+            margin-bottom: 17px;
+        }
+
+        .stress-layout {
+            display: flex;
+            align-items: center;
+            gap: 17px;
+        }
+
+        .stress-ring {
+            --score: 67;
+            position: relative;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            flex-shrink: 0;
+            background: conic-gradient(
+                var(--chart-3) calc(var(--score) * 1%),
+                var(--ring-track) 0
+            );
+        }
+
+        .stress-ring::before {
+            content: "";
+            position: absolute;
+            inset: 9px;
+            border-radius: 50%;
+            background: var(--surface);
+        }
+
+        .stress-ring-content {
+            z-index: 1;
+            text-align: center;
+        }
+
+        .stress-ring-content strong {
+            display: block;
+            font-size: 27px;
+        }
+
+        .stress-ring-content span {
+            color: var(--muted);
+            font-size: 10px;
+        }
+
+        .stress-description {
+            min-width: 0;
+        }
+
+        .stress-description strong {
+            display: block;
+            margin-bottom: 7px;
+            font-size: 14px;
+        }
+
+        .stress-description p {
+            font-size: 11px;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .status-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 11px 0;
+            border-top: 1px solid var(--border);
+            font-size: 12px;
+        }
+
+        .status-row:first-of-type {
+            margin-top: 15px;
+        }
+
+        .status-row span:first-child {
+            color: var(--muted);
+        }
+
+        .quick-actions {
+            display: grid;
+            gap: 9px;
+        }
+
+        .quick-action {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            text-align: left;
+            color: var(--text);
+            transition: .2s;
+        }
+
+        .quick-action:hover {
+            border-color: var(--accent);
+            background: var(--accent-soft);
+        }
+
+        .quick-action .action-symbol {
+            width: 32px;
+            height: 32px;
+            display: grid;
+            place-items: center;
+            border-radius: 9px;
+            color: var(--accent-hover);
+            background: var(--accent-soft);
+            font-size: 15px;
+        }
+
+        .quick-action strong {
+            display: block;
+            font-size: 12px;
+        }
+
+        .quick-action small {
+            display: block;
+            color: var(--muted);
+            margin-top: 4px;
+            font-size: 10px;
+        }
+
+        /* =================================================
+           6. ANALYTICS
+        ================================================= */
+
+        .analytics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0,1fr));
+            gap: 17px;
+        }
+
+        .analytics-summary {
+            display: grid;
+            grid-template-columns: repeat(3,minmax(0,1fr));
+            gap: 14px;
+            margin-bottom: 17px;
+        }
+
+        .summary-value {
+            font-size: 24px;
+            font-weight: 800;
+            margin-top: 12px;
+        }
+
+        /* =================================================
+           7. FACE SCAN
+        ================================================= */
+
+        .face-grid {
+            display: grid;
+            grid-template-columns: minmax(0,1.2fr) minmax(260px,.8fr);
+            gap: 17px;
+        }
+
+        .camera-frame {
+            width: 100%;
+            min-height: 290px;
+            position: relative;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+            background: #0b0e13;
+            border: 1px solid var(--border);
+            border-radius: 13px;
+        }
+
+        .camera-frame video {
+            width: 100%;
+            height: 100%;
+            max-height: 420px;
+            object-fit: cover;
+            display: none;
+        }
+
+        .camera-placeholder {
+            max-width: 320px;
+            padding: 25px;
+            text-align: center;
+            color: #c6cedd;
+        }
+
+        .camera-placeholder .camera-icon {
+            width: 57px;
+            height: 57px;
+            display: grid;
+            place-items: center;
+            margin: 0 auto 15px;
+            border-radius: 50%;
+            background: #1b2431;
+            font-size: 24px;
+        }
+
+        .camera-placeholder p {
+            color: #9da9ba;
+            font-size: 12px;
+            line-height: 1.7;
+            margin-top: 8px;
+        }
+
+        .face-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 9px;
+            margin-top: 14px;
+        }
+
+        .privacy-list {
+            display: grid;
+            gap: 15px;
+        }
+
+        .privacy-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            line-height: 1.55;
+        }
+
+        .privacy-item .check {
+            color: var(--green);
+            font-weight: 800;
+        }
+
+        /* =================================================
+           8. RECOVERY
+        ================================================= */
+
+        .recovery-grid {
+            display: grid;
+            grid-template-columns: minmax(0,1.1fr) minmax(260px,.9fr);
+            gap: 17px;
+        }
+
+        .breathing-panel {
+            text-align: center;
+            padding: 25px 15px;
+        }
+
+        .breath-orb {
+            width: 165px;
+            height: 165px;
+            display: grid;
+            place-items: center;
+            margin: 25px auto;
+            border-radius: 50%;
+            background: radial-gradient(
+                circle at 35% 30%,
+                #8eb8ec,
+                #3f76b8 60%,
+                #27558d
+            );
+            box-shadow: 0 0 0 13px var(--accent-soft);
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 700;
+            transform: scale(1);
+            transition: transform 1.4s ease-in-out;
+        }
+
+        .breath-orb[data-phase="inhale"] {
+            transform: scale(1.17);
+        }
+
+        .breath-orb[data-phase="hold"] {
+            transform: scale(1.17);
+        }
+
+        .breath-orb[data-phase="exhale"] {
+            transform: scale(.88);
+        }
+
+        .breath-timer {
+            font-size: 28px;
+            font-weight: 800;
+            margin: 9px 0;
+        }
+
+        .breath-controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 9px;
+            margin-top: 17px;
+        }
+
+        .music-player {
+            display: grid;
+            gap: 13px;
+        }
+
+        .music-player audio {
+            width: 100%;
+        }
+
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 15px;
+            padding: 13px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .toggle-copy strong {
+            display: block;
+            font-size: 13px;
+        }
+
+        .toggle-copy p {
+            color: var(--muted);
+            font-size: 11px;
+            margin-top: 5px;
+            line-height: 1.5;
+        }
+
+        .switch {
+            position: relative;
+            flex-shrink: 0;
+            width: 48px;
+            height: 27px;
+            display: inline-block;
+        }
+
+        .switch input {
+            width: 0;
+            height: 0;
+            opacity: 0;
+        }
+
+        .switch-track {
+            position: absolute;
+            inset: 0;
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            transition: .2s;
+            cursor: pointer;
+        }
+
+        .switch-track::before {
+            content: "";
+            position: absolute;
+            width: 19px;
+            height: 19px;
+            top: 3px;
+            left: 3px;
+            background: var(--muted);
+            border-radius: 50%;
+            transition: .2s;
+        }
+
+        .switch input:checked + .switch-track {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .switch input:checked + .switch-track::before {
+            transform: translateX(21px);
+            background: #ffffff;
+        }
+
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: repeat(2,minmax(0,1fr));
+            gap: 12px;
+        }
+
+        .comparison-box {
+            padding: 13px;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+
+        .comparison-box strong {
+            display: block;
+            margin-top: 9px;
+            font-size: 18px;
+        }
+
+        /* =================================================
+           9. HISTORY AND PROFILE
+        ================================================= */
+
+        .table-wrap {
+            width: 100%;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            min-width: 600px;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            color: var(--muted);
+            background: var(--surface-2);
+            font-size: 11px;
+            font-weight: 750;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+        }
+
+        th, td {
+            padding: 14px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        td {
+            font-size: 12px;
+        }
+
+        .empty-state {
+            padding: 30px 15px;
+            text-align: center;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(2,minmax(0,1fr));
+            gap: 17px;
+        }
+
+        /* =================================================
+           10. TOAST AND FOOTER
+        ================================================= */
+
+        .toast {
+            position: fixed;
+            z-index: 100;
+            right: 22px;
+            bottom: 22px;
+            max-width: min(360px, calc(100vw - 40px));
+            padding: 13px 17px;
+            border-radius: 11px;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+            color: var(--text);
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(10px);
+            transition: .2s;
+            line-height: 1.5;
+            font-size: 12px;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .app-footer {
+            margin-top: 32px;
+            padding: 17px 0 0;
+            border-top: 1px solid var(--border);
+            color: var(--subtle);
+            font-size: 11px;
+            line-height: 1.6;
+        }
+
+        /* =================================================
+           11. RESPONSIVE DESIGN
+        ================================================= */
+
+        @media (max-width: 1100px) {
+            .metric-grid {
+                grid-template-columns: repeat(2,minmax(0,1fr));
+            }
+
+            .dashboard-grid {
+                grid-template-columns: minmax(0,1.35fr) minmax(250px,.85fr);
+            }
+        }
+
+        @media (max-width: 850px) {
+            .app-shell {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                position: fixed;
+                left: -270px;
+                width: 245px;
+                transition: left .25s;
+                box-shadow: var(--shadow);
+            }
+
+            .sidebar.open {
+                left: 0;
+            }
+
+            .menu-button {
+                display: inline-flex;
+            }
+
+            .app-main {
+                padding: 0 20px 30px;
+            }
+
+            .dashboard-grid,
+            .face-grid,
+            .recovery-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .login-screen {
+                grid-template-columns: 1fr;
+            }
+
+            .login-visual {
+                min-height: 300px;
+                padding: 30px;
+            }
+
+            .login-hero {
+                padding: 30px 0 10px;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .app-main {
+                padding: 0 13px 25px;
+            }
+
+            .topbar {
+                min-height: 67px;
+                margin-bottom: 20px;
+            }
+
+            .topbar-left p {
+                display: none;
+            }
+
+            .profile-button span:last-child {
+                display: none;
+            }
+
+            .metric-grid {
+                gap: 10px;
+            }
+
+            .metric-card {
+                min-height: 130px;
+                padding: 13px;
+            }
+
+            .metric-value {
+                font-size: 24px;
+            }
+
+            .card {
+                padding: 15px;
+                border-radius: 13px;
+            }
+
+            .analytics-grid,
+            .settings-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .analytics-summary {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .section-title {
+                font-size: 20px;
+            }
+
+            .chart-wrap {
+                height: 220px;
+            }
+
+            .stress-layout {
+                align-items: flex-start;
+            }
+
+            .stress-ring {
+                width: 103px;
+                height: 103px;
+            }
+
+            .login-panel {
+                padding: 28px 20px 40px;
+            }
+
+            .login-visual {
+                padding: 25px 22px;
+            }
+
+            .login-feature-row {
+                gap: 7px;
+            }
+
+            .login-feature-row span {
+                font-size: 10px;
+                padding: 7px 9px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                scroll-behavior: auto !important;
+                transition-duration: .01ms !important;
+                animation-duration: .01ms !important;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<!-- ======================================================
+     12. LOGIN SCREEN
+====================================================== -->
+
+<section id="loginScreen" class="login-screen">
+
+    <div class="login-visual">
+
+        <div class="brand">
+            <div class="brand-mark">N</div>
+            <div>
+                <div class="brand-name">NeuroSense</div>
+                <div class="brand-caption">Wearable wellness monitoring</div>
+            </div>
+        </div>
+
+        <div class="login-hero">
+            <span class="eyebrow">Personal wellness companion</span>
+
+            <h1>
+                Understand your
+                <span>stress patterns.</span>
+            </h1>
+
+            <p>
+                Monitor physiological signals, explore your daily trends
+                and follow guided recovery activities through one
+                connected wellness dashboard.
+            </p>
+
+            <div style="height:24px"></div>
+
+            <div class="login-feature-row">
+                <span>♥ Physiological monitoring</span>
+                <span>◷ Recovery tracking</span>
+                <span>⌁ Personal analytics</span>
+            </div>
+        </div>
+
+        <div class="muted small">
+            NeuroSense is a wellness prototype, not a medical diagnostic device.
+        </div>
+
+    </div>
+
+    <div class="login-panel">
+
+        <div class="login-box">
+
+            <span class="eyebrow">Welcome</span>
+
+            <h2>Access your dashboard</h2>
+
+            <p>
+                Sign-in integration will be enabled after Firebase
+                Authentication is configured.
+            </p>
+
+            <div class="notice">
+                <strong>Development preview</strong><br>
+                You can enter the dashboard using local preview mode.
+                Preview data is simulated and is not connected to a wearable.
+            </div>
+
+            <button id="previewLoginBtn" class="primary-btn">
+                Open dashboard preview →
+            </button>
+
+            <button id="googleLoginBtn" class="secondary-btn" disabled
+                    title="Firebase authentication has not been connected yet">
+                Google Sign-In · Coming after Firebase setup
+            </button>
+
+            <div class="login-footer">
+                By continuing in preview mode, you understand that
+                displayed readings are sample data. No real account
+                authentication takes place in this preview.
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- ======================================================
+     13. MAIN APPLICATION
+====================================================== -->
+
+<div id="appShell" class="app-shell hidden">
+
+    <!-- SIDEBAR -->
+
+    <aside id="sidebar" class="sidebar">
+
+        <div class="sidebar-brand brand">
+            <div class="brand-mark">N</div>
+            <div>
+                <div class="brand-name">NeuroSense</div>
+                <div class="brand-caption">Wellness dashboard</div>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+
+            <div class="nav-label">Workspace</div>
+
+            <button class="nav-btn active" data-page="dashboard">
+                <span>⌂</span> Dashboard
+            </button>
+
+            <button class="nav-btn" data-page="analytics">
+                <span>▥</span> Analytics
+            </button>
+
+            <button class="nav-btn" data-page="face">
+                <span>◉</span> Face Scan
+            </button>
+
+            <div class="nav-label">Wellness</div>
+
+            <button class="nav-btn" data-page="recovery">
+                <span>◎</span> Recovery
+            </button>
+
+            <button class="nav-btn" data-page="history">
+                <span>◷</span> History
+            </button>
+
+            <div class="nav-label">Account</div>
+
+            <button class="nav-btn" data-page="settings">
+                <span>⚙</span> Settings & Profile
+            </button>
+
+        </nav>
+
+        <div class="sidebar-bottom">
+
+            <div class="sidebar-device">
+                <strong>Wearable device</strong>
+                <p>
+                    <span class="dot red"></span>
+                    ESP32 not connected
+                </p>
+                <p style="margin-top:5px">
+                    Device integration is pending.
+                </p>
+            </div>
+
+            <div class="muted small" style="padding:16px 5px 0">
+                NeuroSense · Development preview
+            </div>
+
+        </div>
+
+    </aside>
+
+
+    <!-- MAIN CONTENT -->
+
+    <main class="app-main">
+
+        <!-- TOP BAR -->
+
+        <header class="topbar">
+
+            <div class="topbar-left">
+
+                <button id="menuBtn" class="icon-btn menu-button"
+                        aria-label="Open navigation menu">
+                    ☰
+                </button>
+
+                <div>
+                    <h3 id="topPageTitle">Dashboard</h3>
+                    <p id="currentDate">Your wellness overview</p>
+                </div>
+
+            </div>
+
+            <div class="topbar-actions">
+
+                <span class="badge">
+                    <span class="dot yellow"></span>
+                    Demo mode
+                </span>
+
+                <!-- Theme toggle:
+                     Dark active = Sun icon.
+                     Light active = Moon icon. -->
+
+                <button id="themeToggle" class="icon-btn"
+                        aria-label="Switch theme"
+                        title="Switch theme">
+                    <svg id="themeIcon" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor"
+                         stroke-width="1.8" stroke-linecap="round"
+                         stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="4"></circle>
+                        <path d="M12 2v2"></path>
+                        <path d="M12 20v2"></path>
+                        <path d="m4.93 4.93 1.41 1.41"></path>
+                        <path d="m17.66 17.66 1.41 1.41"></path>
+                        <path d="M2 12h2"></path>
+                        <path d="M20 12h2"></path>
+                        <path d="m4.93 19.07 1.41-1.41"></path>
+                        <path d="m17.66 6.34 1.41-1.41"></path>
+                    </svg>
+                </button>
+
+                <button id="profileBtn" class="profile-button">
+                    <span id="avatarInitial" class="avatar">S</span>
+                    <span id="topProfileName">Sasinath</span>
+                </button>
+
+            </div>
+
+        </header>
+
+
+        <!-- ==============================================
+             PAGE: DASHBOARD
+        =============================================== -->
+
+        <section id="page-dashboard" class="page active">
+
+            <div class="demo-banner">
+                <span>
+                    <strong>PREVIEW DATA</strong> ·
+                    All displayed readings and graphs are simulated.
+                </span>
+                <span>ESP32: Not connected</span>
+            </div>
+
+            <div class="dashboard-heading-row">
+
+                <div>
+                    <div class="eyebrow">Personal overview</div>
+                    <h1 class="section-title" style="margin-top:6px">
+                        Welcome back, <span id="welcomeName">Sasinath</span>
+                    </h1>
+                    <p class="section-subtitle">
+                        Here is your NeuroSense preview dashboard.
+                    </p>
+                </div>
+
+                <button class="secondary-btn" data-go="analytics">
+                    View analytics →
+                </button>
+
+            </div>
+
+
+            <!-- MAIN METRIC CARDS -->
+
+            <div class="metric-grid">
+
+                <article class="card metric-card">
+
+                    <div class="metric-top">
+                        <span class="muted small">Heart Rate</span>
+                        <span class="metric-icon">♥</span>
+                    </div>
+
+                    <div class="metric-value">
+                        <span id="heartRateValue">76</span>
+                        <span class="metric-unit">BPM</span>
+                    </div>
+
+                    <div class="metric-foot">Sample PPG reading</div>
+
+                </article>
+
+
+                <article class="card metric-card">
+
+                    <div class="metric-top">
+                        <span class="muted small">HRV</span>
+                        <span class="metric-icon">⌁</span>
+                    </div>
+
+                    <div class="metric-value">
+                        <span id="hrvValue">42</span>
+                        <span class="metric-unit">ms</span>
+                    </div>
+
+                    <div class="metric-foot">Sample HRV reading</div>
+
+                </article>
+
+
+                <article class="card metric-card">
+
+                    <div class="metric-top">
+                        <span class="muted small">GSR</span>
+                        <span class="metric-icon">〰</span>
+                    </div>
+
+                    <div class="metric-value">
+                        <span id="gsrValue">1850</span>
+                        <span class="metric-unit">raw</span>
+                    </div>
+
+                    <div class="metric-foot">Sample sensor value</div>
+
+                </article>
+
+
+                <article class="card metric-card">
+
+                    <div class="metric-top">
+                        <span class="muted small">Skin Temperature</span>
+                        <span class="metric-icon">♨</span>
+                    </div>
+
+                    <div class="metric-value">
+                        <span id="temperatureValue">33.2</span>
+                        <span class="metric-unit">°C</span>
+                    </div>
+
+                    <div class="metric-foot">Sample value · Not core temperature</div>
+
+                </article>
+
+            </div>
+
+
+            <div class="dashboard-grid">
+
+                <!-- LEFT COLUMN -->
+
+                <div>
+
+                    <article class="card chart-card">
+
+                        <div class="card-header">
+                            <div>
+                                <h3>Heart Rate Trend</h3>
+                                <p>Sample BPM readings over time</p>
+                            </div>
+
+                            <span class="badge">Demo chart</span>
+                        </div>
+
+                        <div class="chart-wrap">
+                            <canvas id="heartChart"
+                                    role="img"
+                                    aria-label="Sample heart rate trend chart"></canvas>
+                        </div>
+
+                        <div class="chart-legend">
+                            <span class="legend-item">
+                                <span class="legend-line"
+                                      style="background:var(--chart-1)"></span>
+                                Heart rate
+                            </span>
+                        </div>
+
+                    </article>
+
+
+                    <article class="card chart-card">
+
+                        <div class="card-header">
+                            <div>
+                                <h3>HRV Trend</h3>
+                                <p>Sample HRV readings over time</p>
+                            </div>
+
+                            <span class="badge">Demo chart</span>
+                        </div>
+
+                        <div class="chart-wrap">
+                            <canvas id="hrvChart"
+                                    role="img"
+                                    aria-label="Sample HRV trend chart"></canvas>
+                        </div>
+
+                        <div class="chart-legend">
+                            <span class="legend-item">
+                                <span class="legend-line"
+                                      style="background:var(--chart-2)"></span>
+                                HRV
+                            </span>
+                        </div>
+
+                    </article>
+
+                </div>
+
+
+                <!-- RIGHT COLUMN -->
+
+                <div>
+
+                    <article class="card stress-card">
+
+                        <div class="card-header">
+                            <div>
+                                <h3>Estimated Stress Score</h3>
+                                <p>Illustrative preview only</p>
+                            </div>
+                            <span class="badge">Simulated</span>
+                        </div>
+
+                        <div class="stress-layout">
+
+                            <div class="stress-ring"
+                                 style="--score:67">
+
+                                <div class="stress-ring-content">
+                                    <strong>67</strong>
+                                    <span>/100</span>
+                                </div>
+
+                            </div>
+
+                            <div class="stress-description">
+                                <strong>Demo score</strong>
+                                <p>
+                                    Not produced by a trained model.
+                                    Actual stress estimation is pending
+                                    ML integration and validation.
+                                </p>
+                            </div>
+
+                        </div>
+
+                        <div class="status-row">
+                            <span>ML model</span>
+                            <span class="badge">
+                                Not integrated
+                            </span>
+                        </div>
+
+                        <div class="status-row">
+                            <span>Signal quality</span>
+                            <span class="badge">Sample only</span>
+                        </div>
+
+                    </article>
+
+
+                    <article class="card">
+
+                        <div class="card-header">
+                            <div>
+                                <h3>Device Status</h3>
+                                <p>Wearable connection</p>
+                            </div>
+                        </div>
+
+                        <div class="status-row">
+                            <span>ESP32 device</span>
+                            <span style="color:var(--red)">
+                                ● Offline
+                            </span>
+                        </div>
+
+                        <div class="status-row">
+                            <span>Wi-Fi communication</span>
+                            <span>Not connected</span>
+                        </div>
+
+                        <div class="status-row">
+                            <span>Last received reading</span>
+                            <span>None</span>
+                        </div>
+
+                    </article>
+
+
+                    <article class="card" style="margin-top:17px">
+
+                        <div class="card-header">
+                            <div>
+                                <h3>Quick Actions</h3>
+                                <p>Wellness features</p>
+                            </div>
+                        </div>
+
+                        <div class="quick-actions">
+
+                            <button class="quick-action"
+                                    data-go="recovery">
+                                <span class="action-symbol">◎</span>
+                                <span>
+                                    <strong>Guided breathing</strong>
+                                    <small>Start a breathing session</small>
+                                </span>
+                            </button>
+
+                            <button class="quick-action"
+                                    data-go="face">
+                                <span class="action-symbol">◉</span>
+                                <span>
+                                    <strong>Face Scan</strong>
+                                    <small>Optional camera preview</small>
+                                </span>
+                            </button>
+
+                            <button class="quick-action"
+                                    data-go="history">
+                                <span class="action-symbol">◷</span>
+                                <span>
+                                    <strong>Recovery history</strong>
+                                    <small>Review completed sessions</small>
+                                </span>
+                            </button>
+
+                        </div>
+
+                    </article>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ==============================================
+             PAGE: ANALYTICS
+        =============================================== -->
+
+        <section id="page-analytics" class="page">
+
+            <div class="page-heading">
+                <div class="eyebrow">Performance overview</div>
+                <h1 class="section-title">Analytics</h1>
+                <p class="section-subtitle">
+                    Explore sample physiological trends. These charts
+                    are illustrative until real wearable data is connected.
+                </p>
+            </div>
+
+            <div class="demo-banner">
+                <span><strong>SIMULATED ANALYTICS</strong> · Not actual measurements.</span>
+                <span>ML validation pending</span>
+            </div>
+
+            <div class="analytics-summary">
+
+                <article class="card">
+                    <div class="muted small">Sample Average HR</div>
+                    <div class="summary-value">76 BPM</div>
+                </article>
+
+                <article class="card">
+                    <div class="muted small">Sample Average HRV</div>
+                    <div class="summary-value">42 ms</div>
+                </article>
+
+                <article class="card">
+                    <div class="muted small">Recorded sessions</div>
+                    <div class="summary-value" id="analyticsSessionCount">0</div>
+                </article>
+
+            </div>
+
+            <div class="analytics-grid">
+
+                <article class="card">
+                    <div class="card-header">
+                        <div>
+                            <h3>Heart Rate History</h3>
+                            <p>Sample BPM trend</p>
+                        </div>
+                        <span class="badge">Preview</span>
+                    </div>
+                    <div class="chart-wrap">
+                        <canvas id="analyticsHeartChart"
+                                role="img"
+                                aria-label="Sample heart rate history chart"></canvas>
+                    </div>
+                </article>
+
+                <article class="card">
+                    <div class="card-header">
+                        <div>
+                            <h3>HRV History</h3>
+                            <p>Sample millisecond trend</p>
+                        </div>
+                        <span class="badge">Preview</span>
+                    </div>
+                    <div class="chart-wrap">
+                        <canvas id="analyticsHrvChart"
+                                role="img"
+                                aria-label="Sample HRV history chart"></canvas>
+                    </div>
+                </article>
+
+                <article class="card">
+                    <div class="card-header">
+                        <div>
+                            <h3>GSR Samples</h3>
+                            <p>Illustrative raw sensor data</p>
+                        </div>
+                    </div>
+                    <div class="chart-wrap">
+                        <canvas id="analyticsGsrChart"
+                                role="img"
+                                aria-label="Sample GSR history chart"></canvas>
+                    </div>
+                </article>
+
+                <article class="card">
+                    <div class="card-header">
+                        <div>
+                            <h3>Skin Temperature Samples</h3>
+                            <p>Illustrative surface temperature data</p>
+                        </div>
+                    </div>
+                    <div class="chart-wrap">
+                        <canvas id="analyticsTempChart"
+                                role="img"
+                                aria-label="Sample skin temperature chart"></canvas>
+                    </div>
+                </article>
+
+            </div>
+
+        </section>
+
+
+        <!-- ==============================================
+             PAGE: FACE SCAN
+        =============================================== -->
+
+        <section id="page-face" class="page">
+
+            <div class="page-heading">
+                <div class="eyebrow">Optional camera feature</div>
+                <h1 class="section-title">Face Scan</h1>
+                <p class="section-subtitle">
+                    Camera access is user-controlled and remains disabled
+                    until you explicitly start it.
+                </p>
+            </div>
+
+            <div class="face-grid">
+
+                <article class="card">
+
+                    <div class="card-header">
+                        <div>
+                            <h3>Camera Preview</h3>
+                            <p>Camera is OFF by default</p>
+                        </div>
+
+                        <span id="cameraStatus" class="badge">
+                            <span class="dot red"></span>
+                            Camera OFF
+                        </span>
+                    </div>
+
+                    <div class="camera-frame">
+
+                        <video id="cameraVideo"
+                               autoplay
+                               muted
+                               playsinline></video>
+
+                        <div id="cameraPlaceholder" class="camera-placeholder">
+                            <div class="camera-icon">◉</div>
+                            <strong>Camera is currently disabled</strong>
+                            <p>
+                                Select Start Camera to request permission
+                                from your browser.
+                            </p>
+                        </div>
+
+                    </div>
+
+                    <div class="face-actions">
+
+                        <button id="startCameraBtn" class="primary-btn">
+                            Start Camera
+                        </button>
+
+                        <button id="stopCameraBtn"
+                                class="secondary-btn"
+                                disabled>
+                            Stop Camera
+                        </button>
+
+                    </div>
+
+                    <p id="cameraMessage" class="muted small"
+                       style="margin-top:12px">
+                        No camera access has been requested.
+                    </p>
+
+                </article>
+
+
+                <article class="card">
+
+                    <div class="card-header">
+                        <div>
+                            <h3>Privacy and Analysis</h3>
+                            <p>How this feature will work</p>
+                        </div>
+                    </div>
+
+                    <div class="privacy-list">
+
+                        <div class="privacy-item">
+                            <span class="check">✓</span>
+                            <span>Camera starts only after your action and permission.</span>
+                        </div>
+
+                        <div class="privacy-item">
+                            <span class="check">✓</span>
+                            <span>Camera can be stopped at any time.</span>
+                        </div>
+
+                        <div class="privacy-item">
+                            <span class="check">✓</span>
+                            <span>Camera remains OFF when you leave this page.</span>
+                        </div>
+
+                        <div class="privacy-item">
+                            <span class="check">✓</span>
+                            <span>Facial cues will be optional supporting information.</span>
+                        </div>
+
+                    </div>
+
+                    <div class="notice" style="margin-top:20px">
+                        <strong>Analysis status: Not integrated</strong><br>
+                        This version provides camera permission and preview
+                        handling only. It does not detect emotions or calculate
+                        stress from facial images. A validated analysis model
+                        will be required for that feature.
+                    </div>
+
+                </article>
+
+            </div>
+
+        </section>
+
+
+        <!-- ==============================================
+             PAGE: RECOVERY
+        =============================================== -->
+
+        <section id="page-recovery" class="page">
+
+            <div class="page-heading">
+                <div class="eyebrow">Wellness activities</div>
+                <h1 class="section-title">Recovery Centre</h1>
+                <p class="section-subtitle">
+                    Guided breathing, user-selected relaxation music
+                    and optional haptic feedback.
+                </p>
+            </div>
+
+            <div class="recovery-grid">
+
+                <article class="card breathing-panel">
+
+                    <div class="eyebrow">Guided exercise</div>
+                    <h3 style="margin-top:7px">Breathing Exercise</h3>
+
+                    <div id="breathOrb"
+                         class="breath-orb"
+                         data-phase="rest">
+                        Ready
+                    </div>
+
+                    <div id="breathPhase" class="muted">
+                        Start when you are comfortable
+                    </div>
+
+                    <div id="breathCountdown" class="breath-timer">
+                        60 sec
+                    </div>
+
+                    <p class="muted small">
+                        Example cycle: inhale 4 seconds, hold 4 seconds,
+                        exhale 6 seconds. Breathe comfortably; stop if
+                        you feel dizzy or uncomfortable.
+                    </p>
+
+                    <div class="breath-controls">
+                        <button id="startBreathingBtn" class="primary-btn">
+                            Start breathing
+                        </button>
+                        <button id="stopBreathingBtn" class="secondary-btn">
+                            Stop
+                        </button>
+                    </div>
+
+                </article>
+
+
+                <div style="display:grid;gap:17px">
+
+                    <article class="card">
+
+                        <div class="card-header">
+                            <div>
+                                <h3>Relaxation Music</h3>
+                                <p>Choose audio from your device</p>
+                            </div>
+                            <span>♫</span>
+                        </div>
+
+                        <div class="music-player">
+
+                            <label class="field">
+                                <span class="muted small">Select an audio file</span>
+                                <input id="musicFileInput"
+                                       class="form-control"
+                                       type="file"
+                                       accept="audio/*">
+                            </label>
+
+                            <div id="musicFileName"
+                                 class="muted small">
+                                No audio file selected.
+                            </div>
+
+                            <audio id="relaxationAudio"
+                                   controls
+                                   preload="none"></audio>
+
+                        </div>
+
+                        <div class="notice" style="margin-top:13px">
+                            Audio plays locally in your browser.
+                            No music is supplied by this preview.
+                        </div>
+
+                    </article>
+
+
+                    <article class="card">
+
+                        <div class="card-header">
+                            <div>
+                                <h3>Haptic Feedback</h3>
+                                <p>Wearable vibration preference</p>
+                            </div>
+                            <span>◉</span>
+                        </div>
+
+                        <div class="toggle-row">
+
+                            <div class="toggle-copy">
+                                <strong>Enable haptic feedback</strong>
+                                <p>
+                                    Allow vibration commands when the
+                                    ESP32 integration is ready.
+                                </p>
+                            </div>
+
+                            <label class="switch">
+                                <input type="checkbox" id="hapticToggle">
+                                <span class="switch-track"></span>
+                            </label>
+
+                        </div>
+
+                        <p id="hapticStatusText"
+                           class="muted small"
+                           style="margin-top:12px">
+                            Haptic preference is OFF.
+                        </p>
+
+                        <div class="notice" style="margin-top:12px">
+                            This setting saves your local preference.
+                            It does not activate a physical motor until
+                            the backend and ESP32 are connected.
+                        </div>
+
+                    </article>
+
+                </div>
+
+            </div>
+
+
+            <article class="card" style="margin-top:17px">
+
+                <div class="card-header">
+                    <div>
+                        <h3>Before and After Comparison</h3>
+                        <p>Physiological recovery observations</p>
+                    </div>
+                    <span class="badge">Awaiting real sensor data</span>
+                </div>
+
+                <div class="comparison-grid">
+
+                    <div class="comparison-box">
+                        <span class="muted small">Before recovery</span>
+                        <strong>--</strong>
+                        <p class="muted small">No real reading available</p>
+                    </div>
+
+                    <div class="comparison-box">
+                        <span class="muted small">After recovery</span>
+                        <strong>--</strong>
+                        <p class="muted small">No real reading available</p>
+                    </div>
+
+                </div>
+
+                <div class="notice" style="margin-top:13px">
+                    Before/after comparison will use actual timestamped
+                    sensor readings after hardware integration. It will
+                    describe observed changes, not treatment effectiveness.
+                </div>
+
+            </article>
+
+        </section>
+
+
+        <!-- ==============================================
+             PAGE: HISTORY
+        =============================================== -->
+
+        <section id="page-history" class="page">
+
+            <div class="page-heading">
+                <div class="eyebrow">Personal records</div>
+                <h1 class="section-title">Recovery History</h1>
+                <p class="section-subtitle">
+                    Locally recorded sessions from this browser preview.
+                </p>
+            </div>
+
+            <div class="card">
+
+                <div class="card-header">
+                    <div>
+                        <h3>Completed Sessions</h3>
+                        <p>Sessions recorded on this device</p>
+                    </div>
+
+                    <span id="historyCount" class="badge">0 sessions</span>
+                </div>
+
+                <div class="table-wrap">
+
+                    <table>
+
+                        <thead>
+                            <tr>
+                                <th>Activity</th>
+                                <th>Date and time</th>
+                                <th>Duration</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+
+                        <tbody id="historyTableBody">
+                            <tr>
+                                <td colspan="4" class="empty-state">
+                                    No completed sessions yet.<br>
+                                    Finish a breathing session to create
+                                    your first recovery record.
+                                </td>
+                            </tr>
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+                <div class="notice" style="margin-top:15px">
+                    These preview records are saved in this browser only.
+                    Firebase cloud synchronization will be added later.
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ==============================================
+             PAGE: SETTINGS AND PROFILE
+        =============================================== -->
+
+        <section id="page-settings" class="page">
+
+            <div class="page-heading">
+                <div class="eyebrow">Personal preferences</div>
+                <h1 class="section-title">Settings & Profile</h1>
+                <p class="section-subtitle">
+                    Manage the local dashboard profile and wellness preferences.
+                </p>
+            </div>
+
+            <div class="settings-grid">
+
+                <article class="card">
+
+                    <div class="card-header">
+                        <div>
+                            <h3>User Profile</h3>
+                            <p>Preview profile information</p>
+                        </div>
+                        <span class="avatar" id="settingsAvatar">S</span>
+                    </div>
+
+                    <div class="field">
+                        <label for="profileName">Display name</label>
+                        <input id="profileName"
+                               class="form-control"
+                               type="text"
+                               maxlength="50"
+                               value="Sasinath">
+                    </div>
+
+                    <div class="field">
+                        <label for="profileEmail">Email address</label>
+                        <input id="profileEmail"
+                               class="form-control"
+                               type="email"
+                               placeholder="Enter email address">
+                    </div>
+
+                    <button id="saveProfileBtn" class="primary-btn">
+                        Save local profile
+                    </button>
+
+                    <div class="notice" style="margin-top:15px">
+                        Local preview profile only. Real individual
+                        Google accounts will be connected using Firebase.
+                    </div>
+
+                </article>
+
+
+                <article class="card">
+
+                    <div class="card-header">
+                        <div>
+                            <h3>Appearance</h3>
+                            <p>Choose your preferred interface theme</p>
+                        </div>
+                    </div>
+
+                    <div class="toggle-row">
+                        <div class="toggle-copy">
+                            <strong>Current theme</strong>
+                            <p id="themePreferenceText">Dark theme</p>
+                        </div>
+
+                        <button id="settingsThemeBtn"
+                                class="secondary-btn">
+                            Toggle theme
+                        </button>
+                    </div>
+
+                    <div class="notice" style="margin-top:13px">
+                        You can also use the circular Sun/Moon button
+                        in the top-right corner.
+                    </div>
+
+                </article>
+
+
+                <article class="card">
+
+                    <div class="card-header">
+                        <div>
+                            <h3>Haptic Preference</h3>
+                            <p>Control wearable vibration preference</p>
+                        </div>
+                    </div>
+
+                    <div class="toggle-row">
+                        <div class="toggle-copy">
+                            <strong>Haptic feedback</strong>
+                            <p>Enable or disable optional vibration.</p>
+                        </div>
+
+                        <label class="switch">
+                            <input type="checkbox"
+                                   id="settingsHapticToggle">
+                            <span class="switch-track"></span>
+                        </label>
+                    </div>
+
+                    <p class="muted small" style="margin-top:13px">
+                        The physical motor will respond after ESP32
+                        integration. This setting currently saves locally.
+                    </p>
+
+                </article>
+
+
+                <article class="card">
+
+                    <div class="card-header">
+                        <div>
+                            <h3>System Information</h3>
+                            <p>Current integration status</p>
+                        </div>
+                    </div>
+
+                    <div class="status-row">
+                        <span>Frontend</span>
+                        <span style="color:var(--green)">Loaded</span>
+                    </div>
+
+                    <div class="status-row">
+                        <span>Backend API</span>
+                        <span>Not connected</span>
+                    </div>
+
+                    <div class="status-row">
+                        <span>Firebase</span>
+                        <span>Not configured</span>
+                    </div>
+
+                    <div class="status-row">
+                        <span>ML model</span>
+                        <span>Not integrated</span>
+                    </div>
+
+                    <div class="status-row">
+                        <span>ESP32</span>
+                        <span>Not connected</span>
+                    </div>
+
+                </article>
+
+            </div>
+
+
+            <div style="margin-top:18px">
+                <button id="logoutBtn" class="danger-btn">
+                    Exit dashboard preview
+                </button>
+            </div>
+
+        </section>
+
+
+        <!-- FOOTER -->
+
+        <footer class="app-footer">
+            NeuroSense · Personalized wearable wellness monitoring prototype.<br>
+            Not intended for medical diagnosis, emergency monitoring
+            or treatment decisions.
+        </footer>
+
+    </main>
+
+</div>
+
+
+<!-- TOAST MESSAGE -->
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+
+<!-- ======================================================
+     14. JAVASCRIPT
+====================================================== -->
+
+<script>
+"use strict";
+
+/* =========================================================
+   A. BASIC HELPERS AND LOCAL SETTINGS
+========================================================= */
+
+const $ = (id) => document.getElementById(id);
+
+function showToast(message) {
+    const toast = $("toast");
+
+    toast.textContent = message;
+    toast.classList.add("show");
+
+    clearTimeout(showToast.timer);
+
+    showToast.timer = setTimeout(() => {
+        toast.classList.remove("show");
+    }, 3300);
+}
+
+
+function readLocal(key, fallback) {
+    try {
+        const value = localStorage.getItem(key);
+        return value === null ? fallback : JSON.parse(value);
+    } catch (error) {
+        console.warn("Local preference could not be loaded.", error);
+        return fallback;
+    }
+}
+
+
+function writeLocal(key, value) {
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+        return true;
+    } catch (error) {
+        console.warn("Could not save local preference.", error);
+        showToast("Browser storage is unavailable. Preference may not persist.");
+        return false;
+    }
+}
+
+
+/* =========================================================
+   B. THEME SYSTEM
+   Dark active  -> show SUN icon -> clicking switches light.
+   Light active -> show MOON icon -> clicking switches dark.
+========================================================= */
+
+const sunIcon = `
+<svg viewBox="0 0 24 24" fill="none"
+stroke="currentColor" stroke-width="1.8"
+stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="4"></circle>
+    <path d="M12 2v2"></path>
+    <path d="M12 20v2"></path>
+    <path d="m4.93 4.93 1.41 1.41"></path>
+    <path d="m17.66 17.66 1.41 1.41"></path>
+    <path d="M2 12h2"></path>
+    <path d="M20 12h2"></path>
+    <path d="m4.93 19.07 1.41-1.41"></path>
+    <path d="m17.66 6.34 1.41-1.41"></path>
+</svg>`;
+
+const moonIcon = `
+<svg viewBox="0 0 24 24" fill="none"
+stroke="currentColor" stroke-width="1.8"
+stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20.9 13A9 9 0 0 1 11 3.1
+    9 9 0 1 0 20.9 13z"></path>
+</svg>`;
+
+
+function currentTheme() {
+    return document.documentElement.dataset.theme || "dark";
+}
+
+
+function setTheme(theme) {
+    const selected = theme === "light" ? "light" : "dark";
+
+    document.documentElement.dataset.theme = selected;
+
+    const button = $("themeToggle");
+    const icon = $("themeIcon");
+
+    if (button && icon) {
+        if (selected === "dark") {
+            icon.innerHTML = sunIcon;
+            button.title = "Dark theme active. Click for light theme.";
+            button.setAttribute("aria-label", "Switch to light theme");
+        } else {
+            icon.innerHTML = moonIcon;
+            button.title = "Light theme active. Click for dark theme.";
+            button.setAttribute("aria-label", "Switch to dark theme");
+        }
+    }
+
+    const themeText = $("themePreferenceText");
+    if (themeText) {
+        themeText.textContent =
+            selected === "dark" ? "Dark theme" : "Light theme";
+    }
+
+    writeLocal("neurosense_theme", selected);
+
+    drawAllCharts();
+}
+
+
+function toggleTheme() {
+    setTheme(currentTheme() === "dark" ? "light" : "dark");
+}
+
+
+/* =========================================================
+   C. LOGIN AND PREVIEW ACCESS
+========================================================= */
+
+function openDashboard() {
+    $("loginScreen").classList.add("hidden");
+    $("appShell").classList.remove("hidden");
+
+    setActivePage("dashboard");
+    updateProfileUI();
+    drawAllCharts();
+
+    showToast("NeuroSense preview dashboard opened.");
+}
+
+
+$("previewLoginBtn").addEventListener("click", openDashboard);
+
+
+$("googleLoginBtn").addEventListener("click", () => {
+    showToast("Google login requires Firebase Authentication setup.");
+});
+
+
+$("logoutBtn").addEventListener("click", () => {
+    stopCamera();
+    stopBreathing();
+
+    $("appShell").classList.add("hidden");
+    $("loginScreen").classList.remove("hidden");
+
+    showToast("Preview dashboard closed.");
+});
+
+
+/* =========================================================
+   D. NAVIGATION
+========================================================= */
+
+const pageTitles = {
+    dashboard: "Dashboard",
+    analytics: "Analytics",
+    face: "Face Scan",
+    recovery: "Recovery Centre",
+    history: "Recovery History",
+    settings: "Settings & Profile"
+};
+
+
+function setActivePage(pageName) {
+
+    if (!pageTitles[pageName]) return;
+
+    // Stop camera whenever the user leaves Face Scan.
+    if (pageName !== "face") {
+        stopCamera();
+    }
+
+    document.querySelectorAll(".page").forEach(page => {
+        page.classList.remove("active");
+    });
+
+    const target = $("page-" + pageName);
+
+    if (target) {
+        target.classList.add("active");
+    }
+
+    document.querySelectorAll(".nav-btn").forEach(button => {
+        button.classList.toggle(
+            "active",
+            button.dataset.page === pageName
+        );
+    });
+
+    $("topPageTitle").textContent = pageTitles[pageName];
+
+    $("sidebar").classList.remove("open");
+
+    if (pageName === "history") {
+        renderHistory();
+    }
+
+    if (pageName === "analytics") {
+        updateAnalyticsCount();
+    }
+
+    setTimeout(drawAllCharts, 70);
+}
+
+
+document.querySelectorAll("[data-page]").forEach(button => {
+    button.addEventListener("click", () => {
+        setActivePage(button.dataset.page);
+    });
+});
+
+
+document.querySelectorAll("[data-go]").forEach(button => {
+    button.addEventListener("click", () => {
+        setActivePage(button.dataset.go);
+    });
+});
+
+
+$("menuBtn").addEventListener("click", () => {
+    $("sidebar").classList.toggle("open");
+});
+
+
+$("profileBtn").addEventListener("click", () => {
+    setActivePage("settings");
+});
+
+
+/* =========================================================
+   E. PROFILE
+========================================================= */
+
+let profile = readLocal("neurosense_profile", {
+    name: "Sasinath",
+    email: ""
+});
+
+
+function updateProfileUI() {
+
+    const name = profile.name || "User";
+    const initial = name.trim().charAt(0).toUpperCase() || "U";
+
+    $("topProfileName").textContent = name;
+    $("welcomeName").textContent = name;
+
+    $("avatarInitial").textContent = initial;
+    $("settingsAvatar").textContent = initial;
+
+    $("profileName").value = name;
+    $("profileEmail").value = profile.email || "";
+}
+
+
+$("saveProfileBtn").addEventListener("click", () => {
+
+    const name = $("profileName").value.trim();
+    const email = $("profileEmail").value.trim();
+
+    if (!name) {
+        showToast("Please enter a display name.");
+        return;
+    }
+
+    profile = { name, email };
+
+    writeLocal("neurosense_profile", profile);
+    updateProfileUI();
+
+    showToast("Local profile updated.");
+});
+
+
+/* =========================================================
+   F. CHART ENGINE
+   Canvas charts use theme variables.
+   Axes, grid, labels and lines change with the theme.
+========================================================= */
+
+const sampleLabels = [
+    "08:00", "09:00", "10:00", "11:00",
+    "12:00", "13:00", "14:00", "15:00",
+    "16:00", "17:00", "18:00", "19:00"
+];
+
+
+const sampleHeartRate = [70, 72, 75, 73, 78, 82, 79, 76, 74, 77, 75, 76];
+const sampleHrv = [48, 46, 45, 44, 41, 39, 40, 42, 43, 41, 42, 42];
+const sampleGsr = [1750, 1800, 1820, 1860, 1900, 1880, 1840, 1830, 1850, 1810, 1860, 1850];
+const sampleTemperature = [32.8, 32.9, 33, 33.1, 33.2, 33.3, 33.1, 33.2, 33.3, 33.2, 33.1, 33.2];
+
+
+function cssVariable(name) {
+    return getComputedStyle(document.documentElement)
+        .getPropertyValue(name).trim();
+}
+
+
+function drawLineChart(canvasId, values, options = {}) {
+
+    const canvas = $(canvasId);
+
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+
+    if (rect.width < 20 || rect.height < 20) return;
+
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+
+    const ctx = canvas.getContext("2d");
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const width = rect.width;
+    const height = rect.height;
+
+    const pad = {
+        left: 42,
+        right: 13,
+        top: 15,
+        bottom: 30
+    };
+
+    const chartWidth = width - pad.left - pad.right;
+    const chartHeight = height - pad.top - pad.bottom;
+
+    const allValues = values.flatMap(series => series.data);
+
+    let min = options.min !== undefined
+        ? options.min
+        : Math.min(...allValues);
+
+    let max = options.max !== undefined
+        ? options.max
+        : Math.max(...allValues);
+
+    if (min === max) {
+        min -= 1;
+        max += 1;
+    }
+
+    const spacing = (max - min) * 0.12;
+
+    if (options.min === undefined) min -= spacing;
+    if (options.max === undefined) max += spacing;
+
+    const gridColor = cssVariable("--grid");
+    const textColor = cssVariable("--muted");
+    const colors = [
+        cssVariable("--chart-1"),
+        cssVariable("--chart-2"),
+        cssVariable("--chart-3")
+    ];
+
+    ctx.clearRect(0, 0, width, height);
+
+    ctx.font = "11px Segoe UI, Arial";
+    ctx.textBaseline = "middle";
+
+    // Horizontal grid lines and Y-axis values.
+    for (let i = 0; i <= 4; i++) {
+
+        const y = pad.top + (chartHeight / 4) * i;
+        const val = max - ((max - min) / 4) * i;
+
+        ctx.beginPath();
+        ctx.strokeStyle = gridColor;
+        ctx.lineWidth = 1;
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(width - pad.right, y);
+        ctx.stroke();
+
+        ctx.fillStyle = textColor;
+        ctx.textAlign = "right";
+        ctx.fillText(
+            Number(val).toFixed(options.decimals ?? 0),
+            pad.left - 8,
+            y
+        );
+    }
+
+    // X-axis labels.
+    const labels = options.labels || sampleLabels;
+
+    labels.forEach((label, index) => {
+
+        if (
+            index !== 0 &&
+            index !== labels.length - 1 &&
+            index % 2 !== 0
+        ) return;
+
+        const x = pad.left +
+            (chartWidth * index / Math.max(1, labels.length - 1));
+
+        ctx.fillStyle = textColor;
+        ctx.textAlign = "center";
+        ctx.fillText(label, x, height - 12);
+    });
+
+
+    // Draw each dataset.
+    values.forEach((series, seriesIndex) => {
+
+        const color = series.color || colors[seriesIndex % colors.length];
+
+        const points = series.data.map((value, index) => {
+
+            const x = pad.left +
+                (chartWidth * index / Math.max(1, series.data.length - 1));
+
+            const y = pad.top +
+                ((max - value) / (max - min)) * chartHeight;
+
+            return { x, y };
+        });
+
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.4;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+
+        points.forEach((point, index) => {
+
+            if (index === 0) {
+                ctx.moveTo(point.x, point.y);
+            } else {
+                ctx.lineTo(point.x, point.y);
+            }
+
+        });
+
+        ctx.stroke();
+
+
+        // Draw readable data points.
+        points.forEach(point => {
+
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+
+            ctx.strokeStyle = cssVariable("--surface");
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+        });
+
+    });
+
+}
+
+
+function drawAllCharts() {
+
+    drawLineChart("heartChart", [
+        { data: sampleHeartRate }
+    ], { min: 50, max: 100, labels: sampleLabels });
+
+    drawLineChart("hrvChart", [
+        { data: sampleHrv }
+    ], { min: 20, max: 70, labels: sampleLabels });
+
+    drawLineChart("analyticsHeartChart", [
+        { data: sampleHeartRate }
+    ], { min: 50, max: 100, labels: sampleLabels });
+
+    drawLineChart("analyticsHrvChart", [
+        { data: sampleHrv }
+    ], { min: 20, max: 70, labels: sampleLabels });
+
+    drawLineChart("analyticsGsrChart", [
+        { data: sampleGsr }
+    ], { min: 1000, max: 2500, labels: sampleLabels });
+
+    drawLineChart("analyticsTempChart", [
+        { data: sampleTemperature }
+    ], { min: 30, max: 36, labels: sampleLabels, decimals: 1 });
+
+}
+
+
+let resizeTimer = null;
+
+window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(drawAllCharts, 150);
+});
+
+
+/* =========================================================
+   G. THEME BUTTON EVENTS
+========================================================= */
+
+$("themeToggle").addEventListener("click", toggleTheme);
+$("settingsThemeBtn").addEventListener("click", toggleTheme);
+
+
+/* =========================================================
+   H. CAMERA / FACE SCAN
+========================================================= */
+
+let cameraStream = null;
+
+
+async function startCamera() {
+
+    if (!navigator.mediaDevices ||
+        !navigator.mediaDevices.getUserMedia) {
+
+        $("cameraMessage").textContent =
+            "Camera access requires HTTPS or localhost and a supported browser.";
+
+        showToast("Camera is unavailable in this browser context.");
+        return;
+    }
+
+    try {
+
+        $("cameraMessage").textContent =
+            "Requesting camera permission...";
+
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: "user"
+            },
+            audio: false
+        });
+
+        $("cameraVideo").srcObject = cameraStream;
+        $("cameraVideo").style.display = "block";
+        $("cameraPlaceholder").classList.add("hidden");
+
+        $("cameraStatus").innerHTML =
+            '<span class="dot green"></span> Camera ON';
+
+        $("startCameraBtn").disabled = true;
+        $("stopCameraBtn").disabled = false;
+
+        $("cameraMessage").textContent =
+            "Camera preview is active. No facial analysis is running.";
+
+        showToast("Camera preview started.");
+
+    } catch (error) {
+
+        console.error("Camera access error:", error);
+
+        let message = "Camera access failed.";
+
+        if (error.name === "NotAllowedError") {
+            message = "Camera permission was denied. Enable permission in your browser.";
+        } else if (error.name === "NotFoundError") {
+            message = "No camera was found on this device.";
+        } else if (error.name === "NotReadableError") {
+            message = "Camera may already be in use by another application.";
+        }
+
+        $("cameraMessage").textContent = message;
+
+        showToast(message);
+
+        stopCamera();
+    }
+
+}
+
+
+function stopCamera() {
+
+    if (cameraStream) {
+
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
+    }
+
+    if ($("cameraVideo")) {
+        $("cameraVideo").srcObject = null;
+        $("cameraVideo").style.display = "none";
+    }
+
+    if ($("cameraPlaceholder")) {
+        $("cameraPlaceholder").classList.remove("hidden");
+    }
+
+    if ($("cameraStatus")) {
+        $("cameraStatus").innerHTML =
+            '<span class="dot red"></span> Camera OFF';
+    }
+
+    if ($("startCameraBtn")) {
+        $("startCameraBtn").disabled = false;
+    }
+
+    if ($("stopCameraBtn")) {
+        $("stopCameraBtn").disabled = true;
+    }
+
+}
+
+
+$("startCameraBtn").addEventListener("click", startCamera);
+$("stopCameraBtn").addEventListener("click", () => {
+    stopCamera();
+    $("cameraMessage").textContent = "Camera stopped.";
+    showToast("Camera stopped.");
+});
+
+
+/* =========================================================
+   I. BREATHING EXERCISE
+========================================================= */
+
+let breathingInterval = null;
+let breathingElapsed = 0;
+const breathingDuration = 60;
+
+const breathingPhases = [
+    { name: "Breathe in", duration: 4, phase: "inhale" },
+    { name: "Hold gently", duration: 4, phase: "hold" },
+    { name: "Breathe out", duration: 6, phase: "exhale" }
+];
+
+
+function updateBreathingUI() {
+
+    const cycleLength = 14;
+    const position = breathingElapsed % cycleLength;
+
+    let accumulated = 0;
+    let selectedPhase = breathingPhases[0];
+    let phaseRemaining = 4;
+
+    for (const phase of breathingPhases) {
+
+        if (position < accumulated + phase.duration) {
+
+            selectedPhase = phase;
+
+            phaseRemaining =
+                phase.duration - (position - accumulated);
+
+            break;
+        }
+
+        accumulated += phase.duration;
+    }
+
+    $("breathPhase").textContent = selectedPhase.name;
+    $("breathOrb").dataset.phase = selectedPhase.phase;
+    $("breathOrb").textContent = selectedPhase.name;
+
+    $("breathCountdown").textContent =
+        Math.ceil(breathDuration - breathingElapsed) + " sec";
+}
+
+
+function stopBreathing() {
+
+    if (breathingInterval) {
+        clearInterval(breathingInterval);
+        breathingInterval = null;
+    }
+
+    $("breathOrb").dataset.phase = "rest";
+    $("breathOrb").textContent = "Ready";
+    $("breathPhase").textContent = "Session stopped or not started";
+    $("breathCountdown").textContent = "60 sec";
+
+    $("startBreathingBtn").disabled = false;
+}
+
+
+function startBreathing() {
+
+    if (breathingInterval) return;
+
+    breathingElapsed = 0;
+
+    $("startBreathingBtn").disabled = true;
+
+    updateBreathingUI();
+
+    breathingInterval = setInterval(() => {
+
+        breathingElapsed++;
+
+        if (breathingElapsed >= breathingDuration) {
+
+            clearInterval(breathingInterval);
+            breathingInterval = null;
+
+            recordRecoverySession("Breathing", breathingDuration);
+
+            $("breathOrb").dataset.phase = "rest";
+            $("breathOrb").textContent = "Complete";
+            $("breathPhase").textContent = "Session completed";
+            $("breathCountdown").textContent = "Done";
+
+            $("startBreathingBtn").disabled = false;
+
+            showToast("Breathing session completed and saved locally.");
+
+            return;
+        }
+
+        updateBreathingUI();
+
+    }, 1000);
+
+}
+
+
+$("startBreathingBtn").addEventListener("click", startBreathing);
+
+
+$("stopBreathingBtn").addEventListener("click", () => {
+
+    const wasRunning = breathingInterval !== null;
+
+    stopBreathing();
+
+    if (wasRunning) {
+        showToast("Breathing session stopped.");
+    }
+
+});
+
+
+/* =========================================================
+   J. RELAXATION MUSIC - LOCAL FILE ONLY
+========================================================= */
+
+let activeMusicUrl = null;
+
+
+$("musicFileInput").addEventListener("change", event => {
+
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    if (!file.type.startsWith("audio/")) {
+        showToast("Please select a supported audio file.");
+        event.target.value = "";
+        return;
+    }
+
+    if (activeMusicUrl) {
+        URL.revokeObjectURL(activeMusicUrl);
+    }
+
+    activeMusicUrl = URL.createObjectURL(file);
+
+    $("relaxationAudio").src = activeMusicUrl;
+    $("musicFileName").textContent =
+        "Selected: " + file.name;
+
+    showToast("Audio loaded locally. Press play to listen.");
+
+});
+
+
+$("relaxationAudio").addEventListener("error", () => {
+    if (activeMusicUrl) {
+        showToast("The selected audio file could not be played.");
+    }
+});
+
+
+/* =========================================================
+   K. HAPTIC PREFERENCE
+========================================================= */
+
+let hapticEnabled = readLocal("neurosense_haptic_enabled", false);
+
+
+function updateHapticUI() {
+
+    $("hapticToggle").checked = Boolean(hapticEnabled);
+    $("settingsHapticToggle").checked = Boolean(hapticEnabled);
+
+    $("hapticStatusText").textContent =
+        hapticEnabled
+            ? "Haptic preference is ON. Hardware connection is pending."
+            : "Haptic preference is OFF.";
+}
+
+
+function setHapticPreference(enabled) {
+
+    hapticEnabled = Boolean(enabled);
+
+    writeLocal("neurosense_haptic_enabled", hapticEnabled);
+
+    updateHapticUI();
+
+    showToast(
+        hapticEnabled
+            ? "Haptic preference enabled locally."
+            : "Haptic preference disabled locally."
+    );
+
+}
+
+
+$("hapticToggle").addEventListener("change", event => {
+    setHapticPreference(event.target.checked);
+});
+
+
+$("settingsHapticToggle").addEventListener("change", event => {
+    setHapticPreference(event.target.checked);
+});
+
+
+/* =========================================================
+   L. RECOVERY HISTORY
+========================================================= */
+
+let recoverySessions = readLocal("neurosense_recovery_sessions", []);
+
+
+function recordRecoverySession(activity, durationSeconds) {
+
+    const session = {
+        id: "recovery-" + Date.now(),
+        activity,
+        durationSeconds,
+        completedAt: new Date().toISOString(),
+        status: "Completed",
+        storage: "Local preview"
+    };
+
+    recoverySessions.unshift(session);
+
+    // Keep the latest 100 local records.
+    recoverySessions = recoverySessions.slice(0, 100);
+
+    writeLocal(
+        "neurosense_recovery_sessions",
+        recoverySessions
+    );
+
+    renderHistory();
+    updateAnalyticsCount();
+}
+
+
+function formatDate(dateValue) {
+
+    const date = new Date(dateValue);
+
+    return date.toLocaleString([], {
+        dateStyle: "medium",
+        timeStyle: "short"
+    });
+}
+
+
+function formatDuration(seconds) {
+
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+
+    if (mins === 0) {
+        return secs + " sec";
+    }
+
+    return mins + " min" + (secs ? " " + secs + " sec" : "");
+}
+
+
+function renderHistory() {
+
+    const body = $("historyTableBody");
+
+    $("historyCount").textContent =
+        recoverySessions.length + " sessions";
+
+    if (!recoverySessions.length) {
+
+        body.innerHTML = `
+            <tr>
+                <td colspan="4" class="empty-state">
+                    No completed sessions yet.<br>
+                    Complete a breathing session to create your first record.
+                </td>
+            </tr>
+        `;
+
+        return;
+    }
+
+    body.innerHTML = "";
+
+    recoverySessions.forEach(session => {
+
+        const row = document.createElement("tr");
+
+        const activity = document.createElement("td");
+        activity.textContent = session.activity;
+
+        const date = document.createElement("td");
+        date.textContent = formatDate(session.completedAt);
+
+        const duration = document.createElement("td");
+        duration.textContent = formatDuration(session.durationSeconds);
+
+        const status = document.createElement("td");
+        status.textContent = session.status || "Completed";
+
+        row.append(activity, date, duration, status);
+        body.appendChild(row);
+    });
+
+}
+
+
+function updateAnalyticsCount() {
+    $("analyticsSessionCount").textContent =
+        recoverySessions.length;
+}
+
+
+/* =========================================================
+   M. INITIALIZATION
+========================================================= */
+
+function initializeApp() {
+
+    const savedTheme = readLocal("neurosense_theme", "dark");
+
+    setTheme(savedTheme);
+
+    updateProfileUI();
+    updateHapticUI();
+    renderHistory();
+    updateAnalyticsCount();
+
+    $("currentDate").textContent =
+        new Date().toLocaleDateString([], {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric"
+        });
+
+    drawAllCharts();
+
+}
+
+
+// Run initialization when HTML has loaded.
+initializeApp();
+
+
+// Clean up camera and timers when the browser page closes.
+window.addEventListener("pagehide", () => {
+
+    stopCamera();
+
+    if (breathingInterval) {
+        clearInterval(breathingInterval);
+    }
+
+    if (activeMusicUrl) {
+        URL.revokeObjectURL(activeMusicUrl);
+    }
+
+});
+
+</script>
+
+</body>
+</html>
