@@ -637,3 +637,84 @@ def test_face_scan_status_enforces_preview_only_privacy_state(client):
     assert body["image_storage"] is False
     assert "OFF by default" in body["camera_policy"]
 
+
+def test_sensor_data_is_isolated_between_users(client):
+    """One development user's sensor readings must not appear for another user."""
+    user_a = {"X-Demo-User": "api-test-user-a"}
+    user_b = {"X-Demo-User": "api-test-user-b"}
+
+    create = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 80,
+            "hrv_ms": 40,
+            "gsr_raw": 1750,
+            "signal_quality": "good",
+            "source": "simulated",
+        },
+        headers=user_a,
+    )
+    assert create.status_code == 201
+
+    user_a_latest = client.get("/api/sensors/latest", headers=user_a)
+    assert user_a_latest.status_code == 200
+    assert user_a_latest.json()["data"] is not None
+
+    user_b_latest = client.get("/api/sensors/latest", headers=user_b)
+    assert user_b_latest.status_code == 200
+    assert user_b_latest.json()["data"] is None
+
+    user_b_history = client.get("/api/sensors/history", headers=user_b)
+    assert user_b_history.status_code == 200
+    assert user_b_history.json()["total"] == 0
+
+
+def test_invalid_demo_user_identifier_is_rejected(client):
+    """Development user identifiers must not contain spaces or special characters."""
+    response = client.get(
+        "/api/sensors/latest",
+        headers={"X-Demo-User": "invalid user!"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid development user ID."
+
+
+def test_device_cannot_be_paired_to_a_second_user(client):
+    """An already-owned device ID must not be reassigned to another account."""
+    device_id = "test-device-cross-user-01"
+
+    first = client.post(
+        "/api/devices/pair",
+        json={"device_id": device_id, "device_name": "Owner A Device"},
+        headers={"X-Demo-User": "api-test-device-owner-a"},
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        "/api/devices/pair",
+        json={"device_id": device_id, "device_name": "Owner B Attempt"},
+        headers={"X-Demo-User": "api-test-device-owner-b"},
+    )
+
+    assert second.status_code == 409
+
+
+def test_user_cannot_unpair_another_users_device(client):
+    """A user must not be able to deactivate a device owned by another user."""
+    device_id = "test-device-cross-unpair-01"
+
+    first = client.post(
+        "/api/devices/pair",
+        json={"device_id": device_id, "device_name": "Owner Device"},
+        headers={"X-Demo-User": "api-test-unpair-owner"},
+    )
+    assert first.status_code == 201
+
+    second = client.delete(
+        f"/api/devices/{device_id}",
+        headers={"X-Demo-User": "api-test-unpair-other"},
+    )
+
+    assert second.status_code == 404
+
