@@ -2762,6 +2762,11 @@ def poll_device_commands(
     device = authenticated_device(device_id, x_device_token)
     user_id = str(device["user_id"])
 
+    # Re-check the user's current preference at delivery time as well as
+    # creation time, so a queued command cannot fire after opting out.
+    if not get_settings(user_id)["haptic_enabled"]:
+        return {"commands": []}
+
     # Rehydrate the pending queue after a Render restart.
     cloud_commands = firestore_read_collection(
         ("users", user_id, "haptic_commands"),

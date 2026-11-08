@@ -71,11 +71,13 @@ MOTOR_PIN = 25
 # Temperature sensor has not been selected yet.
 TEMP_SENSOR_ENABLED = False
 
-# Keep OFF until sensor calibration and API validation.
+# Enable only after the Wi-Fi, TLS CA bundle and device token are configured.
 SEND_SENSOR_DATA = True
 
-# Haptic hardware remains OFF until backend command integration.
-HAPTIC_ENABLED = False
+# The motor GPIO remains LOW at boot. A short vibration is allowed only
+# after an authenticated, server-queued command (the server checks the
+# signed-in user's current haptic preference before delivery).
+HAPTIC_ENABLED = True
 
 
 # ============================================================
@@ -602,9 +604,7 @@ def http_request(
 
             "Content-Type": "application/json",
 
-            "Accept": "application/json",
-
-            "X-Demo-User": DEMO_USER
+            "Accept": "application/json"
         }
 
         # Device API requires X-Device-Token, not Authorization.
@@ -823,9 +823,11 @@ def poll_and_process_haptic_commands():
         if not command_id:
             continue
 
-        motor.value(1)
-        time.sleep_ms(duration_ms)
-        motor.value(0)
+        if HAPTIC_ENABLED:
+            pulse_motor(duration_ms)
+        else:
+            motor.value(0)
+            print("Haptic command ignored by local safety gate.")
 
         ack_path = COMMAND_PATH + "/" + str(command_id) + "/ack"
         ack_status, _ = http_request("POST", ack_path, {})

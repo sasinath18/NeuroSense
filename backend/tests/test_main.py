@@ -1779,3 +1779,87 @@ def test_three_hour_summary_generation_is_idempotent(client):
     )
     assert history.status_code == 200
     assert history.json()["total"] == 1
+
+
+def test_paired_device_cloud_backup_never_stores_plaintext_token(client, monkeypatch):
+    """Device ownership is backed up globally and per-user using only a token hash."""
+    writes = []
+    monkeypatch.setattr(
+        api,
+        "firestore_write",
+        lambda path, document_id, payload: writes.append((path, document_id, dict(payload))) or "synced",
+    )
+    user_id = "neurosense-cloud-device-user"
+    paired = pair_test_device(client, user_id, "neurosense-cloud-backup-device")
+
+    assert paired["cloud_sync"] == {"global": "synced", "user": "synced"}
+    assert len(writes) == 2
+    assert writes[0][0] == ("devices",)
+    assert writes[1][0] == ("users", user_id, "devices")
+    stored = writes[0][2]
+    assert len(stored["token_hash"]) == 64
+    assert "device_token" not in stored
+    assert paired["device_token"] not in repr(stored)
+
+
+def test_cloud_device_records_restore_after_local_database_reset(client, monkeypatch):
+    """A user's paired device metadata can be restored from Firestore."""
+    user_id = "neurosense-cloud-device-restore-user"
+    cloud_device = {
+        "device_id": "neurosense-restored-device",
+        "user_id": user_id,
+        "device_name": "Restored ESP32",
+        "token_hash": "a" * 64,
+        "created_at": api.iso(),
+        "last_seen": None,
+        "active": True,
+    }
+    monkeypatch.setattr(
+        api,
+        "firestore_read_collection",
+        lambda path, **kwargs: [dict(cloud_device)]
+        if path == ("users", user_id, "devices") else [],
+    )
+    response = client.get(
+        "/api/devices",
+        headers={"X-Demo-User": user_id},
+    )
+    assert response.status_code == 200
+    assert response.json()["devices"][0]["device_id"] == cloud_device["device_id"]
+    assert response.json()["devices"][0]["device_name"] == "Restored ESP32"
+
+
+def test_haptic_queue_is_not_delivered_after_user_disables_preference(client):
+    """Turning haptics OFF after queueing prevents a not-yet-delivered pulse."""
+    user_id = "neurosense-haptic-opt-out-user"
+    device_id = "neurosense-haptic-opt-out-device"
+    paired = pair_test_device(client, user_id, device_id)
+    headers = {"X-Demo-User": user_id}
+
+    enabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=headers,
+    )
+    assert enabled.status_code == 200
+
+    queued = client.post(
+        "/api/haptic/commands",
+        json={"device_id": device_id, "duration_ms": 500},
+        headers=headers,
+    )
+    assert queued.status_code == 201
+
+    disabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": False},
+        headers=headers,
+    )
+    assert disabled.status_code == 200
+
+    polled = client.get(
+        "/api/devices/{}/commands".format(device_id),
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert polled.status_code == 200
+    assert polled.json()["commands"] == []

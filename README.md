@@ -81,6 +81,20 @@ Open `http://127.0.0.1:8001/dashboard` for the dashboard and `http://127.0.0.1:8
 
 For local Firebase testing, set the same `FIREBASE_WEB_*` variables and `FIREBASE_SERVICE_ACCOUNT_JSON` in an untracked `.env` file. Never commit `.env`.
 
+## ESP32 firmware setup
+
+The firmware targets an ESP32 DevKit V1 running a MicroPython build that supports
+`ssl.SSLContext`, `SSLContext.load_verify_locations`, and verified client TLS.
+
+1. Pair the device from the signed-in NeuroSense dashboard and copy its one-time device token.
+2. Copy `firmware/neurosense_secrets.py.example` to `neurosense_secrets.py` on the ESP32 and enter the Wi-Fi SSID, Wi-Fi password and paired device token. Do not commit the real file.
+3. Obtain the trusted CA certificate bundle that validates the configured NeuroSense HTTPS host and copy it to `/render_ca_bundle.pem` on the ESP32.
+4. The firmware uses NTP to set the RTC before certificate validation. The network must permit NTP.
+5. The firmware uploads readings using `X-Device-Token`, polls authenticated haptic commands and acknowledges completed commands. Vibration durations are bounded to 100–3000 ms.
+6. For isolated local bench testing only, set `USE_HTTPS = False`, use the laptop LAN IP and API port, and keep the board on the same trusted Wi-Fi network. Restore verified HTTPS before cloud use.
+
+The firmware fails closed when verified TLS cannot be initialized. Do not use `CERT_NONE` or disable certificate checks for cloud connections. Physical MAX30102 signal quality, GSR unit conversion, temperature integration, driver wiring and live device-to-Render operation still require hardware verification.
+
 ## Safety and privacy
 
-Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi credentials, personal data, or raw datasets. Keep secrets in the hosting provider's environment-variable/secret settings.
+Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi credentials, private firmware secrets, CA bundles, personal data, or raw datasets. Keep secrets in the hosting provider's environment-variable/secret settings.
