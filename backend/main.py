@@ -532,8 +532,11 @@ def firestore_read_collection(
     if FIRESTORE_CLIENT is None:
         return []
 
-    if not collection_path or len(collection_path) % 2 == 1:
-        logger.error("Invalid Firestore document path: %s", collection_path)
+    # A collection path alternates collection/document segments and
+    # therefore contains an odd number of segments, e.g.
+    # ("users", user_id, "sensor_readings").
+    if not collection_path or len(collection_path) % 2 == 0:
+        logger.error("Invalid Firestore collection path: %s", collection_path)
         return []
 
     try:
