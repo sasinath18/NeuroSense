@@ -109,3 +109,37 @@ def test_valid_sensor_reading_is_accepted_and_stored(client):
     assert body["reading"]["source"] == "simulated"
     assert body["stress"]["status"] == "simulated_data"
 
+
+def test_latest_sensor_reading_returns_saved_record(client):
+    """GET the latest reading for the same development user after POST."""
+    headers = {"X-Demo-User": "api-test-latest"}
+
+    create_response = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 81,
+            "hrv_ms": 38,
+            "gsr_raw": 1920,
+            "signal_quality": "moderate",
+            "source": "simulated",
+        },
+        headers=headers,
+    )
+
+    assert create_response.status_code == 201
+    created_id = create_response.json()["reading"]["id"]
+
+    latest_response = client.get(
+        "/api/sensors/latest",
+        headers=headers,
+    )
+
+    assert latest_response.status_code == 200
+    body = latest_response.json()
+    assert body["data"] is not None
+    assert body["data"]["id"] == created_id
+    assert body["data"]["heart_rate_bpm"] == 81
+    assert body["data"]["hrv_ms"] == 38
+    assert body["data"]["gsr_raw"] == 1920
+    assert body["data"]["source"] == "simulated"
+
