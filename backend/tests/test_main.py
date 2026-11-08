@@ -358,3 +358,153 @@ def test_sensor_readings_are_isolated_between_demo_users(client):
     assert alice_latest.json()["data"] is not None
     assert bob_latest.status_code == 200
     assert bob_latest.json()["data"] is None
+
+
+
+def pair_test_device(client, user_id, device_id="neurosense-test-esp32"):
+    """Pair a test device and return its one-time token without logging it."""
+    response = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "NeuroSense Test Wearable",
+        },
+        headers={"X-Demo-User": user_id},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def test_device_pairing_returns_one_time_token_and_lists_device(client):
+    """API Test 3a: pairing creates an active device and returns a token."""
+    user_id = "neurosense-device-pair-user"
+    paired = pair_test_device(client, user_id)
+
+    assert paired["success"] is True
+    assert paired["device_id"] == "neurosense-test-esp32"
+    assert isinstance(paired["device_token"], str)
+    assert len(paired["device_token"]) >= 24
+
+    listed = client.get(
+        "/api/devices",
+        headers={"X-Demo-User": user_id},
+    )
+    assert listed.status_code == 200
+    devices = listed.json()["devices"]
+
+    assert len(devices) == 1
+    assert devices[0]["device_id"] == paired["device_id"]
+    assert devices[0]["active"] == 1
+    # The list endpoint must never return the device token or its hash.
+    assert "device_token" not in devices[0]
+    assert "token_hash" not in devices[0]
+
+
+def test_device_reading_requires_valid_x_device_token(client):
+    """API Test 3b: missing/invalid token is rejected; valid token is accepted."""
+    user_id = "neurosense-device-auth-user"
+    device_id = "neurosense-test-esp32"
+    paired = pair_test_device(client, user_id, device_id)
+
+    payload = {
+        "heart_rate_bpm": 78,
+        "hrv_ms": 38,
+        "gsr_raw": 1760,
+        "skin_temperature_c": 33.1,
+        "signal_quality": "good",
+        "source": "wearable",
+    }
+    path = f"/api/devices/{device_id}/readings"
+
+    missing_token = client.post(path, json=payload)
+    assert missing_token.status_code == 401
+
+    wrong_token = client.post(
+        path,
+        json=payload,
+        headers={"X-Device-Token": "not-a-valid-device-token-000"},
+    )
+    assert wrong_token.status_code == 401
+
+    # The backend requires X-Device-Token, not Authorization.
+    wrong_header = client.post(
+        path,
+        json=payload,
+        headers={"Authorization": paired["device_token"]},
+    )
+    assert wrong_header.status_code == 401
+
+    accepted = client.post(
+        path,
+        json=payload,
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert accepted.status_code == 201
+    body = accepted.json()
+
+    assert body["success"] is True
+    assert body["reading"]["device_id"] == device_id
+    assert body["reading"]["source"] == "wearable"
+
+    status_response = client.get(
+        "/api/device/status",
+        headers={"X-Demo-User": user_id},
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["connected"] is True
+
+
+def test_device_cannot_be_paired_to_two_different_users(client):
+    """API Test 3c: a device already owned by one user cannot be reassigned."""
+    device_id = "neurosense-shared-test-device"
+
+    first = pair_test_device(
+        client,
+        "neurosense-device-owner-a",
+        device_id,
+    )
+    assert first["success"] is True
+
+    second = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "Attempted second owner",
+        },
+        headers={"X-Demo-User": "neurosense-device-owner-b"},
+    )
+
+    assert second.status_code == 409
+
+
+def test_unpaired_device_token_can_no_longer_upload_readings(client):
+    """API Test 3d: unpairing deactivates the device token."""
+    user_id = "neurosense-device-unpair-user"
+    device_id = "neurosense-unpair-test-device"
+    paired = pair_test_device(client, user_id, device_id)
+
+    removed = client.delete(
+        f"/api/devices/{device_id}",
+        headers={"X-Demo-User": user_id},
+    )
+    assert removed.status_code == 200
+    assert removed.json()["active"] is False
+
+    upload = client.post(
+        f"/api/devices/{device_id}/readings",
+        json={
+            "heart_rate_bpm": 75,
+            "gsr_raw": 1650,
+            "source": "wearable",
+            "signal_quality": "good",
+        },
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert upload.status_code == 401
+
+    device_status = client.get(
+        "/api/device/status",
+        headers={"X-Demo-User": user_id},
+    )
+    assert device_status.status_code == 200
+    assert device_status.json()["connected"] is False
