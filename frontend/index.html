@@ -2704,6 +2704,12 @@ let dashboardOverview = null;
 let backendRefreshTimer = null;
 let apiRefreshInProgress = false;
 
+function hapticPendingStorageKey() {
+    const owner = firebaseCurrentUser?.uid ||
+        (isLocalDevelopment ? "local-demo-user" : "signed-out");
+    return "neurosense_pending_haptic_command_" + owner;
+}
+
 function hasPrivateApiAccess() {
     return Boolean(apiIdToken) || isLocalDevelopment;
 }
@@ -2851,6 +2857,7 @@ async function configureFirebaseAuthentication() {
                 firebaseHadAuthenticated = false;
                 firebaseCurrentUser = null;
                 apiIdToken = null;
+                pendingHapticCommandId = "";
 
                 if (wasAuthenticated) {
 
@@ -2875,6 +2882,7 @@ async function configureFirebaseAuthentication() {
             }
 
             firebaseCurrentUser = user;
+            pendingHapticCommandId = readLocal(hapticPendingStorageKey(), "");
             firebaseHadAuthenticated = true;
 
             try {
@@ -4678,7 +4686,7 @@ let recoverySequence = readLocal("neurosense_recovery_sequence", {
 
 // A queued command is reused after a page refresh or a temporary timeout.
 // This prevents repeated clicks from creating duplicate motor pulses.
-let pendingHapticCommandId = readLocal("neurosense_pending_haptic_command", "");
+let pendingHapticCommandId = "";
 let hapticStatusCheckActive = false;
 
 const breathingPhases = [
@@ -5072,7 +5080,7 @@ $("sendHapticTestBtn").addEventListener("click", async () => {
                 body: JSON.stringify({ device_id: active.device_id, duration_ms: 1000 })
             });
             pendingHapticCommandId = result.command_id;
-            writeLocal("neurosense_pending_haptic_command", pendingHapticCommandId);
+            writeLocal(hapticPendingStorageKey(), pendingHapticCommandId);
             if (!pendingHapticCommandId) {
                 throw new Error("Backend did not return a haptic command ID.");
             }
@@ -5091,7 +5099,7 @@ $("sendHapticTestBtn").addEventListener("click", async () => {
             if (state.status === "acknowledged") {
                 acknowledged = true;
                 pendingHapticCommandId = "";
-                writeLocal("neurosense_pending_haptic_command", "");
+                writeLocal(hapticPendingStorageKey(), "");
                 completeRecoveryStep("haptic");
                 await recordRecoverySession("Haptic", 1);
                 showToast("Recovery sequence complete. ESP32 acknowledged the haptic step.");
