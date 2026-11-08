@@ -2311,14 +2311,14 @@
 
                     <div class="comparison-box">
                         <span class="muted small">Before recovery</span>
-                        <strong>--</strong>
-                        <p class="muted small">No real reading available</p>
+                        <strong id="recoveryBeforeValue">--</strong>
+                        <p id="recoveryBeforeText" class="muted small">No wearable reading available yet</p>
                     </div>
 
                     <div class="comparison-box">
                         <span class="muted small">After recovery</span>
-                        <strong>--</strong>
-                        <p class="muted small">No real reading available</p>
+                        <strong id="recoveryAfterValue">--</strong>
+                        <p id="recoveryAfterText" class="muted small">Waiting for a post-session wearable reading</p>
                     </div>
 
                 </div>
@@ -3124,6 +3124,65 @@ function applyStressResult(stress) {
     if (ring) ring.style.setProperty("--score", "0");
 }
 
+function formatRecoveryReading(values) {
+
+    if (!values) return "--";
+
+    const parts = [];
+
+    if (values.heart_rate_bpm !== null && values.heart_rate_bpm !== undefined) {
+        parts.push(`HR ${displayValue(values.heart_rate_bpm)} BPM`);
+    }
+    if (values.hrv_ms !== null && values.hrv_ms !== undefined) {
+        parts.push(`HRV ${displayValue(values.hrv_ms, 1)} ms`);
+    }
+    if (values.gsr_raw !== null && values.gsr_raw !== undefined) {
+        parts.push(`GSR ${displayValue(values.gsr_raw)}`);
+    }
+    if (values.skin_temperature_c !== null && values.skin_temperature_c !== undefined) {
+        parts.push(`Temp ${displayValue(values.skin_temperature_c, 1)} °C`);
+    }
+
+    return parts.length ? parts.join(" · ") : "No valid measurements";
+}
+
+
+function renderRecoveryComparison(comparison) {
+
+    if (!comparison) {
+        setText("recoveryBeforeValue", "--");
+        setText("recoveryBeforeText", "No wearable reading found before this session.");
+        setText("recoveryAfterValue", "--");
+        setText("recoveryAfterText", "A post-session reading will appear after the next wearable measurement.");
+        return;
+    }
+
+    const before = {};
+    const after = {};
+
+    Object.entries(comparison).forEach(([field, values]) => {
+        before[field] = values.before;
+        after[field] = values.after;
+    });
+
+    setText("recoveryBeforeValue", formatRecoveryReading(before));
+    setText("recoveryAfterValue", formatRecoveryReading(after));
+
+    const beforeTime = Object.values(comparison).find(value => value.before_timestamp)?.before_timestamp;
+    const afterTime = Object.values(comparison).find(value => value.after_timestamp)?.after_timestamp;
+
+    setText(
+        "recoveryBeforeText",
+        beforeTime ? `Wearable reading · ${formatReadingTime(beforeTime)}` : "Nearest wearable reading at or before session start"
+    );
+    setText(
+        "recoveryAfterText",
+        afterTime ? `Wearable reading · ${formatReadingTime(afterTime)}` : "First wearable reading at or after session completion"
+    );
+
+}
+
+
 function applyDashboardData(overview, history, settings, recovery) {
     dashboardOverview = overview || null;
 
@@ -3184,11 +3243,19 @@ function applyDashboardData(overview, history, settings, recovery) {
             durationSeconds: session.duration_seconds,
             completedAt: session.completed_at,
             status: session.completed ? "Completed" : "Incomplete",
-            storage: "Backend"
+            storage: "Backend",
+            comparison: session.comparison || null
         }));
         recoverySessions = apiRecoveryHistory;
         renderHistory();
         updateAnalyticsCount();
+
+        const latestComparableSession = apiRecoveryHistory.find(
+            session => session.comparison
+        );
+        renderRecoveryComparison(
+            latestComparableSession?.comparison || null
+        );
     }
 
     updateAnalyticsSummaries();
@@ -4793,7 +4860,8 @@ async function recordRecoverySession(activity, durationSeconds) {
                 durationSeconds: saved.duration_seconds,
                 completedAt: saved.completed_at,
                 status: saved.completed ? "Completed" : "Incomplete",
-                storage: "Backend"
+                storage: "Backend",
+                comparison: response.comparison || null
             };
 
             recoverySessions.unshift(session);
@@ -4801,6 +4869,7 @@ async function recordRecoverySession(activity, durationSeconds) {
             hasRemoteRecoveryHistory = true;
             renderHistory();
             updateAnalyticsCount();
+            renderRecoveryComparison(response.comparison || null);
             return true;
 
         } catch (error) {
