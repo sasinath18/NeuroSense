@@ -681,3 +681,142 @@ def test_stress_prediction_api_uses_baseline_and_records_high_stress_event(
     assert events.status_code == 200
     assert events.json()["total"] == 1
     assert events.json()["events"][0]["stress_probability"] == 0.8
+
+
+
+def test_haptic_setting_can_be_enabled_disabled_and_retrieved(client):
+    """API Test 5a: haptic preference is saved per user."""
+    user_id = "neurosense-haptic-settings-user"
+    headers = {"X-Demo-User": user_id}
+
+    initial = client.get("/api/settings", headers=headers)
+    assert initial.status_code == 200
+    assert initial.json()["haptic_enabled"] is False
+
+    enabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=headers,
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["haptic_enabled"] is True
+
+    fetched_enabled = client.get("/api/settings", headers=headers)
+    assert fetched_enabled.status_code == 200
+    assert fetched_enabled.json()["haptic_enabled"] is True
+
+    disabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": False},
+        headers=headers,
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["haptic_enabled"] is False
+
+    fetched_disabled = client.get("/api/settings", headers=headers)
+    assert fetched_disabled.status_code == 200
+    assert fetched_disabled.json()["haptic_enabled"] is False
+
+
+def test_haptic_command_is_rejected_when_preference_is_off(client):
+    """API Test 5b: the server must not queue haptics while setting is OFF."""
+    user_id = "neurosense-haptic-off-user"
+    device_id = "neurosense-haptic-off-device"
+    pair_test_device(client, user_id, device_id)
+
+    response = client.post(
+        "/api/haptic/commands",
+        json={
+            "device_id": device_id,
+            "duration_ms": 500,
+        },
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 409
+    assert "OFF" in response.json()["detail"]
+
+
+def test_haptic_command_can_be_polled_and_acknowledged(client):
+    """API Test 5c: enabled haptic command follows pending-delivered-acknowledged."""
+    user_id = "neurosense-haptic-command-user"
+    device_id = "neurosense-haptic-command-device"
+    paired = pair_test_device(client, user_id, device_id)
+    token = paired["device_token"]
+
+    enabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers={"X-Demo-User": user_id},
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["haptic_enabled"] is True
+
+    queued = client.post(
+        "/api/haptic/commands",
+        json={
+            "device_id": device_id,
+            "duration_ms": 650,
+        },
+        headers={"X-Demo-User": user_id},
+    )
+    assert queued.status_code == 201
+    queued_body = queued.json()
+
+    assert queued_body["success"] is True
+    assert queued_body["status"] == "pending"
+    assert queued_body["duration_ms"] == 650
+
+    command_path = f"/api/devices/{device_id}/commands"
+
+    unauthorized = client.get(command_path)
+    assert unauthorized.status_code == 401
+
+    polled = client.get(
+        command_path,
+        headers={"X-Device-Token": token},
+    )
+    assert polled.status_code == 200
+    commands = polled.json()["commands"]
+    assert len(commands) == 1
+    assert commands[0]["command_id"] == queued_body["command_id"]
+    assert commands[0]["duration_ms"] == 650
+
+    ack = client.post(
+        f"{command_path}/{queued_body['command_id']}/ack",
+        headers={"X-Device-Token": token},
+    )
+    assert ack.status_code == 200
+    assert ack.json()["success"] is True
+    assert ack.json()["status"] == "acknowledged"
+
+    polled_again = client.get(
+        command_path,
+        headers={"X-Device-Token": token},
+    )
+    assert polled_again.status_code == 200
+    assert polled_again.json()["commands"] == []
+
+
+def test_haptic_command_rejects_duration_outside_safe_api_range(client):
+    """API Test 5d: haptic command duration is limited by request validation."""
+    user_id = "neurosense-haptic-duration-user"
+    device_id = "neurosense-haptic-duration-device"
+    pair_test_device(client, user_id, device_id)
+
+    client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers={"X-Demo-User": user_id},
+    )
+
+    response = client.post(
+        "/api/haptic/commands",
+        json={
+            "device_id": device_id,
+            "duration_ms": 50,
+        },
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 422
