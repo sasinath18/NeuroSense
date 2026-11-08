@@ -3351,7 +3351,14 @@ $("pairDeviceBtn").addEventListener("click",async()=>{
     if(!/^[A-Za-z0-9_.-]{3,80}$/.test(deviceId)||!deviceName||deviceName.length>80){showToast("Enter a valid device ID and name.");return;}
     const btn=$("pairDeviceBtn");btn.disabled=true;
     try{const result=await apiRequest("/api/devices/pair",{method:"POST",body:JSON.stringify({device_id:deviceId,device_name:deviceName})});
-        $("deviceTokenValue").textContent=result.device_token||"";$("deviceTokenPanel").classList.remove("hidden");showToast("Device paired. Copy the one-time token now.");await refreshBackendData();
+        $("deviceTokenValue").textContent=result.device_token||"";$("deviceTokenPanel").classList.remove("hidden");
+        const cloudBackupReady = result.cloud_sync &&
+            result.cloud_sync.global === "synced" &&
+            result.cloud_sync.user === "synced";
+        showToast(cloudBackupReady
+            ? "Device paired and cloud backup synced. Copy the one-time token now."
+            : "Device paired, but Firestore backup is not confirmed. Copy the token; configure Firebase Admin + Firestore before relying on Render restarts.");
+        await refreshBackendData();
     }catch(e){showToast("Pairing failed: "+e.message);}finally{btn.disabled=false;}
 });
 
