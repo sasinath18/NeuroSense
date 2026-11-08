@@ -5,6 +5,8 @@ Run from the project root:
     python -m pytest backend/tests/test_main.py -v
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -450,4 +452,132 @@ def test_baseline_calibration_and_retrieval(client):
     assert baseline_body["available"] is True
     assert baseline_body["baseline"]["sample_count"] == 10
     assert baseline_body["baseline"]["heart_rate_bpm"] == 64.5
+
+
+def test_haptic_setting_is_saved_and_retrieved(client):
+    """Haptic preference should persist through the settings API."""
+    headers = {"X-Demo-User": "api-test-haptic-settings"}
+
+    initial = client.get("/api/settings", headers=headers)
+    assert initial.status_code == 200
+    assert initial.json()["haptic_enabled"] is False
+
+    update = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=headers,
+    )
+    assert update.status_code == 200
+    assert update.json()["success"] is True
+    assert update.json()["haptic_enabled"] is True
+
+    saved = client.get("/api/settings", headers=headers)
+    assert saved.status_code == 200
+    assert saved.json()["haptic_enabled"] is True
+
+
+def test_haptic_command_can_be_created_polled_and_acknowledged(client):
+    """Verify the backend haptic command queue lifecycle end to end."""
+    user_headers = {"X-Demo-User": "api-test-haptic-flow"}
+    device_id = "test-device-haptic-flow"
+
+    pair = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "Haptic Flow Test",
+        },
+        headers=user_headers,
+    )
+    assert pair.status_code == 201
+    token = pair.json()["device_token"]
+
+    setting = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=user_headers,
+    )
+    assert setting.status_code == 200
+
+    create = client.post(
+        "/api/haptic/commands",
+        json={"device_id": device_id, "duration_ms": 500},
+        headers=user_headers,
+    )
+    assert create.status_code == 201
+    command = create.json()
+    assert command["success"] is True
+    assert command["status"] == "pending"
+    assert command["duration_ms"] == 500
+
+    poll = client.get(
+        f"/api/devices/{device_id}/commands",
+        headers={"X-Device-Token": token},
+    )
+    assert poll.status_code == 200
+    commands = poll.json()["commands"]
+    assert any(item["command_id"] == command["command_id"] for item in commands)
+
+    acknowledge = client.post(
+        f"/api/devices/{device_id}/commands/{command['command_id']}/ack",
+        headers={"X-Device-Token": token},
+    )
+    assert acknowledge.status_code == 200
+    assert acknowledge.json()["success"] is True
+    assert acknowledge.json()["status"] == "acknowledged"
+
+
+def test_haptic_command_is_blocked_when_preference_is_off(client):
+    """The backend must not queue haptic commands while the setting is OFF."""
+    headers = {"X-Demo-User": "api-test-haptic-disabled"}
+    device_id = "test-device-haptic-disabled"
+
+    pair = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "Haptic Disabled Test",
+        },
+        headers=headers,
+    )
+    assert pair.status_code == 201
+
+    response = client.post(
+        "/api/haptic/commands",
+        json={"device_id": device_id, "duration_ms": 500},
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Haptic feedback is OFF in user settings."
+
+
+def test_recovery_session_is_saved_and_returned_in_history(client):
+    """A completed recovery session should be saved and listed in history."""
+    headers = {"X-Demo-User": "api-test-recovery-history"}
+    started = datetime.now(timezone.utc) - timedelta(seconds=90)
+    completed = started + timedelta(seconds=60)
+
+    create = client.post(
+        "/api/recovery/sessions",
+        json={
+            "activity": "breathing",
+            "started_at": started.isoformat(),
+            "completed_at": completed.isoformat(),
+            "duration_seconds": 60,
+            "completed": True,
+        },
+        headers=headers,
+    )
+
+    assert create.status_code == 201
+    body = create.json()
+    assert body["success"] is True
+    assert body["session"]["activity"] == "breathing"
+    assert body["session"]["duration_seconds"] == 60
+
+    history = client.get("/api/recovery/history", headers=headers)
+    assert history.status_code == 200
+    assert history.json()["total"] == 1
+    assert history.json()["sessions"][0]["session_id"] == body["session"]["session_id"]
 
