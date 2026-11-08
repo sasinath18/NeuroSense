@@ -1461,17 +1461,19 @@
 
             <div class="notice">
                 <strong>Development preview</strong><br>
-                You can enter the dashboard using local preview mode.
-                Preview access does not show private account data. Live readings appear after secure sign-in and sensor data are available.
+                Preview access does not create an account or show private readings. Secure Google sign-in becomes available after Firebase is configured.
             </div>
 
-            <button id="previewLoginBtn" class="primary-btn">
-                Open dashboard preview →
+            <button id="googleLoginBtn" class="primary-btn" type="button" disabled>
+                Checking Google Sign-In...
             </button>
 
-            <button id="googleLoginBtn" class="secondary-btn" disabled
-                    title="Firebase authentication has not been connected yet">
-                Google Sign-In · Coming after Firebase setup
+            <p id="googleLoginStatus" class="login-footer" role="status" aria-live="polite">
+                Checking Firebase sign-in configuration...
+            </p>
+
+            <button id="previewLoginBtn" class="secondary-btn">
+                Open dashboard preview →
             </button>
 
             <div class="login-footer">
@@ -2549,7 +2551,7 @@
 
             <div style="margin-top:18px">
                 <button id="logoutBtn" class="danger-btn">
-                    Exit dashboard preview
+                    Sign out / Exit dashboard
                 </button>
             </div>
 
@@ -2642,6 +2644,11 @@ const API_BASE_URL = (
 ).replace(/\/$/, "");
 
 let apiIdToken = null;
+let firebaseAuth = null;
+let firebaseAuthModule = null;
+let firebaseCurrentUser = null;
+let firebaseAuthReady = false;
+let firebaseHadAuthenticated = false;
 let backendHealth = null;
 let backendSystemStatus = null;
 let sensorHistory = [];
@@ -2671,6 +2678,12 @@ function apiHeaders(extra = {}) {
 }
 
 async function apiRequest(path, options = {}) {
+
+    // Firebase ID tokens expire; obtain a fresh token before each private API call.
+    if (firebaseCurrentUser) {
+        apiIdToken = await firebaseCurrentUser.getIdToken();
+    }
+
     const headers = apiHeaders(options.headers || {});
 
     if (
@@ -2720,6 +2733,213 @@ async function apiRequest(path, options = {}) {
 
     return payload;
 }
+
+async function configureFirebaseAuthentication() {
+
+    const button = $("googleLoginBtn");
+    const status = $("googleLoginStatus");
+
+    button.disabled = true;
+    button.textContent = "Checking Google Sign-In...";
+
+    try {
+
+        const configResponse = await apiRequest("/api/public-config");
+
+        if (!configResponse.firebase_sign_in_ready) {
+
+            button.disabled = true;
+            button.textContent = "Google Sign-In · Setup pending";
+
+            let message = "Firebase sign-in is not configured in this deployment yet.";
+
+            if (
+                configResponse.firebase_web_configured &&
+                !configResponse.firebase_auth_backend_ready
+            ) {
+                message = "Firebase web settings are present, but the backend Admin service-account secret is still missing or not initialized.";
+            } else if (
+                configResponse.firebase_auth_backend_ready &&
+                !configResponse.firebase_web_configured
+            ) {
+                message = "Firebase Admin is connected. Add the Firebase web app settings to enable browser sign-in.";
+            }
+
+            if (status) status.textContent = message;
+            return false;
+        }
+
+        const firebaseVersion = "12.19.0";
+        const appSdkUrl =
+            `https://www.gstatic.com/firebasejs/${firebaseVersion}/firebase-app.js`;
+        const authSdkUrl =
+            `https://www.gstatic.com/firebasejs/${firebaseVersion}/firebase-auth.js`;
+
+        const [appSdk, authSdk] = await Promise.all([
+            import(appSdkUrl),
+            import(authSdkUrl)
+        ]);
+
+        const firebaseApp = appSdk.getApps().length
+            ? appSdk.getApp()
+            : appSdk.initializeApp(configResponse.firebase);
+
+        firebaseAuth = authSdk.getAuth(firebaseApp);
+        firebaseAuthModule = authSdk;
+        firebaseAuthReady = true;
+
+        button.disabled = false;
+        button.textContent = "Continue with Google";
+
+        if (status) {
+            status.textContent = "Secure Google sign-in is ready. Your private data is loaded only after authentication.";
+        }
+
+        authSdk.onAuthStateChanged(firebaseAuth, async user => {
+
+            if (!user) {
+
+                const wasAuthenticated = firebaseHadAuthenticated;
+
+                firebaseHadAuthenticated = false;
+                firebaseCurrentUser = null;
+                apiIdToken = null;
+
+                if (wasAuthenticated) {
+
+                    stopCamera();
+                    stopBreathing();
+
+                    $("appShell").classList.add("hidden");
+                    $("loginScreen").classList.remove("hidden");
+
+                    sensorHistory = [];
+                    apiRecoveryHistory = [];
+                    hasRemoteRecoveryHistory = false;
+                    clearLiveSensorDisplay(
+                        "Sign in to load your private wearable readings."
+                    );
+
+                    setText("topModeBadge", "Preview access");
+                    if (status) status.textContent = "You have signed out of NeuroSense.";
+                }
+
+                return;
+            }
+
+            firebaseCurrentUser = user;
+            firebaseHadAuthenticated = true;
+
+            try {
+
+                apiIdToken = await user.getIdToken();
+
+                const accountName =
+                    user.displayName ||
+                    (user.email ? user.email.split("@")[0] : "User");
+
+                profile = {
+                    name: accountName,
+                    email: user.email || ""
+                };
+
+                updateProfileUI();
+                setText("topModeBadge", "Signed in");
+
+                if (status) {
+                    status.textContent = `Signed in as ${user.email || accountName}.`;
+                }
+
+                if ($("appShell").classList.contains("hidden")) {
+                    openDashboard();
+                } else {
+                    refreshBackendData();
+                }
+
+            } catch (error) {
+                console.error("Firebase session token retrieval failed:", error);
+                apiIdToken = null;
+                setApiBanner(
+                    "AUTHENTICATION ERROR",
+                    "Could not obtain a verified Firebase ID token.",
+                    "danger"
+                );
+            }
+
+        });
+
+        return true;
+
+    } catch (error) {
+
+        console.error("Firebase Authentication initialization failed:", error);
+
+        button.disabled = true;
+        button.textContent = "Google Sign-In · Unavailable";
+
+        if (status) {
+            status.textContent = "Firebase sign-in could not initialize. Check Firebase configuration, authorized domains and network access.";
+        }
+
+        return false;
+    }
+
+}
+
+
+async function signInWithGoogle() {
+
+    if (!firebaseAuthReady || !firebaseAuthModule || !firebaseAuth) {
+        showToast("Google Sign-In is not configured yet.");
+        return;
+    }
+
+    const button = $("googleLoginBtn");
+    button.disabled = true;
+    button.textContent = "Opening Google Sign-In...";
+
+    try {
+
+        const provider = new firebaseAuthModule.GoogleAuthProvider();
+        provider.setCustomParameters({
+            prompt: "select_account"
+        });
+
+        await firebaseAuthModule.signInWithPopup(
+            firebaseAuth,
+            provider
+        );
+
+        // onAuthStateChanged handles the authenticated dashboard transition.
+
+    } catch (error) {
+
+        console.error("Google sign-in failed:", error);
+
+        const messages = {
+            "auth/popup-closed-by-user": "Google sign-in window was closed before completion.",
+            "auth/popup-blocked": "Your browser blocked the Google sign-in popup. Allow popups for this site and retry.",
+            "auth/unauthorized-domain": "This Render domain is not authorized in Firebase Authentication settings.",
+            "auth/operation-not-allowed": "Enable the Google provider in Firebase Authentication.",
+            "auth/network-request-failed": "Network error while contacting Firebase. Check your connection."
+        };
+
+        showToast(
+            messages[error.code] ||
+            "Google sign-in failed. Check Firebase settings and try again."
+        );
+
+    } finally {
+
+        button.disabled = !firebaseAuthReady;
+        button.textContent = firebaseAuthReady
+            ? "Continue with Google"
+            : "Google Sign-In · Unavailable";
+
+    }
+
+}
+
 
 function setApiBanner(title, message, tone = "warning") {
     const titleElement = $("apiStatusTitle");
@@ -3065,7 +3285,7 @@ async function refreshBackendData() {
     }
 }
 
-// Firebase integration (next software task) supplies the verified ID token here.
+// Expose only the token hand-off for an already verified Firebase user.
 window.NeuroSenseApi = Object.freeze({
     setIdToken(token) {
         apiIdToken = typeof token === "string" && token.trim()
@@ -3171,17 +3391,28 @@ $("previewLoginBtn").addEventListener("click", openDashboard);
 $("refreshDataBtn").addEventListener("click", refreshBackendData);
 
 
-$("googleLoginBtn").addEventListener("click", () => {
-    showToast("Google login requires Firebase Authentication setup.");
-});
+$("googleLoginBtn").addEventListener("click", signInWithGoogle);
 
 
-$("logoutBtn").addEventListener("click", () => {
+$("logoutBtn").addEventListener("click", async () => {
     stopCamera();
     stopBreathing();
 
+    if (firebaseAuth && firebaseCurrentUser && firebaseAuthModule) {
+        try {
+            await firebaseAuthModule.signOut(firebaseAuth);
+            showToast("Signed out of NeuroSense.");
+            return;
+        } catch (error) {
+            console.error("Firebase sign-out failed:", error);
+            showToast("Could not sign out. Please try again.");
+            return;
+        }
+    }
+
     $("appShell").classList.add("hidden");
     $("loginScreen").classList.remove("hidden");
+    apiIdToken = null;
 
     showToast("Preview dashboard closed.");
 });
@@ -4686,6 +4917,7 @@ function initializeApp() {
 
     setTheme(savedTheme);
     refreshPublicSystemStatus();
+    configureFirebaseAuthentication();
 
     updateProfileUI();
     updateHapticUI();
