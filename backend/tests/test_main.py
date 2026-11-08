@@ -993,3 +993,136 @@ def test_face_scan_status_reports_camera_privacy_and_not_integrated_state(client
     assert body["image_storage"] is False
     assert "OFF by default" in body["camera_policy"]
 
+
+
+
+def test_dashboard_overview_has_safe_empty_state(client):
+    """API Test 6a: dashboard does not invent readings when no sensor data exists."""
+    user_id = "neurosense-dashboard-empty-user"
+    response = client.get(
+        "/api/dashboard/overview",
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["device_connected"] is False
+    assert body["latest_reading"] is None
+    assert body["stress"]["status"] == "waiting_for_wearable_data"
+    assert body["stress"]["stress_score"] is None
+    assert body["haptic_enabled"] is False
+
+
+def test_recovery_session_is_saved_and_returned_in_history(client):
+    """API Test 6b: recovery session POST is visible through recovery history GET."""
+    from datetime import datetime, timedelta, timezone
+
+    user_id = "neurosense-recovery-history-user"
+    now = datetime.now(timezone.utc)
+    started = now - timedelta(seconds=75)
+
+    saved = client.post(
+        "/api/recovery/sessions",
+        json={
+            "activity": "breathing",
+            "started_at": started.isoformat(),
+            "completed_at": now.isoformat(),
+            "duration_seconds": 75,
+            "completed": True,
+        },
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert saved.status_code == 201
+    session_id = saved.json()["session"]["session_id"]
+
+    history = client.get(
+        "/api/recovery/history",
+        headers={"X-Demo-User": user_id},
+    )
+    assert history.status_code == 200
+    assert history.json()["total"] == 1
+    assert history.json()["sessions"][0]["session_id"] == session_id
+    assert history.json()["sessions"][0]["activity"] == "breathing"
+
+
+def test_face_scan_status_enforces_preview_only_privacy_contract(client):
+    """API Test 6c: backend reports analysis unavailable and does not store images."""
+    response = client.get("/api/face-scan/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is False
+    assert body["status"] == "analysis_not_integrated"
+    assert body["image_storage"] is False
+    assert "OFF by default" in body["camera_policy"]
+
+
+def test_invalid_demo_user_id_is_rejected(client):
+    """API Test 6d: development user IDs cannot contain spaces or unsafe characters."""
+    response = client.get(
+        "/api/settings",
+        headers={"X-Demo-User": "invalid user id"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_haptic_preferences_are_isolated_between_users(client):
+    """API Test 6e: one user's haptic preference must not alter another's."""
+    user_a = {"X-Demo-User": "neurosense-haptic-user-a"}
+    user_b = {"X-Demo-User": "neurosense-haptic-user-b"}
+
+    enabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=user_a,
+    )
+    assert enabled.status_code == 200
+
+    a_settings = client.get("/api/settings", headers=user_a)
+    b_settings = client.get("/api/settings", headers=user_b)
+
+    assert a_settings.status_code == 200
+    assert b_settings.status_code == 200
+    assert a_settings.json()["haptic_enabled"] is True
+    assert b_settings.json()["haptic_enabled"] is False
+
+
+def test_sensor_post_rejects_too_few_ibi_intervals(client):
+    """API Test 6f: HRV input must include at least three IBI intervals."""
+    response = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 75,
+            "ibi_ms": [800, 810],
+            "source": "simulated",
+            "signal_quality": "good",
+        },
+        headers={"X-Demo-User": "neurosense-ibi-validation-user"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_haptic_command_rejects_unpaired_device(client):
+    """API Test 6g: haptic commands can only target an active paired device."""
+    user_id = "neurosense-haptic-unpaired-user"
+
+    enabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers={"X-Demo-User": user_id},
+    )
+    assert enabled.status_code == 200
+
+    response = client.post(
+        "/api/haptic/commands",
+        json={
+            "device_id": "neurosense-never-paired",
+            "duration_ms": 500,
+        },
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 404
