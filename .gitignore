@@ -44,6 +44,11 @@ firmware/render_ca_bundle.pem
 data/local/
 data/wesad/
 data/stress_dataset.csv
+data/empathicschool/
+data/face_stress_windows.csv
+ml_model/assets/*.task
+ml_model/face_stress_model.joblib
+ml_model/face_stress_evaluation.json
 *.db
 *.sqlite
 *.sqlite3
