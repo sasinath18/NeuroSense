@@ -325,3 +325,78 @@ def test_device_upload_rejects_invalid_device_token(client):
 
     assert response.status_code == 401
 
+
+def test_device_status_reports_recently_seen_device_as_connected(client):
+    """A device that uploaded a reading within 60 seconds is connected."""
+    user_headers = {"X-Demo-User": "api-test-device-status"}
+    device_id = "test-device-status-01"
+
+    pair_response = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "Device Status Test",
+        },
+        headers=user_headers,
+    )
+    assert pair_response.status_code == 201
+
+    token = pair_response.json()["device_token"]
+    upload_response = client.post(
+        f"/api/devices/{device_id}/readings",
+        json={
+            "heart_rate_bpm": 74,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers={"X-Device-Token": token},
+    )
+    assert upload_response.status_code == 201
+
+    status_response = client.get(
+        "/api/device/status",
+        headers=user_headers,
+    )
+
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["connected"] is True
+    assert any(
+        item["device_id"] == device_id and item["connected"] is True
+        for item in body["devices"]
+    )
+
+
+def test_unpair_device_marks_device_inactive(client):
+    """DELETE device endpoint should deactivate an owned paired device."""
+    user_headers = {"X-Demo-User": "api-test-unpair"}
+    device_id = "test-device-unpair-01"
+
+    pair_response = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "Unpair Test",
+        },
+        headers=user_headers,
+    )
+    assert pair_response.status_code == 201
+
+    delete_response = client.delete(
+        f"/api/devices/{device_id}",
+        headers=user_headers,
+    )
+
+    assert delete_response.status_code == 200
+    assert delete_response.json()["success"] is True
+    assert delete_response.json()["active"] is False
+
+    list_response = client.get("/api/devices", headers=user_headers)
+    assert list_response.status_code == 200
+    matching = [
+        item for item in list_response.json()["devices"]
+        if item["device_id"] == device_id
+    ]
+    assert len(matching) == 1
+    assert matching[0]["active"] == 0
+
