@@ -78,3 +78,34 @@ def test_sensor_endpoint_rejects_empty_payload(client):
     )
 
     assert response.status_code == 422
+
+
+def test_valid_sensor_reading_is_accepted_and_stored(client):
+    """POST a valid simulated sensor reading and verify the stored response."""
+    response = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 76,
+            "hrv_ms": 42,
+            "gsr_raw": 1800,
+            "skin_temperature_c": 33.2,
+            "signal_quality": "good",
+            "source": "simulated",
+        },
+        headers={"X-Demo-User": "api-test-sensor-post"},
+    )
+
+    assert response.status_code == 201
+
+    body = response.json()
+    assert body["success"] is True
+    assert body["reading"]["user_id"] == "api-test-sensor-post"
+    assert body["reading"]["device_id"] == "manual-preview"
+    assert body["reading"]["heart_rate_bpm"] == 76
+    assert body["reading"]["hrv_ms"] == 42
+    assert body["reading"]["gsr_raw"] == 1800
+    assert body["reading"]["skin_temperature_c"] == 33.2
+    assert body["reading"]["signal_quality"] == "good"
+    assert body["reading"]["source"] == "simulated"
+    assert body["stress"]["status"] == "simulated_data"
+
