@@ -1444,7 +1444,7 @@
             <div class="notice">
                 <strong>Development preview</strong><br>
                 You can enter the dashboard using local preview mode.
-                Preview data is simulated and is not connected to a wearable.
+                Preview access does not show private account data. Live readings appear after secure sign-in and sensor data are available.
             </div>
 
             <button id="previewLoginBtn" class="primary-btn">
@@ -1457,9 +1457,7 @@
             </button>
 
             <div class="login-footer">
-                By continuing in preview mode, you understand that
-                displayed readings are sample data. No real account
-                authentication takes place in this preview.
+                Preview access does not create a user account. Personal readings and records remain protected until Firebase sign-in is configured.
             </div>
 
         </div>
@@ -1567,9 +1565,9 @@
 
             <div class="topbar-actions">
 
-                <span class="badge">
+                <span class="badge" id="topModeBadge">
                     <span class="dot yellow"></span>
-                    Demo mode
+                    Preview access
                 </span>
 
                 <!-- Theme toggle:
@@ -1627,7 +1625,7 @@
                         Welcome back, <span id="welcomeName">Sasinath</span>
                     </h1>
                     <p class="section-subtitle">
-                        Here is your NeuroSense preview dashboard.
+                        Backend health and authenticated wearable readings in one place.
                     </p>
                 </div>
 
@@ -1969,7 +1967,7 @@
                 <article class="card">
                     <div class="card-header">
                         <div>
-                            <h3>GSR Samples</h3>
+                            <h3>GSR History</h3>
                             <p>Backend wearable history</p>
                         </div>
                     </div>
@@ -1983,7 +1981,7 @@
                 <article class="card">
                     <div class="card-header">
                         <div>
-                            <h3>Skin Temperature Samples</h3>
+                            <h3>Skin Temperature History</h3>
                             <p>Backend wearable history · surface temperature</p>
                         </div>
                     </div>
@@ -2257,9 +2255,7 @@
                         </p>
 
                         <div class="notice" style="margin-top:12px">
-                            This setting saves your local preference.
-                            It does not activate a physical motor until
-                            the backend and ESP32 are connected.
+                            When signed in, this preference is saved to the backend. It does not activate a physical motor until the ESP32 command integration is completed.
                         </div>
 
                     </article>
@@ -2620,6 +2616,7 @@ let backendHealth = null;
 let backendSystemStatus = null;
 let sensorHistory = [];
 let apiRecoveryHistory = [];
+let hasRemoteRecoveryHistory = false;
 let dashboardOverview = null;
 let apiRefreshInProgress = false;
 
@@ -2930,6 +2927,7 @@ function applyDashboardData(overview, history, settings, recovery) {
     }
 
     if (Array.isArray(recovery?.sessions)) {
+        hasRemoteRecoveryHistory = true;
         apiRecoveryHistory = recovery.sessions.map(session => ({
             id: session.session_id,
             activity: session.activity,
@@ -2974,6 +2972,7 @@ async function refreshBackendData() {
             );
             sensorHistory = [];
             apiRecoveryHistory = [];
+            hasRemoteRecoveryHistory = false;
             recoverySessions = readLocal("neurosense_recovery_sessions", []);
             renderHistory();
             updateAnalyticsSummaries();
@@ -3340,7 +3339,7 @@ function updateAnalyticsSummaries() {
     );
     setText(
         "analyticsSessionCount",
-        String(apiRecoveryHistory.length || recoverySessions.length)
+        String(hasRemoteRecoveryHistory ? apiRecoveryHistory.length : recoverySessions.length)
     );
     setText(
         "analyticsStatusText",
@@ -4347,6 +4346,7 @@ async function recordRecoverySession(activity, durationSeconds) {
 
             recoverySessions.unshift(session);
             apiRecoveryHistory = recoverySessions;
+            hasRemoteRecoveryHistory = true;
             renderHistory();
             updateAnalyticsCount();
             return true;
