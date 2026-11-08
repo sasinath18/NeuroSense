@@ -2669,7 +2669,7 @@ def set_haptic_setting(
             )
         )
 
-    firestore_write(
+    cloud_sync = firestore_write(
         ("users", user_id, "settings"),
         "preferences",
         {
@@ -2680,7 +2680,8 @@ def set_haptic_setting(
 
     return {
         "success": True,
-        "haptic_enabled": payload.haptic_enabled
+        "haptic_enabled": payload.haptic_enabled,
+        "cloud_sync": cloud_sync,
     }
 
 
