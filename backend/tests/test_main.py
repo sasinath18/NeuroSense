@@ -233,3 +233,42 @@ def test_device_list_returns_devices_for_authenticated_user(client):
     assert matching[0]["device_name"] == "Device List Test"
     assert matching[0]["active"] == 1
 
+
+def test_paired_device_can_upload_reading_with_valid_device_token(client):
+    """A paired device must upload wearable data using X-Device-Token."""
+    user_headers = {"X-Demo-User": "api-test-device-upload"}
+    device_id = "test-device-upload-01"
+
+    pair_response = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "Device Upload Test",
+        },
+        headers=user_headers,
+    )
+
+    assert pair_response.status_code == 201
+    device_token = pair_response.json()["device_token"]
+
+    upload_response = client.post(
+        f"/api/devices/{device_id}/readings",
+        json={
+            "heart_rate_bpm": 78,
+            "hrv_ms": 44,
+            "gsr_raw": 1770,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers={"X-Device-Token": device_token},
+    )
+
+    assert upload_response.status_code == 201
+    body = upload_response.json()
+    assert body["success"] is True
+    assert body["reading"]["device_id"] == device_id
+    assert body["reading"]["source"] == "wearable"
+    assert body["reading"]["heart_rate_bpm"] == 78
+    assert body["reading"]["hrv_ms"] == 44
+    assert body["reading"]["gsr_raw"] == 1770
+
