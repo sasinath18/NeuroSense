@@ -2316,7 +2316,7 @@
                 <div class="eyebrow">Personal records</div>
                 <h1 class="section-title">Recovery History</h1>
                 <p class="section-subtitle">
-                    Locally recorded sessions from this browser preview.
+                    Recovery sessions saved for your account or this browser preview.
                 </p>
             </div>
 
@@ -2359,8 +2359,8 @@
                 </div>
 
                 <div class="notice" style="margin-top:15px">
-                    These preview records are saved in this browser only.
-                    Firebase cloud synchronization will be added later.
+                    Signed-in sessions are loaded from the NeuroSense backend.
+                    Without an account connection, this browser uses local preview storage.
                 </div>
 
             </div>
@@ -2599,6 +2599,456 @@ function writeLocal(key, value) {
 
 
 /* =========================================================
+   NEUROSENSE API CLIENT
+   Same-origin in production; port 8001 for local preview.
+========================================================= */
+
+const isLocalDevelopment = (
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1"
+);
+
+const API_BASE_URL = (
+    window.NEUROSENSE_API_BASE_URL ||
+    (isLocalDevelopment
+        ? `${window.location.protocol}//${window.location.hostname}:8001`
+        : window.location.origin)
+).replace(/\/$/, "");
+
+let apiIdToken = null;
+let backendHealth = null;
+let backendSystemStatus = null;
+let sensorHistory = [];
+let apiRecoveryHistory = [];
+let dashboardOverview = null;
+let apiRefreshInProgress = false;
+
+function hasPrivateApiAccess() {
+    return Boolean(apiIdToken) || isLocalDevelopment;
+}
+
+function apiHeaders(extra = {}) {
+    const headers = {
+        "Accept": "application/json",
+        ...extra
+    };
+
+    if (apiIdToken) {
+        headers.Authorization = `Bearer ${apiIdToken}`;
+    } else if (isLocalDevelopment) {
+        // Backend accepts this header only in NEUROSENSE_ENV=development.
+        headers["X-Demo-User"] = "local-demo-user";
+    }
+
+    return headers;
+}
+
+async function apiRequest(path, options = {}) {
+    const headers = apiHeaders(options.headers || {});
+
+    if (
+        options.body !== undefined &&
+        !headers["Content-Type"] &&
+        !headers["content-type"]
+    ) {
+        headers["Content-Type"] = "application/json";
+    }
+
+    let response;
+
+    try {
+        response = await fetch(`${API_BASE_URL}${path}`, {
+            ...options,
+            headers,
+            cache: "no-store"
+        });
+    } catch (error) {
+        const networkError = new Error(
+            "Cannot reach the NeuroSense backend. Check the service URL or network."
+        );
+        networkError.status = 0;
+        throw networkError;
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    let payload = null;
+
+    if (contentType.includes("application/json")) {
+        payload = await response.json().catch(() => null);
+    } else {
+        const text = await response.text().catch(() => "");
+        payload = text ? { detail: text.slice(0, 300) } : null;
+    }
+
+    if (!response.ok) {
+        const error = new Error(
+            payload?.detail ||
+            payload?.message ||
+            `NeuroSense API request failed (${response.status}).`
+        );
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+    }
+
+    return payload;
+}
+
+function setApiBanner(title, message, tone = "warning") {
+    const titleElement = $("apiStatusTitle");
+    const messageElement = $("apiStatusText");
+    const banner = $("apiStatusBanner");
+
+    if (titleElement) titleElement.textContent = title;
+    if (messageElement) messageElement.textContent = message;
+    if (!banner) return;
+
+    banner.style.borderColor = tone === "success"
+        ? "rgba(53,185,139,.35)"
+        : tone === "danger"
+            ? "rgba(228,119,119,.35)"
+            : "rgba(231,182,91,.3)";
+}
+
+function setText(id, value) {
+    const element = $(id);
+    if (element) element.textContent = value;
+}
+
+function displayValue(value, decimals = 0) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === "" ||
+        !Number.isFinite(Number(value))
+    ) {
+        return "--";
+    }
+
+    return Number(value).toFixed(decimals);
+}
+
+function formatReadingTime(value) {
+    if (!value) return "None";
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Unknown";
+
+    return date.toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+    });
+}
+
+function setSystemInformation() {
+    const apiReady = backendHealth?.status === "healthy";
+    setText(
+        "settingsBackendStatus",
+        apiReady ? "Online" : backendHealth ? "Degraded" : "Offline"
+    );
+    setText(
+        "settingsFirebaseStatus",
+        backendHealth?.firebase_configured ? "Configured" : "Not configured"
+    );
+    setText(
+        "settingsModelStatus",
+        backendHealth?.ml_model_loaded ? "Loaded" : "Unavailable"
+    );
+    setText(
+        "dashboardModelStatus",
+        backendHealth?.ml_model_loaded ? "Loaded" : "Unavailable"
+    );
+}
+
+async function refreshPublicSystemStatus() {
+    try {
+        const [health, system] = await Promise.all([
+            apiRequest("/health"),
+            apiRequest("/api/system/status")
+        ]);
+
+        backendHealth = health;
+        backendSystemStatus = system;
+        setSystemInformation();
+
+        if (health.status !== "healthy") {
+            setApiBanner(
+                "BACKEND DEGRADED",
+                "The API is reachable, but its database health check is not healthy.",
+                "danger"
+            );
+        } else if (!health.firebase_configured && !isLocalDevelopment) {
+            setApiBanner(
+                "BACKEND ONLINE",
+                "API is connected. Firebase sign-in is not configured, so private user data is protected and not loaded yet.",
+                "warning"
+            );
+        } else if (!hasPrivateApiAccess()) {
+            setApiBanner(
+                "BACKEND ONLINE",
+                "Sign in to load your private NeuroSense readings and history.",
+                "warning"
+            );
+        } else {
+            setApiBanner(
+                "BACKEND ONLINE",
+                "NeuroSense API and database health checks are responding.",
+                "success"
+            );
+        }
+
+        return true;
+
+    } catch (error) {
+        backendHealth = null;
+        backendSystemStatus = null;
+        setSystemInformation();
+
+        setApiBanner(
+            "BACKEND UNAVAILABLE",
+            error.message,
+            "danger"
+        );
+
+        return false;
+    }
+}
+
+function clearLiveSensorDisplay(message = "No authenticated wearable readings available.") {
+    setText("heartRateValue", "--");
+    setText("hrvValue", "--");
+    setText("gsrValue", "--");
+    setText("temperatureValue", "--");
+    setText("heartRateFoot", message);
+    setText("hrvFoot", message);
+    setText("gsrFoot", message);
+    setText("temperatureFoot", message);
+    setText("deviceConnectionStatus", "Unknown");
+    setText("deviceCommunicationStatus", "Not checked");
+    setText("lastReadingAt", "None");
+    setText("signalQualityStatus", "No reading");
+    setText("stressScoreValue", "--");
+    setText("stressSummary", "No stress estimate");
+    setText(
+        "stressDescription",
+        "A score is shown only when the backend can calculate a model estimate from suitable wearable data and a personal baseline."
+    );
+    setText("stressStatusBadge", "No estimate");
+    const ring = $("stressRing");
+    if (ring) ring.style.setProperty("--score", "0");
+}
+
+function applyStressResult(stress) {
+    const score = stress?.stress_score;
+    const status = stress?.status || "waiting_for_data";
+    const ring = $("stressRing");
+
+    if (status === "prediction_available" && score !== null && score !== undefined) {
+        const numericScore = Math.max(0, Math.min(100, Number(score)));
+        setText("stressScoreValue", displayValue(numericScore, 1));
+        setText("stressSummary", "Experimental model estimate");
+        setText(
+            "stressDescription",
+            "WESAD-trained model output. This model is not clinically validated and is not a diagnosis."
+        );
+        setText("stressStatusBadge", "Experimental");
+        if (ring) ring.style.setProperty("--score", String(numericScore));
+        return;
+    }
+
+    const messages = {
+        waiting_for_wearable_data: "Waiting for wearable data.",
+        waiting_for_data: "Waiting for wearable data.",
+        baseline_required: "Calibrate a personal baseline before a stress estimate is available.",
+        poor_signal_quality: "Reading excluded because signal quality is poor.",
+        model_not_available: "The trained model is not loaded by the backend.",
+        prediction_error: "The backend could not calculate an estimate for this reading."
+    };
+
+    setText("stressScoreValue", "--");
+    setText("stressSummary", "No stress estimate");
+    setText(
+        "stressDescription",
+        messages[status] || stress?.message || "A valid model estimate is not available."
+    );
+    setText("stressStatusBadge", "Unavailable");
+    if (ring) ring.style.setProperty("--score", "0");
+}
+
+function applyDashboardData(overview, history, settings, recovery) {
+    dashboardOverview = overview || null;
+
+    const allReadings = Array.isArray(history?.readings)
+        ? history.readings
+        : [];
+
+    sensorHistory = allReadings
+        .filter(reading => reading && reading.source === "wearable")
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    const latest = (
+        overview?.latest_reading?.source === "wearable"
+            ? overview.latest_reading
+            : sensorHistory[sensorHistory.length - 1] || null
+    );
+
+    if (!latest) {
+        clearLiveSensorDisplay("No wearable reading received yet.");
+    } else {
+        setText("heartRateValue", displayValue(latest.heart_rate_bpm));
+        setText("hrvValue", displayValue(latest.hrv_ms, 1));
+        setText("gsrValue", displayValue(latest.gsr_raw));
+        setText("temperatureValue", displayValue(latest.skin_temperature_c, 1));
+
+        const ageText = `Updated ${formatReadingTime(latest.timestamp)}`;
+        setText("heartRateFoot", ageText);
+        setText("hrvFoot", ageText);
+        setText("gsrFoot", ageText);
+        setText("temperatureFoot", ageText);
+        setText(
+            "signalQualityStatus",
+            latest.signal_quality || "Unknown"
+        );
+        setText("lastReadingAt", formatReadingTime(latest.received_at || latest.timestamp));
+    }
+
+    const connected = Boolean(overview?.device_connected);
+    setText("deviceConnectionStatus", connected ? "● Connected" : "● Offline");
+    setText(
+        "deviceCommunicationStatus",
+        connected ? "Recent device activity" : "No active device"
+    );
+
+    applyStressResult(overview?.stress);
+
+    if (settings && typeof settings.haptic_enabled === "boolean") {
+        hapticEnabled = settings.haptic_enabled;
+        writeLocal("neurosense_haptic_enabled", hapticEnabled);
+        updateHapticUI();
+    }
+
+    if (Array.isArray(recovery?.sessions)) {
+        apiRecoveryHistory = recovery.sessions.map(session => ({
+            id: session.session_id,
+            activity: session.activity,
+            durationSeconds: session.duration_seconds,
+            completedAt: session.completed_at,
+            status: session.completed ? "Completed" : "Incomplete",
+            storage: "Backend"
+        }));
+        recoverySessions = apiRecoveryHistory;
+        renderHistory();
+        updateAnalyticsCount();
+    }
+
+    updateAnalyticsSummaries();
+    drawAllCharts();
+}
+
+async function refreshBackendData() {
+    if (apiRefreshInProgress) return;
+    apiRefreshInProgress = true;
+
+    const refreshButton = $("refreshDataBtn");
+    if (refreshButton) {
+        refreshButton.disabled = true;
+        refreshButton.textContent = "Refreshing...";
+    }
+
+    try {
+        const online = await refreshPublicSystemStatus();
+
+        if (!online) {
+            clearLiveSensorDisplay("Backend is not reachable.");
+            sensorHistory = [];
+            updateAnalyticsSummaries();
+            drawAllCharts();
+            return;
+        }
+
+        if (!hasPrivateApiAccess()) {
+            clearLiveSensorDisplay(
+                "Firebase sign-in is required to load private wearable data."
+            );
+            sensorHistory = [];
+            apiRecoveryHistory = [];
+            recoverySessions = readLocal("neurosense_recovery_sessions", []);
+            renderHistory();
+            updateAnalyticsSummaries();
+            drawAllCharts();
+            setApiBanner(
+                "BACKEND ONLINE · SIGN-IN REQUIRED",
+                "Backend health is good. Configure Firebase Authentication to access private readings, settings and recovery history.",
+                "warning"
+            );
+            return;
+        }
+
+        const results = await Promise.allSettled([
+            apiRequest("/api/dashboard/overview"),
+            apiRequest("/api/sensors/history?limit=100"),
+            apiRequest("/api/settings"),
+            apiRequest("/api/recovery/history?limit=50")
+        ]);
+
+        const failed = results.find(result => result.status === "rejected");
+        if (failed) {
+            const error = failed.reason;
+            if (error.status === 401 || error.status === 503) {
+                setApiBanner(
+                    "AUTHENTICATION REQUIRED",
+                    error.message,
+                    "warning"
+                );
+                clearLiveSensorDisplay(error.message);
+                return;
+            }
+            throw error;
+        }
+
+        const [overview, history, settings, recovery] =
+            results.map(result => result.value);
+
+        applyDashboardData(overview, history, settings, recovery);
+
+        setApiBanner(
+            "LIVE BACKEND DATA",
+            `${sensorHistory.length} wearable history records loaded from NeuroSense API.`,
+            "success"
+        );
+        setText(
+            "analyticsStatusText",
+            `${sensorHistory.length} authenticated wearable readings loaded.`
+        );
+
+    } catch (error) {
+        console.error("NeuroSense data refresh failed:", error);
+        setApiBanner("DATA REFRESH FAILED", error.message, "danger");
+        setText("analyticsStatusText", error.message);
+    } finally {
+        apiRefreshInProgress = false;
+        if (refreshButton) {
+            refreshButton.disabled = false;
+            refreshButton.textContent = "Refresh data";
+        }
+    }
+}
+
+// Firebase integration (next software task) supplies the verified ID token here.
+window.NeuroSenseApi = Object.freeze({
+    setIdToken(token) {
+        apiIdToken = typeof token === "string" && token.trim()
+            ? token.trim()
+            : null;
+        return refreshBackendData();
+    },
+    refresh: refreshBackendData
+});
+
+
+/* =========================================================
    B. THEME SYSTEM
    Dark active  -> show SUN icon -> clicking switches light.
    Light active -> show MOON icon -> clicking switches dark.
@@ -2681,12 +3131,15 @@ function openDashboard() {
     setActivePage("dashboard");
     updateProfileUI();
     drawAllCharts();
+    refreshBackendData();
 
-    showToast("NeuroSense preview dashboard opened.");
+    showToast("NeuroSense dashboard opened.");
 }
 
 
 $("previewLoginBtn").addEventListener("click", openDashboard);
+
+$("refreshDataBtn").addEventListener("click", refreshBackendData);
 
 
 $("googleLoginBtn").addEventListener("click", () => {
@@ -2836,17 +3289,66 @@ $("saveProfileBtn").addEventListener("click", () => {
    Axes, grid, labels and lines change with the theme.
 ========================================================= */
 
-const sampleLabels = [
-    "08:00", "09:00", "10:00", "11:00",
-    "12:00", "13:00", "14:00", "15:00",
-    "16:00", "17:00", "18:00", "19:00"
+const chartFields = [
+    "heart_rate_bpm",
+    "hrv_ms",
+    "gsr_raw",
+    "skin_temperature_c"
 ];
 
+function readingsForField(field) {
+    return sensorHistory.filter(reading =>
+        reading[field] !== null &&
+        reading[field] !== undefined &&
+        Number.isFinite(Number(reading[field]))
+    );
+}
 
-const sampleHeartRate = [70, 72, 75, 73, 78, 82, 79, 76, 74, 77, 75, 76];
-const sampleHrv = [48, 46, 45, 44, 41, 39, 40, 42, 43, 41, 42, 42];
-const sampleGsr = [1750, 1800, 1820, 1860, 1900, 1880, 1840, 1830, 1850, 1810, 1860, 1850];
-const sampleTemperature = [32.8, 32.9, 33, 33.1, 33.2, 33.3, 33.1, 33.2, 33.3, 33.2, 33.1, 33.2];
+function chartSeriesForField(field) {
+    const rows = readingsForField(field);
+    return {
+        data: rows.map(row => Number(row[field])),
+        labels: rows.map(row => {
+            const date = new Date(row.timestamp);
+            return Number.isNaN(date.getTime())
+                ? ""
+                : date.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit"
+                });
+        })
+    };
+}
+
+function averageForField(field) {
+    const values = readingsForField(field).map(row => Number(row[field]));
+    if (!values.length) return null;
+    return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function updateAnalyticsSummaries() {
+    const averageHr = averageForField("heart_rate_bpm");
+    const averageHrv = averageForField("hrv_ms");
+
+    setText(
+        "averageHeartRate",
+        averageHr === null ? "-- BPM" : `${averageHr.toFixed(1)} BPM`
+    );
+    setText(
+        "averageHrv",
+        averageHrv === null ? "-- ms" : `${averageHrv.toFixed(1)} ms`
+    );
+    setText(
+        "analyticsSessionCount",
+        String(apiRecoveryHistory.length || recoverySessions.length)
+    );
+    setText(
+        "analyticsStatusText",
+        sensorHistory.length
+            ? `${sensorHistory.length} wearable readings loaded.`
+            : "No authenticated wearable readings are available yet."
+    );
+}
 
 
 function cssVariable(name) {
@@ -2888,6 +3390,16 @@ function drawLineChart(canvasId, values, options = {}) {
     const chartHeight = height - pad.top - pad.bottom;
 
     const allValues = values.flatMap(series => series.data);
+
+    if (!allValues.length) {
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = cssVariable("--muted");
+        ctx.font = "12px Segoe UI, Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("No wearable readings available", width / 2, height / 2);
+        return;
+    }
 
     let min = options.min !== undefined
         ? options.min
@@ -2943,7 +3455,7 @@ function drawLineChart(canvasId, values, options = {}) {
     }
 
     // X-axis labels.
-    const labels = options.labels || sampleLabels;
+    const labels = options.labels || [];
 
     labels.forEach((label, index) => {
 
@@ -3018,30 +3530,42 @@ function drawLineChart(canvasId, values, options = {}) {
 
 function drawAllCharts() {
 
+    const heart = chartSeriesForField("heart_rate_bpm");
+    const hrv = chartSeriesForField("hrv_ms");
+    const gsr = chartSeriesForField("gsr_raw");
+    const temperature = chartSeriesForField("skin_temperature_c");
+
     drawLineChart("heartChart", [
-        { data: sampleHeartRate }
-    ], { min: 50, max: 100, labels: sampleLabels });
+        { data: heart.data }
+    ], { labels: heart.labels });
 
     drawLineChart("hrvChart", [
-        { data: sampleHrv }
-    ], { min: 20, max: 70, labels: sampleLabels });
+        { data: hrv.data }
+    ], { labels: hrv.labels });
 
     drawLineChart("analyticsHeartChart", [
-        { data: sampleHeartRate }
-    ], { min: 50, max: 100, labels: sampleLabels });
+        { data: heart.data }
+    ], { labels: heart.labels });
 
     drawLineChart("analyticsHrvChart", [
-        { data: sampleHrv }
-    ], { min: 20, max: 70, labels: sampleLabels });
+        { data: hrv.data }
+    ], { labels: hrv.labels });
 
     drawLineChart("analyticsGsrChart", [
-        { data: sampleGsr }
-    ], { min: 1000, max: 2500, labels: sampleLabels });
+        { data: gsr.data }
+    ], { labels: gsr.labels });
 
     drawLineChart("analyticsTempChart", [
-        { data: sampleTemperature }
-    ], { min: 30, max: 36, labels: sampleLabels, decimals: 1 });
+        { data: temperature.data }
+    ], { labels: temperature.labels, decimals: 1 });
 
+    const hasHeart = heart.data.length > 0;
+    const hasHrv = hrv.data.length > 0;
+
+    setText("heartChartStatus", hasHeart ? `${heart.data.length} readings` : "Waiting for data");
+    setText("hrvChartStatus", hasHrv ? `${hrv.data.length} readings` : "Waiting for data");
+    setText("analyticsHeartStatus", hasHeart ? `${heart.data.length} readings` : "No data");
+    setText("analyticsHrvStatus", hasHrv ? `${hrv.data.length} readings` : "No data");
 }
 
 
@@ -3729,18 +4253,40 @@ function updateHapticUI() {
 }
 
 
-function setHapticPreference(enabled) {
+async function setHapticPreference(enabled) {
 
+    const previous = hapticEnabled;
     hapticEnabled = Boolean(enabled);
 
+    if (hasPrivateApiAccess()) {
+        try {
+            const result = await apiRequest("/api/settings/haptic", {
+                method: "PUT",
+                body: JSON.stringify({
+                    haptic_enabled: hapticEnabled
+                })
+            });
+
+            hapticEnabled = Boolean(result.haptic_enabled);
+            writeLocal("neurosense_haptic_enabled", hapticEnabled);
+            updateHapticUI();
+            showToast("Haptic preference saved to NeuroSense backend.");
+            return;
+
+        } catch (error) {
+            hapticEnabled = previous;
+            updateHapticUI();
+            showToast(`Haptic setting was not saved: ${error.message}`);
+            return;
+        }
+    }
+
     writeLocal("neurosense_haptic_enabled", hapticEnabled);
-
     updateHapticUI();
-
     showToast(
         hapticEnabled
-            ? "Haptic preference enabled locally."
-            : "Haptic preference disabled locally."
+            ? "Saved locally only. Firebase sign-in is required to sync this preference."
+            : "Haptic preference disabled locally. Sign-in is required to sync it."
     );
 
 }
@@ -3763,20 +4309,63 @@ $("settingsHapticToggle").addEventListener("change", event => {
 let recoverySessions = readLocal("neurosense_recovery_sessions", []);
 
 
-function recordRecoverySession(activity, durationSeconds) {
+async function recordRecoverySession(activity, durationSeconds) {
+
+    const completedAt = new Date();
+    const startedAt = new Date(
+        completedAt.getTime() - durationSeconds * 1000
+    );
+
+    const apiActivity = String(activity).toLowerCase() === "breathing"
+        ? "breathing"
+        : String(activity).toLowerCase() === "music"
+            ? "music"
+            : "haptic";
+
+    if (hasPrivateApiAccess()) {
+        try {
+            const response = await apiRequest("/api/recovery/sessions", {
+                method: "POST",
+                body: JSON.stringify({
+                    activity: apiActivity,
+                    started_at: startedAt.toISOString(),
+                    completed_at: completedAt.toISOString(),
+                    duration_seconds: durationSeconds,
+                    completed: true
+                })
+            });
+
+            const saved = response.session;
+            const session = {
+                id: saved.session_id,
+                activity: saved.activity,
+                durationSeconds: saved.duration_seconds,
+                completedAt: saved.completed_at,
+                status: saved.completed ? "Completed" : "Incomplete",
+                storage: "Backend"
+            };
+
+            recoverySessions.unshift(session);
+            apiRecoveryHistory = recoverySessions;
+            renderHistory();
+            updateAnalyticsCount();
+            return true;
+
+        } catch (error) {
+            console.warn("Recovery session was not saved to backend:", error);
+        }
+    }
 
     const session = {
         id: "recovery-" + Date.now(),
         activity,
         durationSeconds,
-        completedAt: new Date().toISOString(),
+        completedAt: completedAt.toISOString(),
         status: "Completed",
         storage: "Local preview"
     };
 
     recoverySessions.unshift(session);
-
-    // Keep the latest 100 local records.
     recoverySessions = recoverySessions.slice(0, 100);
 
     writeLocal(
@@ -3786,6 +4375,7 @@ function recordRecoverySession(activity, durationSeconds) {
 
     renderHistory();
     updateAnalyticsCount();
+    return false;
 }
 
 
@@ -3874,6 +4464,7 @@ function initializeApp() {
     const savedTheme = readLocal("neurosense_theme", "dark");
 
     setTheme(savedTheme);
+    refreshPublicSystemStatus();
 
     updateProfileUI();
     updateHapticUI();
@@ -3905,6 +4496,8 @@ window.addEventListener("pagehide", () => {
     if (breathingInterval) {
         clearInterval(breathingInterval);
     }
+
+    apiIdToken = null;
 
     if (activeMusicUrl) {
         URL.revokeObjectURL(activeMusicUrl);
