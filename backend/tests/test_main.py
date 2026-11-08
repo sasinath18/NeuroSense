@@ -820,3 +820,176 @@ def test_haptic_command_rejects_duration_outside_safe_api_range(client):
     )
 
     assert response.status_code == 422
+
+
+def test_dashboard_overview_returns_latest_device_reading(client):
+    """Dashboard API should surface a recently uploaded wearable reading."""
+    user_id = "neurosense-dashboard-integration-user"
+    device_id = "neurosense-dashboard-esp32"
+    paired = pair_test_device(client, user_id, device_id)
+
+    upload = client.post(
+        f"/api/devices/{device_id}/readings",
+        json={
+            "heart_rate_bpm": 79,
+            "hrv_ms": 41,
+            "gsr_raw": 1810,
+            "skin_temperature_c": 33.1,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert upload.status_code == 201
+
+    response = client.get(
+        "/api/dashboard/overview",
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["device_connected"] is True
+    assert body["latest_reading"]["device_id"] == device_id
+    assert body["latest_reading"]["heart_rate_bpm"] == 79
+    assert body["latest_reading"]["hrv_ms"] == 41
+    assert body["stress"]["status"] == "model_not_available"
+    assert body["stress"]["stress_score"] is None
+    assert body["haptic_enabled"] is False
+
+
+def test_haptic_setting_can_be_enabled_and_disabled(client):
+    """Haptic preference should persist both ON and OFF states."""
+    headers = {"X-Demo-User": "neurosense-haptic-settings-user"}
+
+    initial = client.get("/api/settings", headers=headers)
+    assert initial.status_code == 200
+    assert initial.json()["haptic_enabled"] is False
+
+    enabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=headers,
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["haptic_enabled"] is True
+
+    fetched_enabled = client.get("/api/settings", headers=headers)
+    assert fetched_enabled.status_code == 200
+    assert fetched_enabled.json()["haptic_enabled"] is True
+
+    disabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": False},
+        headers=headers,
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["haptic_enabled"] is False
+
+    fetched_disabled = client.get("/api/settings", headers=headers)
+    assert fetched_disabled.status_code == 200
+    assert fetched_disabled.json()["haptic_enabled"] is False
+
+
+def test_haptic_command_is_created_polled_and_acknowledged(client):
+    """Verify the complete backend command queue lifecycle for a paired device."""
+    user_id = "neurosense-haptic-command-user"
+    device_id = "neurosense-haptic-esp32"
+    paired = pair_test_device(client, user_id, device_id)
+    user_headers = {"X-Demo-User": user_id}
+
+    enabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=user_headers,
+    )
+    assert enabled.status_code == 200
+
+    created = client.post(
+        "/api/haptic/commands",
+        json={"device_id": device_id, "duration_ms": 600},
+        headers=user_headers,
+    )
+    assert created.status_code == 201
+    command = created.json()
+    assert command["success"] is True
+    assert command["status"] == "pending"
+    assert command["duration_ms"] == 600
+
+    polled = client.get(
+        f"/api/devices/{device_id}/commands",
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert polled.status_code == 200
+    assert any(
+        item["command_id"] == command["command_id"]
+        and item["duration_ms"] == 600
+        for item in polled.json()["commands"]
+    )
+
+    acknowledged = client.post(
+        f"/api/devices/{device_id}/commands/{command['command_id']}/ack",
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert acknowledged.status_code == 200
+    assert acknowledged.json()["success"] is True
+    assert acknowledged.json()["status"] == "acknowledged"
+
+
+def test_haptic_command_is_rejected_when_preference_is_off(client):
+    """No haptic command should be queued when the user preference is OFF."""
+    user_id = "neurosense-haptic-disabled-user"
+    device_id = "neurosense-haptic-disabled-esp32"
+    pair_test_device(client, user_id, device_id)
+
+    response = client.post(
+        "/api/haptic/commands",
+        json={"device_id": device_id, "duration_ms": 500},
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Haptic feedback is OFF in user settings."
+
+
+def test_recovery_history_returns_saved_completed_session(client):
+    """Completed recovery session should appear in the user's history endpoint."""
+    user_id = "neurosense-recovery-history-user"
+    headers = {"X-Demo-User": user_id}
+    now = datetime.now(timezone.utc)
+    started = now - timedelta(seconds=90)
+    completed = now - timedelta(seconds=30)
+
+    created = client.post(
+        "/api/recovery/sessions",
+        json={
+            "activity": "breathing",
+            "started_at": started.isoformat(),
+            "completed_at": completed.isoformat(),
+            "duration_seconds": 60,
+            "completed": True,
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+
+    history = client.get("/api/recovery/history", headers=headers)
+    assert history.status_code == 200
+    body = history.json()
+    assert body["total"] == 1
+    assert body["sessions"][0]["session_id"] == created.json()["session"]["session_id"]
+    assert body["sessions"][0]["activity"] == "breathing"
+    assert body["sessions"][0]["completed"] == 1
+
+
+def test_face_scan_status_reports_camera_privacy_and_not_integrated_state(client):
+    """Face Scan API should explicitly disclose preview-only analysis status."""
+    response = client.get("/api/face-scan/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is False
+    assert body["status"] == "analysis_not_integrated"
+    assert body["image_storage"] is False
+    assert "OFF by default" in body["camera_policy"]
+
