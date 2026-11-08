@@ -81,6 +81,29 @@ Open `http://127.0.0.1:8001/dashboard` for the dashboard and `http://127.0.0.1:8
 
 For local Firebase testing, set the same `FIREBASE_WEB_*` variables and `FIREBASE_SERVICE_ACCOUNT_JSON` in an untracked `.env` file. Never commit `.env`.
 
+## ESP32 firmware setup
+
+The firmware targets an ESP32 DevKit V1 running a MicroPython build that supports
+`ssl.SSLContext`, `SSLContext.load_verify_locations`, and verified client TLS.
+
+1. Pair the device from the signed-in NeuroSense dashboard and copy its one-time device token.
+2. Copy `firmware/neurosense_secrets.py.example` to `neurosense_secrets.py` on the ESP32 and enter the Wi-Fi SSID, Wi-Fi password and paired device token. Do not commit the real file.
+3. On your computer, install the Mozilla CA bundle package and print its bundle path:
+
+   ```bash
+   python -m pip install certifi
+   python -m certifi
+   ```
+
+   Open the printed PEM file and upload its contents to the ESP32 filesystem as `/render_ca_bundle.pem`. This is a public CA trust bundle, not a private key.
+4. The firmware uses NTP to set the RTC before certificate validation. The network must permit NTP. Startup now stops immediately with a clear error when the Wi-Fi credentials, paired token, or secure transport settings are still placeholders.
+5. The firmware uploads readings using `X-Device-Token`, polls authenticated haptic commands and acknowledges completed commands. Vibration durations are bounded to 100–3000 ms.
+6. For isolated local bench testing only, set `USE_HTTPS = False`, use the laptop LAN IP and API port, and keep the board on the same trusted Wi-Fi network. The firmware blocks plain HTTP to the public Render hostname. Restore verified HTTPS before cloud use.
+
+The firmware fails closed when verified TLS cannot be initialized. Do not use `CERT_NONE` or disable certificate checks for cloud connections.
+
+**Sensor validation limitation:** the ESP32 sends raw GSR ADC counts (0–4095), while the WESAD training data uses calibrated EDA measurements. These values are not interchangeable. The temperature channel is currently disabled and uploads `null`; the model's missing-value imputer handles that field, but it does not validate the physical sensors. MAX30102 signal quality, HR/HRV extraction, GSR calibration to the training unit, temperature integration, motor-driver wiring and live device-to-Render operation all require hardware testing before treating stress estimates as meaningful.
+
 ## Safety and privacy
 
-Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi credentials, personal data, or raw datasets. Keep secrets in the hosting provider's environment-variable/secret settings.
+Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi credentials, private firmware secrets, CA bundles, personal data, or raw datasets. Keep secrets in the hosting provider's environment-variable/secret settings.

@@ -33,8 +33,10 @@ firebase-credentials*.json
 *.pem
 *.key
 
-# Local firmware secrets
+# Local firmware secrets and the trusted CA bundle installed on the ESP32
 firmware/secrets.py
+firmware/neurosense_secrets.py
+firmware/render_ca_bundle.pem
 
 # ===================================
 # Local datasets and databases

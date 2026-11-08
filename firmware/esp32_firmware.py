@@ -24,40 +24,37 @@ import socket
 import time
 import ujson
 import math
+import ssl
+import ntptime
 
 from machine import Pin, I2C, ADC
+
+# Optional untracked local secrets file. Never commit real credentials.
+try:
+    from neurosense_secrets import WIFI_SSID, WIFI_PASSWORD, DEVICE_TOKEN
+except ImportError:
+    WIFI_SSID = "YOUR_WIFI_NAME"
+    WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
+    DEVICE_TOKEN = "PASTE_NEW_DEVICE_TOKEN_HERE"
 
 
 # ============================================================
 # 1. USER CONFIGURATION
 # ============================================================
 
-WIFI_SSID = "YOUR_WIFI_NAME"
-WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
-
-# Enter your laptop's Wi-Fi IPv4 address from ipconfig.
-# Example only: 192.168.1.100
-# NEVER use 127.0.0.1 here.
-
-API_HOST = "192.168.1.100"
-API_PORT = 8001
+# Production defaults target the NeuroSense Render service over HTTPS.
+# For local bench tests set USE_HTTPS=False and use your laptop IP/port.
+API_HOST = "neurosense-app.onrender.com"
+API_PORT = 443
+USE_HTTPS = True
+CA_CERT_PATH = "/render_ca_bundle.pem"
 
 DEVICE_ID = "neurosense-esp32-01"
-
-# Use a newly generated device token.
-# Do not use the token previously exposed in a screenshot.
-DEVICE_TOKEN = "PASTE_NEW_DEVICE_TOKEN_HERE"
-
-DEMO_USER = "local-demo-user"
-
-# Swagger showed an "authorization" header.
-# This implementation sends the token as its value.
-# Add "Bearer " only if your backend authentication code requires it.
-
-AUTH_HEADER_NAME = "Authorization"
-AUTH_PREFIX = ""
-
+DEVICE_TOKEN_HEADER = "X-Device-Token"
 API_PATH = "/api/devices/{}/readings".format(DEVICE_ID)
+COMMAND_PATH = "/api/devices/{}/commands".format(DEVICE_ID)
+COMMAND_POLL_INTERVAL_MS = 1000
+TLS_CONTEXT = None
 
 # Sensor upload interval
 UPLOAD_INTERVAL_MS = 5000
@@ -74,11 +71,13 @@ MOTOR_PIN = 25
 # Temperature sensor has not been selected yet.
 TEMP_SENSOR_ENABLED = False
 
-# Keep OFF until sensor calibration and API validation.
+# Enable only after the Wi-Fi, TLS CA bundle and device token are configured.
 SEND_SENSOR_DATA = True
 
-# Haptic hardware remains OFF until backend command integration.
-HAPTIC_ENABLED = False
+# The motor GPIO remains LOW at boot. A short vibration is allowed only
+# after an authenticated, server-queued command (the server checks the
+# signed-in user's current haptic preference before delivery).
+HAPTIC_ENABLED = True
 
 
 # ============================================================
@@ -318,6 +317,42 @@ class MAX30102:
 # 5. WIFI CONNECTION
 # ============================================================
 
+def initialize_tls():
+    """Create a certificate-verifying TLS context; never silently downgrade."""
+    global TLS_CONTEXT
+    if not USE_HTTPS:
+        TLS_CONTEXT = None
+        return
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.load_verify_locations(cafile=CA_CERT_PATH)
+    TLS_CONTEXT = context
+
+
+def validate_configuration():
+    """Fail fast when local secrets or the cloud transport are not configured."""
+    if not WIFI_SSID or WIFI_SSID == "YOUR_WIFI_NAME":
+        raise RuntimeError(
+            "Configure WIFI_SSID in neurosense_secrets.py before starting."
+        )
+    if not WIFI_PASSWORD or WIFI_PASSWORD == "YOUR_WIFI_PASSWORD":
+        raise RuntimeError(
+            "Configure WIFI_PASSWORD in neurosense_secrets.py before starting."
+        )
+    if not DEVICE_TOKEN or DEVICE_TOKEN == "PASTE_NEW_DEVICE_TOKEN_HERE":
+        raise RuntimeError(
+            "Pair this ESP32 in NeuroSense and configure its one-time device token."
+        )
+    if USE_HTTPS and API_PORT != 443:
+        raise RuntimeError(
+            "Cloud HTTPS must use port 443. Do not weaken TLS for deployment."
+        )
+    if not USE_HTTPS and API_HOST == "neurosense-app.onrender.com":
+        raise RuntimeError(
+            "Plain HTTP is not permitted for the public NeuroSense service."
+        )
+
+
 def connect_wifi():
 
     print("\nConnecting to Wi-Fi...")
@@ -355,6 +390,17 @@ def connect_wifi():
         )
 
     print("Wi-Fi connected.")
+
+    if USE_HTTPS:
+        try:
+            # Certificate validation requires a correctly set RTC.
+            ntptime.settime()
+            initialize_tls()
+            print("Verified HTTPS is ready.")
+        except Exception as error:
+            raise RuntimeError(
+                "Verified HTTPS setup failed. Check SSL support and CA bundle: {}".format(error)
+            )
 
     print(
         "ESP32 IP:",
@@ -550,24 +596,26 @@ def http_request(
     payload=None
 ):
 
-    if API_HOST == "192.168.1.100":
+    if API_HOST in ("192.168.1.100", "YOUR_RENDER_HOST"):
+        raise ValueError("Set API_HOST to the NeuroSense backend host.")
 
-        raise ValueError(
-            "Replace API_HOST with your laptop Wi-Fi IPv4 address."
-        )
+    if DEVICE_TOKEN == "PASTE_NEW_DEVICE_TOKEN_HERE":
+        raise ValueError("Pair the ESP32 and configure its one-time device token.")
 
-    address = socket.getaddrinfo(
-        API_HOST,
-        API_PORT
-    )[0][-1]
-
-    connection = socket.socket()
-
-    connection.settimeout(8)
+    address = socket.getaddrinfo(API_HOST, API_PORT)[0][-1]
+    raw_connection = socket.socket()
+    raw_connection.settimeout(12)
+    connection = raw_connection
 
     try:
-
-        connection.connect(address)
+        raw_connection.connect(address)
+        if USE_HTTPS:
+            if TLS_CONTEXT is None:
+                raise RuntimeError("Verified TLS is not initialized.")
+            connection = TLS_CONTEXT.wrap_socket(
+                raw_connection,
+                server_hostname=API_HOST
+            )
 
         headers = {
 
@@ -580,23 +628,12 @@ def http_request(
 
             "Content-Type": "application/json",
 
-            "Accept": "application/json",
-
-            "X-Demo-User": DEMO_USER
+            "Accept": "application/json"
         }
 
-        # Device token uses the Authorization
-        # header shown by the current Swagger API.
-
-        if (
-            DEVICE_TOKEN
-            and DEVICE_TOKEN
-            != "PASTE_NEW_DEVICE_TOKEN_HERE"
-        ):
-
-            headers[AUTH_HEADER_NAME] = (
-                AUTH_PREFIX + DEVICE_TOKEN
-            )
+        # Device API requires X-Device-Token, not Authorization.
+        if DEVICE_TOKEN and DEVICE_TOKEN != "PASTE_NEW_DEVICE_TOKEN_HERE":
+            headers[DEVICE_TOKEN_HEADER] = DEVICE_TOKEN
 
         body = ""
 
@@ -623,22 +660,19 @@ def http_request(
             )
 
         request += "\r\n"
-
         request += body
+        encoded_request = request.encode()
 
-        connection.send(
-            request.encode()
-        )
+        if USE_HTTPS:
+            connection.write(encoded_request)
+        else:
+            connection.send(encoded_request)
 
         response = b""
-
         while True:
-
-            chunk = connection.recv(1024)
-
+            chunk = connection.read(1024) if USE_HTTPS else connection.recv(1024)
             if not chunk:
                 break
-
             response += chunk
 
         response_text = response.decode(
@@ -668,8 +702,15 @@ def http_request(
         )
 
     finally:
-
-        connection.close()
+        try:
+            connection.close()
+        except Exception:
+            pass
+        if connection is not raw_connection:
+            try:
+                raw_connection.close()
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -783,10 +824,41 @@ def pulse_motor(duration_ms=300):
     motor.value(0)
 
 
-# No automatic motor activation here.
-# Backend command polling and acknowledgement
-# will be connected after its exact response schema
-# is verified.
+def poll_and_process_haptic_commands():
+    """Poll authenticated commands and pulse only for bounded durations."""
+    if DEVICE_TOKEN == "PASTE_NEW_DEVICE_TOKEN_HERE":
+        return
+
+    status_code, response = http_request("GET", COMMAND_PATH)
+    if status_code != 200:
+        print("Haptic command poll failed. HTTP:", status_code)
+        return
+
+    try:
+        body = response.split("\r\n\r\n", 1)[1]
+        commands = ujson.loads(body).get("commands", [])
+    except Exception as error:
+        print("Could not parse haptic command response:", error)
+        return
+
+    for command in commands:
+        command_id = command.get("command_id")
+        duration_ms = max(100, min(3000, int(command.get("duration_ms", 500))))
+        if not command_id:
+            continue
+
+        if HAPTIC_ENABLED:
+            pulse_motor(duration_ms)
+        else:
+            motor.value(0)
+            print("Haptic command ignored by local safety gate.")
+
+        ack_path = COMMAND_PATH + "/" + str(command_id) + "/ack"
+        ack_status, _ = http_request("POST", ack_path, {})
+        if ack_status == 200:
+            print("Haptic command acknowledged:", command_id)
+        else:
+            print("Haptic acknowledgement failed. HTTP:", ack_status)
 
 
 # ============================================================
@@ -797,6 +869,7 @@ def main():
 
     motor.value(0)
 
+    validate_configuration()
     connect_wifi()
 
     sensor = MAX30102(i2c)
@@ -812,6 +885,7 @@ def main():
     )
 
     last_upload = time.ticks_ms()
+    last_command_poll = time.ticks_ms()
 
     global ir_samples
 
@@ -837,6 +911,11 @@ def main():
 
 
             now = time.ticks_ms()
+
+            command_elapsed = time.ticks_diff(now, last_command_poll)
+            if command_elapsed >= COMMAND_POLL_INTERVAL_MS:
+                last_command_poll = now
+                poll_and_process_haptic_commands()
 
             elapsed = time.ticks_diff(
                 now,

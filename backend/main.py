@@ -806,29 +806,118 @@ async def current_user_id(
 # 9. ESP32 DEVICE AUTHENTICATION
 # ============================================================
 
+def sync_device_record(device: dict) -> dict:
+    """Back up device metadata without ever storing the one-time plaintext token."""
+    device_id = str(device.get("device_id") or "")
+    user_id = str(device.get("user_id") or "")
+    if not device_id or not user_id:
+        return {"global": "failed", "user": "failed"}
+    payload = {
+        "device_id": device_id,
+        "user_id": user_id,
+        "device_name": str(device.get("device_name") or "NeuroSense ESP32"),
+        "token_hash": str(device.get("token_hash") or ""),
+        "created_at": str(device.get("created_at") or iso()),
+        "last_seen": device.get("last_seen"),
+        "active": bool(device.get("active", 1)),
+    }
+    return {
+        "global": firestore_write(("devices",), device_id, payload),
+        "user": firestore_write(("users", user_id, "devices"), device_id, payload),
+    }
+
+
+def restore_cloud_devices(user_id: str) -> int:
+    """Restore the signed-in user's device metadata after an ephemeral DB reset."""
+    cloud_devices = firestore_read_collection(
+        ("users", user_id, "devices"),
+        limit=100,
+    )
+    restored = 0
+    for item in cloud_devices:
+        device_id = str(item.get("device_id") or item.get("document_id") or "")
+        token_hash = str(item.get("token_hash") or "")
+        owner = str(item.get("user_id") or user_id)
+        if not device_id or not token_hash or owner != user_id:
+            continue
+        try:
+            with db_connection() as db:
+                db.execute(
+                    """
+                    INSERT INTO devices (
+                        device_id, user_id, device_name, token_hash,
+                        created_at, last_seen, active
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(device_id) DO UPDATE SET
+                        device_name=excluded.device_name,
+                        token_hash=excluded.token_hash,
+                        created_at=excluded.created_at,
+                        last_seen=excluded.last_seen,
+                        active=excluded.active
+                    WHERE devices.user_id=excluded.user_id
+                    """,
+                    (
+                        device_id, owner,
+                        str(item.get("device_name") or "NeuroSense ESP32"),
+                        token_hash, str(item.get("created_at") or iso()),
+                        item.get("last_seen"),
+                        int(bool(item.get("active", True))),
+                    ),
+                )
+            restored += 1
+        except Exception:
+            logger.exception("Could not restore cloud device %s.", device_id)
+    return restored
+
+
 def authenticated_device(
     device_id: str,
     device_token: str
-) -> sqlite3.Row:
-
+) -> sqlite3.Row | dict:
     if not device_token or len(device_token) < 24:
-
         raise HTTPException(
             status_code=401,
             detail="Valid X-Device-Token header required."
         )
 
     with db_connection() as db:
-
         row = db.execute(
-            """
-            SELECT *
-            FROM devices
-            WHERE device_id = ?
-            AND active = 1
-            """,
-            (device_id,)
+            "SELECT * FROM devices WHERE device_id = ? AND active = 1",
+            (device_id,),
         ).fetchone()
+
+    # Restore a valid device record from the server-only cloud ownership index
+    # when Render's ephemeral SQLite filesystem has been reset.
+    if row is None:
+        cloud_device = firestore_read_document(("devices",), device_id)
+        if (
+            cloud_device
+            and bool(cloud_device.get("active", False))
+            and cloud_device.get("token_hash")
+        ):
+            with db_connection() as db:
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO devices (
+                        device_id, user_id, device_name, token_hash,
+                        created_at, last_seen, active
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        device_id,
+                        str(cloud_device.get("user_id") or ""),
+                        str(cloud_device.get("device_name") or "NeuroSense ESP32"),
+                        str(cloud_device["token_hash"]),
+                        str(cloud_device.get("created_at") or iso()),
+                        cloud_device.get("last_seen"),
+                    ),
+                )
+                row = db.execute(
+                    "SELECT * FROM devices WHERE device_id = ? AND active = 1",
+                    (device_id,),
+                ).fetchone()
 
     if (
         row is None
@@ -837,13 +926,34 @@ def authenticated_device(
             token_digest(device_token)
         )
     ):
-
         raise HTTPException(
             status_code=401,
             detail="Device authentication failed."
         )
 
+    # Authenticated polling is also a device heartbeat. Throttle writes so
+    # a one-second command poll does not create a database write each time.
+    now = utc_now()
+    last_seen = parse_iso(row["last_seen"]) if row["last_seen"] else None
+    if last_seen is None or (now - last_seen).total_seconds() >= 15:
+        with db_connection() as db:
+            db.execute(
+                """
+                UPDATE devices SET last_seen = ?
+                WHERE device_id = ? AND user_id = ? AND active = 1
+                """,
+                (iso(now), device_id, row["user_id"]),
+            )
+            updated = db.execute(
+                "SELECT * FROM devices WHERE device_id = ? AND active = 1",
+                (device_id,),
+            ).fetchone()
+        if updated is not None:
+            row = updated
+            sync_device_record(dict(row))
+
     return row
+
 
 
 # ============================================================
@@ -1132,6 +1242,24 @@ def calibrate_baseline(
         ).fetchall()
 
     if len(rows) < 10:
+        cloud_rows = firestore_read_collection(
+            ("users", user_id, "sensor_readings"),
+            limit=500,
+            order_by="timestamp",
+        )
+        local_ids = {str(row["id"]) for row in rows}
+        cloud_recent = [
+            item for item in cloud_rows
+            if str(item.get("source") or "") == "wearable"
+            and str(item.get("signal_quality") or "") in {"good", "moderate"}
+            and item.get("timestamp")
+            and str(item.get("timestamp")) >= since
+            and str(item.get("id") or item.get("document_id") or "") not in local_ids
+        ]
+        rows = [dict(row) for row in rows] + cloud_recent
+        rows.sort(key=lambda item: str(item.get("timestamp") or ""), reverse=True)
+
+    if len(rows) < 10:
 
         raise HTTPException(
             status_code=422,
@@ -1235,49 +1363,32 @@ def build_model_features(
     reading: dict,
     baseline: dict
 ) -> dict:
+    """Build model inputs while preserving unavailable sensors as NaN.
+
+    The fitted preprocessing pipeline contains a median imputer. Missing
+    optional measurements must reach that imputer rather than being encoded
+    as a physiological value of zero.
+    """
+
+    def number_or_nan(value) -> float:
+        return float(value) if value is not None else float("nan")
 
     def delta(field: str) -> float:
-
         current = reading.get(field)
         base = baseline.get(field)
-
         if current is None or base is None:
-            return 0.0
-
+            return float("nan")
         return float(current) - float(base)
 
     return {
-        "heart_rate_bpm": float(
-            reading.get("heart_rate_bpm") or 0
-        ),
-
-        "hrv_ms": float(
-            reading.get("hrv_ms") or 0
-        ),
-
-        "gsr_raw": float(
-            reading.get("gsr_raw") or 0
-        ),
-
-        "skin_temperature_c": float(
-            reading.get("skin_temperature_c") or 0
-        ),
-
-        "heart_rate_delta": delta(
-            "heart_rate_bpm"
-        ),
-
-        "hrv_delta": delta(
-            "hrv_ms"
-        ),
-
-        "gsr_delta": delta(
-            "gsr_raw"
-        ),
-
-        "skin_temperature_delta": delta(
-            "skin_temperature_c"
-        )
+        "heart_rate_bpm": number_or_nan(reading.get("heart_rate_bpm")),
+        "hrv_ms": number_or_nan(reading.get("hrv_ms")),
+        "gsr_raw": number_or_nan(reading.get("gsr_raw")),
+        "skin_temperature_c": number_or_nan(reading.get("skin_temperature_c")),
+        "heart_rate_delta": delta("heart_rate_bpm"),
+        "hrv_delta": delta("hrv_ms"),
+        "gsr_delta": delta("gsr_raw"),
+        "skin_temperature_delta": delta("skin_temperature_c"),
     }
 
 
@@ -1519,6 +1630,12 @@ def store_sensor_reading(
         reading_id,
         stored
     )
+
+    if device_id != "manual-preview":
+        device_record = firestore_read_document(("devices",), device_id)
+        if device_record and str(device_record.get("user_id") or "") == user_id:
+            device_record["last_seen"] = payload["received_at"]
+            sync_device_record(device_record)
 
     if payload["source"] == "wearable":
 
@@ -1932,68 +2049,76 @@ def pair_device(
     payload: DevicePairIn,
     user_id: str = Depends(current_user_id)
 ):
-
     device_token = secrets.token_urlsafe(36)
-
     with db_connection() as db:
-
         existing = db.execute(
-            """
-            SELECT user_id
-            FROM devices
-            WHERE device_id = ?
-            """,
-            (payload.device_id,)
+            "SELECT user_id FROM devices WHERE device_id = ?",
+            (payload.device_id,),
         ).fetchone()
 
-        if (
-            existing
-            and existing["user_id"] != user_id
-        ):
+    if existing is not None and existing["user_id"] != user_id:
+        raise HTTPException(
+            status_code=409,
+            detail="This device is already paired to another account."
+        )
 
-            raise HTTPException(
-                status_code=409,
-                detail="This device is already paired to another account."
-            )
+    # Firestore's root ownership record prevents another account from
+    # claiming the same device after an ephemeral SQLite reset.
+    cloud_existing = firestore_read_document(("devices",), payload.device_id)
+    if (
+        existing is None
+        and cloud_existing
+        and cloud_existing.get("active", False)
+        and str(cloud_existing.get("user_id") or "") != user_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This device is already paired to another account."
+        )
 
+    record = {
+        "device_id": payload.device_id,
+        "user_id": user_id,
+        "device_name": payload.device_name,
+        "token_hash": token_digest(device_token),
+        "created_at": iso(),
+        "last_seen": None,
+        "active": 1,
+    }
+    with db_connection() as db:
         db.execute(
             """
             INSERT INTO devices (
-                device_id,
-                user_id,
-                device_name,
-                token_hash,
-                created_at,
-                last_seen,
-                active
+                device_id, user_id, device_name, token_hash,
+                created_at, last_seen, active
             )
             VALUES (?, ?, ?, ?, ?, NULL, 1)
-
             ON CONFLICT(device_id)
             DO UPDATE SET
-                device_name = excluded.device_name,
-                token_hash = excluded.token_hash,
-                created_at = excluded.created_at,
-                active = 1
+                device_name=excluded.device_name,
+                token_hash=excluded.token_hash,
+                created_at=excluded.created_at,
+                last_seen=NULL,
+                active=1
+            WHERE devices.user_id=excluded.user_id
             """,
             (
-                payload.device_id,
-                user_id,
-                payload.device_name,
-                token_digest(device_token),
-                iso()
-            )
+                record["device_id"], record["user_id"],
+                record["device_name"], record["token_hash"],
+                record["created_at"],
+            ),
         )
 
+    cloud_sync = sync_device_record(record)
     return {
         "success": True,
         "device_id": payload.device_id,
         "device_token": device_token,
-
+        "cloud_sync": cloud_sync,
         "warning": (
             "Copy this token now. It is shown only once. "
             "Store it securely on the ESP32; never commit it to GitHub."
-        )
+        ),
     }
 
 
@@ -2001,29 +2126,18 @@ def pair_device(
 def list_devices(
     user_id: str = Depends(current_user_id)
 ):
-
+    restore_cloud_devices(user_id)
     with db_connection() as db:
-
         rows = db.execute(
             """
-            SELECT
-                device_id,
-                device_name,
-                created_at,
-                last_seen,
-                active
+            SELECT device_id, device_name, created_at, last_seen, active
             FROM devices
             WHERE user_id = ?
             ORDER BY created_at DESC
             """,
-            (user_id,)
+            (user_id,),
         ).fetchall()
-
-    return {
-        "devices": [
-            dict(row) for row in rows
-        ]
-    }
+    return {"devices": [dict(row) for row in rows]}
 
 
 @app.delete("/api/devices/{device_id}")
@@ -2031,31 +2145,34 @@ def unpair_device(
     device_id: str,
     user_id: str = Depends(current_user_id)
 ):
-
     with db_connection() as db:
-
         cursor = db.execute(
             """
-            UPDATE devices
-            SET active = 0
-            WHERE device_id = ?
-            AND user_id = ?
+            UPDATE devices SET active = 0
+            WHERE device_id = ? AND user_id = ?
             """,
-            (device_id, user_id)
+            (device_id, user_id),
         )
-
         if cursor.rowcount == 0:
-
             raise HTTPException(
                 status_code=404,
                 detail="Device not found for this account."
             )
+        row = db.execute(
+            "SELECT * FROM devices WHERE device_id = ? AND user_id = ?",
+            (device_id, user_id),
+        ).fetchone()
 
+    cloud_sync = sync_device_record(dict(row))
     return {
         "success": True,
         "device_id": device_id,
-        "active": False
+        "active": False,
+        "cloud_sync": cloud_sync,
     }
+
+
+
 
 
 # ============================================================
@@ -2245,6 +2362,8 @@ def device_status(
     user_id: str = Depends(current_user_id)
 ):
 
+    restore_cloud_devices(user_id)
+
     with db_connection() as db:
 
         rows = db.execute(
@@ -2350,13 +2469,19 @@ def latest_stress_estimate(
         ).fetchone()
 
     if row is None:
-
-        return {
-            "status": "waiting_for_data",
-            "stress_score": None
-        }
-
-    reading = dict(row)
+        cloud_rows = firestore_read_collection(
+            ("users", user_id, "sensor_readings"),
+            limit=1,
+            order_by="timestamp",
+        )
+        if not cloud_rows:
+            return {
+                "status": "waiting_for_data",
+                "stress_score": None
+            }
+        reading = cloud_rows[0]
+    else:
+        reading = dict(row)
 
     return predict_stress(
         user_id,
@@ -2372,6 +2497,8 @@ def latest_stress_estimate(
 def dashboard_overview(
     user_id: str = Depends(current_user_id)
 ):
+
+    restore_cloud_devices(user_id)
 
     with db_connection() as db:
 
@@ -2542,7 +2669,7 @@ def set_haptic_setting(
             )
         )
 
-    firestore_write(
+    cloud_sync = firestore_write(
         ("users", user_id, "settings"),
         "preferences",
         {
@@ -2553,7 +2680,8 @@ def set_haptic_setting(
 
     return {
         "success": True,
-        "haptic_enabled": payload.haptic_enabled
+        "haptic_enabled": payload.haptic_enabled,
+        "cloud_sync": cloud_sync,
     }
 
 
@@ -2565,132 +2693,216 @@ def create_haptic_command(
     payload: HapticCommandIn,
     user_id: str = Depends(current_user_id)
 ):
-
     settings = get_settings(user_id)
-
     if not settings["haptic_enabled"]:
-
         raise HTTPException(
             status_code=409,
             detail="Haptic feedback is OFF in user settings."
         )
 
     with db_connection() as db:
-
         device = db.execute(
             """
-            SELECT device_id
-            FROM devices
-            WHERE device_id = ?
-            AND user_id = ?
-            AND active = 1
+            SELECT device_id FROM devices
+            WHERE device_id = ? AND user_id = ? AND active = 1
             """,
-            (
-                payload.device_id,
-                user_id
-            )
+            (payload.device_id, user_id),
         ).fetchone()
-
         if device is None:
-
             raise HTTPException(
                 status_code=404,
                 detail="No active paired device found."
             )
 
         command_id = str(uuid.uuid4())
-
+        created_at = iso()
+        command = {
+            "command_id": command_id,
+            "user_id": user_id,
+            "device_id": payload.device_id,
+            "duration_ms": payload.duration_ms,
+            "command_status": "pending",
+            "created_at": created_at,
+            "delivered_at": None,
+            "acknowledged_at": None,
+        }
         db.execute(
             """
             INSERT INTO haptic_commands (
-                command_id,
-                user_id,
-                device_id,
-                duration_ms,
-                command_status,
-                created_at
+                command_id, user_id, device_id, duration_ms,
+                command_status, created_at, delivered_at, acknowledged_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, 'pending', ?, NULL, NULL)
             """,
             (
-                command_id,
-                user_id,
-                payload.device_id,
-                payload.duration_ms,
-                "pending",
-                iso()
-            )
+                command_id, user_id, payload.device_id,
+                payload.duration_ms, created_at,
+            ),
         )
 
+    cloud_sync = firestore_write(
+        ("users", user_id, "haptic_commands"),
+        command_id,
+        command,
+    )
     return {
         "success": True,
         "command_id": command_id,
         "status": "pending",
-        "duration_ms": payload.duration_ms
+        "duration_ms": payload.duration_ms,
+        "cloud_sync": cloud_sync,
     }
 
 
 @app.get("/api/devices/{device_id}/commands")
 def poll_device_commands(
     device_id: str,
-
-    x_device_token: Annotated[
-        str | None, Header()
-    ] = None,
+    x_device_token: Annotated[str | None, Header()] = None,
 ):
-
     if not x_device_token:
-
         raise HTTPException(
             status_code=401,
             detail="X-Device-Token header required."
         )
 
-    device = authenticated_device(
-        device_id,
-        x_device_token
+    device = authenticated_device(device_id, x_device_token)
+    user_id = str(device["user_id"])
+
+    # Re-check the user's current preference at delivery time as well as
+    # creation time, so a queued command cannot fire after opting out.
+    if not get_settings(user_id)["haptic_enabled"]:
+        return {"commands": []}
+
+    # Rehydrate the pending queue after a Render restart.
+    cloud_commands = firestore_read_collection(
+        ("users", user_id, "haptic_commands"),
+        limit=100,
     )
-
     with db_connection() as db:
+        for item in cloud_commands:
+            if (
+                str(item.get("device_id") or "") != device_id
+                or str(item.get("command_status") or "") not in {"pending", "delivered"}
+                or not item.get("command_id")
+            ):
+                continue
+            db.execute(
+                """
+                INSERT OR IGNORE INTO haptic_commands (
+                    command_id, user_id, device_id, duration_ms,
+                    command_status, created_at, delivered_at, acknowledged_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(item["command_id"]), user_id, device_id,
+                    int(item.get("duration_ms") or 500),
+                    str(item.get("command_status") or "pending"),
+                    str(item.get("created_at") or iso()),
+                    item.get("delivered_at"),
+                    item.get("acknowledged_at"),
+                ),
+            )
 
+        expiry_cutoff = iso(utc_now() - timedelta(seconds=60))
+        db.execute(
+            """
+            UPDATE haptic_commands
+            SET command_status = 'expired'
+            WHERE device_id = ?
+            AND user_id = ?
+            AND command_status = 'pending'
+            AND created_at < ?
+            """,
+            (device_id, user_id, expiry_cutoff),
+        )
         rows = db.execute(
             """
-            SELECT
-                command_id,
-                duration_ms,
-                created_at
+            SELECT command_id, duration_ms, created_at
             FROM haptic_commands
             WHERE device_id = ?
             AND user_id = ?
             AND command_status = 'pending'
+            AND created_at >= ?
             ORDER BY created_at ASC
             LIMIT 10
             """,
-            (
-                device_id,
-                device["user_id"]
-            )
+            (device_id, user_id, expiry_cutoff),
         ).fetchall()
 
+        delivered_at = iso()
         for row in rows:
-
             db.execute(
                 """
                 UPDATE haptic_commands
-                SET command_status = 'delivered',
-                    delivered_at = ?
+                SET command_status = 'delivered', delivered_at = ?
                 WHERE command_id = ?
                 """,
-                (
-                    iso(),
-                    row["command_id"]
-                )
+                (delivered_at, row["command_id"]),
             )
 
+    response_commands = []
+    for row in rows:
+        firestore_write(
+            ("users", user_id, "haptic_commands"),
+            row["command_id"],
+            {
+                "command_id": row["command_id"],
+                "user_id": user_id,
+                "device_id": device_id,
+                "duration_ms": row["duration_ms"],
+                "command_status": "delivered",
+                "created_at": row["created_at"],
+                "delivered_at": delivered_at,
+                "acknowledged_at": None,
+            },
+        )
+        response_commands.append({
+            "command_id": row["command_id"],
+            "duration_ms": row["duration_ms"],
+            "created_at": row["created_at"],
+        })
+
+    return {"commands": response_commands}
+
+
+@app.get("/api/haptic/commands/{command_id}")
+def haptic_command_status(
+    command_id: str,
+    user_id: str = Depends(current_user_id),
+):
+    with db_connection() as db:
+        row = db.execute(
+            """
+            SELECT command_id, device_id, duration_ms, command_status,
+                   created_at, delivered_at, acknowledged_at
+            FROM haptic_commands
+            WHERE command_id = ? AND user_id = ?
+            """,
+            (command_id, user_id),
+        ).fetchone()
+
+    command = dict(row) if row is not None else None
+    if command is None:
+        command = firestore_read_document(
+            ("users", user_id, "haptic_commands"),
+            command_id,
+        )
+
+    if command is None or str(command.get("user_id") or user_id) != user_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Haptic command not found for this account."
+        )
+
     return {
-        "commands": [
-            dict(row) for row in rows
-        ]
+        "command_id": command_id,
+        "device_id": command.get("device_id"),
+        "duration_ms": command.get("duration_ms"),
+        "status": command.get("command_status", "unknown"),
+        "created_at": command.get("created_at"),
+        "delivered_at": command.get("delivered_at"),
+        "acknowledged_at": command.get("acknowledged_at"),
     }
 
 
@@ -2700,55 +2912,50 @@ def poll_device_commands(
 def acknowledge_device_command(
     device_id: str,
     command_id: str,
-
-    x_device_token: Annotated[
-        str | None, Header()
-    ] = None,
+    x_device_token: Annotated[str | None, Header()] = None,
 ):
-
     if not x_device_token:
-
         raise HTTPException(
             status_code=401,
             detail="X-Device-Token header required."
         )
 
-    device = authenticated_device(
-        device_id,
-        x_device_token
-    )
+    device = authenticated_device(device_id, x_device_token)
+    user_id = str(device["user_id"])
 
     with db_connection() as db:
-
         cursor = db.execute(
             """
             UPDATE haptic_commands
-            SET command_status = 'acknowledged',
-                acknowledged_at = ?
-            WHERE command_id = ?
-            AND device_id = ?
-            AND user_id = ?
-            AND command_status = 'delivered'
+            SET command_status = 'acknowledged', acknowledged_at = ?
+            WHERE command_id = ? AND device_id = ?
+            AND user_id = ? AND command_status = 'delivered'
             """,
-            (
-                iso(),
-                command_id,
-                device_id,
-                device["user_id"]
-            )
+            (iso(), command_id, device_id, user_id),
         )
-
         if cursor.rowcount == 0:
-
             raise HTTPException(
                 status_code=404,
                 detail="Command not found or already acknowledged."
             )
+        command_row = db.execute(
+            "SELECT * FROM haptic_commands WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
 
+    cloud_sync = firestore_write(
+        ("users", user_id, "haptic_commands"),
+        command_id,
+        dict(command_row),
+    )
     return {
         "success": True,
-        "status": "acknowledged"
+        "status": "acknowledged",
+        "cloud_sync": cloud_sync,
     }
+
+
+
 
 
 # ============================================================
@@ -3047,17 +3254,25 @@ def recovery_history(
 
             sessions.append(item)
 
-    if not sessions:
-        sessions = firestore_read_collection(
-            ("users", user_id, "recovery_sessions"),
-            limit=limit,
-            order_by="completed_at"
-        )
-        for session in sessions:
-            session.setdefault(
-                "comparison",
-                None
-            )
+    cloud_sessions = firestore_read_collection(
+        ("users", user_id, "recovery_sessions"),
+        limit=limit,
+        order_by="completed_at"
+    )
+    merged_sessions = {
+        str(item.get("session_id") or item.get("document_id")): item
+        for item in cloud_sessions
+        if item.get("session_id") or item.get("document_id")
+    }
+    for item in sessions:
+        merged_sessions[str(item["session_id"])] = item
+    sessions = sorted(
+        merged_sessions.values(),
+        key=lambda item: str(item.get("completed_at") or ""),
+        reverse=True,
+    )[:limit]
+    for session in sessions:
+        session.setdefault("comparison", None)
 
     return {
         "total": len(sessions),
@@ -3096,14 +3311,23 @@ def summary_history(
             )
         ).fetchall()
 
-    summaries = [dict(row) for row in rows]
-
-    if not summaries:
-        summaries = firestore_read_collection(
-            ("users", user_id, "summaries"),
-            limit=limit,
-            order_by="period_end"
-        )
+    cloud_summaries = firestore_read_collection(
+        ("users", user_id, "summaries"),
+        limit=limit,
+        order_by="period_end"
+    )
+    merged_summaries = {
+        str(item.get("summary_id") or item.get("document_id")): item
+        for item in cloud_summaries
+        if item.get("summary_id") or item.get("document_id")
+    }
+    for item in [dict(row) for row in rows]:
+        merged_summaries[str(item["summary_id"])] = item
+    summaries = sorted(
+        merged_summaries.values(),
+        key=lambda item: str(item.get("period_end") or ""),
+        reverse=True,
+    )[:limit]
 
     return {
         "total": len(summaries),
@@ -3146,14 +3370,23 @@ def high_stress_events(
             )
         ).fetchall()
 
-    events = [dict(row) for row in rows]
-
-    if not events:
-        events = firestore_read_collection(
-            ("users", user_id, "high_stress_events"),
-            limit=limit,
-            order_by="occurred_at"
-        )
+    cloud_events = firestore_read_collection(
+        ("users", user_id, "high_stress_events"),
+        limit=limit,
+        order_by="occurred_at"
+    )
+    merged_events = {
+        str(item.get("event_id") or item.get("document_id")): item
+        for item in cloud_events
+        if item.get("event_id") or item.get("document_id")
+    }
+    for item in [dict(row) for row in rows]:
+        merged_events[str(item["event_id"])] = item
+    events = sorted(
+        merged_events.values(),
+        key=lambda item: str(item.get("occurred_at") or ""),
+        reverse=True,
+    )[:limit]
 
     return {
         "total": len(events),

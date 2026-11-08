@@ -1867,6 +1867,26 @@
 
 
                     <article class="card" style="margin-top:17px">
+                        <div class="card-header"><div><h3>Wearable Device Management</h3><p>Pair or remove an ESP32 for this account</p></div></div>
+                        <div class="field"><label for="deviceIdInput">Device ID</label><input id="deviceIdInput" class="form-control" type="text" maxlength="80" value="neurosense-esp32-01"></div>
+                        <div class="field"><label for="deviceNameInput">Device name</label><input id="deviceNameInput" class="form-control" type="text" maxlength="80" value="NeuroSense ESP32"></div>
+                        <button id="pairDeviceBtn" class="secondary-btn" type="button">Pair wearable</button>
+                        <div id="deviceTokenPanel" class="notice hidden" style="margin-top:13px" role="status" aria-live="polite">
+                            <strong>One-time device token</strong><p class="small">Copy this now and store it securely on the ESP32. It will not be shown again.</p>
+                            <code id="deviceTokenValue" style="word-break:break-all"></code>
+                            <button id="copyDeviceTokenBtn" class="secondary-btn" type="button" style="margin-top:10px">Copy token</button>
+                        </div>
+                        <div style="margin-top:16px"><strong class="small">Paired devices</strong><div id="pairedDeviceList" style="margin-top:8px"><p class="muted small">Sign in to load paired devices.</p></div></div>
+                    </article>
+
+                    <article class="card" style="margin-top:17px">
+                        <div class="card-header"><div><h3>Personal Baseline</h3><p>Calibrate from recent wearable readings</p></div><span class="badge" id="baselineStatusBadge">Not calibrated</span></div>
+                        <p id="baselineStatusText" class="muted small">At least 10 good/moderate wearable readings from the last 10 minutes are required.</p>
+                        <p id="baselineCalibratedAt" class="muted small">No calibration recorded.</p>
+                        <button id="calibrateBaselineBtn" class="secondary-btn" type="button">Calibrate baseline · last 10 minutes</button>
+                    </article>
+
+                    <article class="card" style="margin-top:17px">
 
                         <div class="card-header">
                             <div>
@@ -2012,6 +2032,17 @@
                     </div>
                 </article>
 
+            </div>
+
+            <div class="analytics-grid" style="margin-top:17px">
+                <article class="card">
+                    <div class="card-header"><div><h3>Three-hour Summaries</h3><p>Aggregated wearable readings</p></div><span class="badge" id="summaryCountBadge">0 periods</span></div>
+                    <ul id="summaryList" class="muted small" style="padding-left:20px"><li>No summary periods available yet.</li></ul>
+                </article>
+                <article class="card">
+                    <div class="card-header"><div><h3>High-stress Events</h3><p>Experimental model event history</p></div><span class="badge" id="highStressCountBadge">0 events</span></div>
+                    <ul id="highStressEventList" class="muted small" style="padding-left:20px"><li>No high-stress events recorded.</li></ul>
+                </article>
             </div>
 
         </section>
@@ -2169,6 +2200,18 @@
                 </p>
             </div>
 
+            <article class="card" style="margin-bottom:17px">
+                <div class="card-header">
+                    <div><h3>Recovery Sequence</h3><p>Complete the steps in order: Breathing → Music → Haptic</p></div>
+                    <span class="badge" id="recoverySequenceBadge">Step 1 of 3</span>
+                </div>
+                <div class="status-row"><span>1. Guided breathing</span><span id="recoveryStepBreathing">Next</span></div>
+                <div class="status-row"><span>2. Relaxation music</span><span id="recoveryStepMusic">Locked</span></div>
+                <div class="status-row"><span>3. Haptic feedback</span><span id="recoveryStepHaptic">Locked</span></div>
+                <p id="recoverySequenceStatus" class="muted small" aria-live="polite">Start and complete the breathing exercise to unlock music.</p>
+                <button id="resetRecoverySequenceBtn" class="secondary-btn" type="button">Reset recovery sequence</button>
+            </article>
+
             <div class="recovery-grid">
 
                 <article class="card breathing-panel">
@@ -2286,8 +2329,11 @@
                             Haptic preference is OFF.
                         </p>
 
+                        <button id="sendHapticTestBtn" class="secondary-btn" type="button" disabled style="margin-top:12px">
+                            Queue test vibration · 500 ms
+                        </button>
                         <div class="notice" style="margin-top:12px">
-                            When signed in, this preference is saved to the backend. It does not activate a physical motor until the ESP32 command integration is completed.
+                            A command is queued only when haptics are enabled and a paired ESP32 is recently connected. Physical response still requires hardware validation.
                         </div>
 
                     </article>
@@ -2655,7 +2701,14 @@ let sensorHistory = [];
 let apiRecoveryHistory = [];
 let hasRemoteRecoveryHistory = false;
 let dashboardOverview = null;
+let backendRefreshTimer = null;
 let apiRefreshInProgress = false;
+
+function hapticPendingStorageKey() {
+    const owner = firebaseCurrentUser?.uid ||
+        (isLocalDevelopment ? "local-demo-user" : "signed-out");
+    return "neurosense_pending_haptic_command_" + owner;
+}
 
 function hasPrivateApiAccess() {
     return Boolean(apiIdToken) || isLocalDevelopment;
@@ -2795,7 +2848,7 @@ async function configureFirebaseAuthentication() {
             status.textContent = "Secure Google sign-in is ready. Your private data is loaded only after authentication.";
         }
 
-        authSdk.onAuthStateChanged(firebaseAuth, async user => {
+        authSdk.onIdTokenChanged(firebaseAuth, async user => {
 
             if (!user) {
 
@@ -2804,6 +2857,7 @@ async function configureFirebaseAuthentication() {
                 firebaseHadAuthenticated = false;
                 firebaseCurrentUser = null;
                 apiIdToken = null;
+                pendingHapticCommandId = "";
 
                 if (wasAuthenticated) {
 
@@ -2828,6 +2882,7 @@ async function configureFirebaseAuthentication() {
             }
 
             firebaseCurrentUser = user;
+            pendingHapticCommandId = readLocal(hapticPendingStorageKey(), "");
             firebaseHadAuthenticated = true;
 
             try {
@@ -3263,6 +3318,67 @@ function applyDashboardData(overview, history, settings, recovery) {
     drawAllCharts();
 }
 
+function renderDeviceManagement(payload) {
+    const list = $("pairedDeviceList"); if (!list) return;
+    list.replaceChildren(); const devices = Array.isArray(payload?.devices) ? payload.devices : [];
+    if (!devices.length) { const empty = document.createElement("p"); empty.className="muted small"; empty.textContent="No devices paired to this account."; list.appendChild(empty); return; }
+    devices.forEach(device => {
+        const row=document.createElement("div"); row.className="status-row";
+        const info=document.createElement("div"); const name=document.createElement("strong"); name.textContent=device.device_name || device.device_id;
+        const id=document.createElement("p"); id.className="muted small"; id.textContent=device.device_id; info.append(name,id);
+        const controls=document.createElement("div"); controls.style.display="flex"; controls.style.gap="8px";
+        const badge=document.createElement("span"); badge.className="badge"; badge.textContent=device.active ? "Paired" : "Inactive"; controls.appendChild(badge);
+        if (device.active) { const btn=document.createElement("button"); btn.type="button"; btn.className="danger-btn"; btn.textContent="Unpair";
+            btn.addEventListener("click", async () => { btn.disabled=true; try { await apiRequest("/api/devices/"+encodeURIComponent(device.device_id),{method:"DELETE"}); showToast("Device unpaired."); await refreshBackendData(); } catch(e) { btn.disabled=false; showToast("Unpair failed: "+e.message); } }); controls.appendChild(btn); }
+        row.append(info,controls); list.appendChild(row);
+    });
+}
+
+function renderBaselineStatus(payload) {
+    const base=payload?.baseline || null; const badge=$("baselineStatusBadge"); if (!badge) return;
+    $("baselineStatusText").textContent = base ? (Number(base.sample_count||0)+" eligible wearable readings used.") : "Need at least 10 good/moderate wearable readings from the last 10 minutes.";
+    badge.textContent = base ? "Calibrated" : "Not calibrated";
+    $("baselineCalibratedAt").textContent = base?.calibrated_at ? "Last calibrated: "+formatReadingTime(base.calibrated_at) : "No calibration recorded.";
+}
+
+function renderAnalyticsRecords(summaryPayload,eventPayload) {
+    const summaries=Array.isArray(summaryPayload?.summaries)?summaryPayload.summaries:[];
+    const events=Array.isArray(eventPayload?.events)?eventPayload.events:[];
+    $("summaryCountBadge").textContent=summaries.length+" periods"; $("highStressCountBadge").textContent=events.length+" events";
+    const sl=$("summaryList"); sl.replaceChildren();
+    if (!summaries.length) { const li=document.createElement("li"); li.textContent="No completed three-hour periods yet."; sl.appendChild(li); }
+    summaries.forEach(x=>{ const li=document.createElement("li"); li.textContent=(x.period_end?formatReadingTime(x.period_end):"Unknown time")+" · "+(x.reliable_reading_count||0)+"/"+(x.reading_count||0)+" reliable readings · HR "+(x.avg_heart_rate==null?"--":displayValue(x.avg_heart_rate))+" BPM · HRV "+(x.avg_hrv==null?"--":displayValue(x.avg_hrv,1))+" ms"; sl.appendChild(li); });
+    const el=$("highStressEventList"); el.replaceChildren();
+    if (!events.length) { const li=document.createElement("li"); li.textContent="No high-stress events recorded."; el.appendChild(li); }
+    events.forEach(x=>{ const li=document.createElement("li"); const p=Number(x.stress_probability); li.textContent=(x.occurred_at?formatReadingTime(x.occurred_at):"Unknown time")+" · "+(Number.isFinite(p)?Math.round(p*100)+"% model probability":"Probability unavailable"); el.appendChild(li); });
+}
+
+$("pairDeviceBtn").addEventListener("click",async()=>{
+    if(!hasPrivateApiAccess()){showToast("Sign in before pairing a device.");return;}
+    const deviceId=$("deviceIdInput").value.trim(), deviceName=$("deviceNameInput").value.trim();
+    if(!/^[A-Za-z0-9_.-]{3,80}$/.test(deviceId)||!deviceName||deviceName.length>80){showToast("Enter a valid device ID and name.");return;}
+    const btn=$("pairDeviceBtn");btn.disabled=true;
+    try{const result=await apiRequest("/api/devices/pair",{method:"POST",body:JSON.stringify({device_id:deviceId,device_name:deviceName})});
+        $("deviceTokenValue").textContent=result.device_token||"";$("deviceTokenPanel").classList.remove("hidden");
+        const cloudBackupReady = result.cloud_sync &&
+            result.cloud_sync.global === "synced" &&
+            result.cloud_sync.user === "synced";
+        showToast(cloudBackupReady
+            ? "Device paired and cloud backup synced. Copy the one-time token now."
+            : "Device paired, but Firestore backup is not confirmed. Copy the token; configure Firebase Admin + Firestore before relying on Render restarts.");
+        await refreshBackendData();
+    }catch(e){showToast("Pairing failed: "+e.message);}finally{btn.disabled=false;}
+});
+
+$("copyDeviceTokenBtn").addEventListener("click",async()=>{const token=$("deviceTokenValue").textContent;if(!token)return;try{await navigator.clipboard.writeText(token);showToast("Device token copied. Keep it secret.");}catch(e){showToast("Clipboard unavailable. Select and copy the token manually.");}});
+
+$("calibrateBaselineBtn").addEventListener("click",async()=>{
+    if(!hasPrivateApiAccess()){showToast("Sign in before calibration.");return;}
+    const btn=$("calibrateBaselineBtn");btn.disabled=true;btn.textContent="Calibrating...";
+    try{const result=await apiRequest("/api/baseline/calibrate?lookback_minutes=10",{method:"POST"});renderBaselineStatus({baseline:result.baseline});showToast("Baseline calibrated using "+result.baseline.sample_count+" readings.");await refreshBackendData();}
+    catch(e){showToast("Baseline calibration failed: "+e.message);}finally{btn.disabled=false;btn.textContent="Calibrate baseline · last 10 minutes";}
+});
+
 async function refreshBackendData() {
     if (apiRefreshInProgress) return;
     apiRefreshInProgress = true;
@@ -3307,7 +3423,11 @@ async function refreshBackendData() {
             apiRequest("/api/dashboard/overview"),
             apiRequest("/api/sensors/history?limit=100"),
             apiRequest("/api/settings"),
-            apiRequest("/api/recovery/history?limit=50")
+            apiRequest("/api/recovery/history?limit=50"),
+            apiRequest("/api/devices"),
+            apiRequest("/api/baseline"),
+            apiRequest("/api/summaries?limit=20"),
+            apiRequest("/api/events/high-stress?limit=20")
         ]);
 
         const failed = results.find(result => result.status === "rejected");
@@ -3325,10 +3445,13 @@ async function refreshBackendData() {
             throw error;
         }
 
-        const [overview, history, settings, recovery] =
+        const [overview, history, settings, recovery, devices, baseline, summaries, events] =
             results.map(result => result.value);
 
         applyDashboardData(overview, history, settings, recovery);
+        renderDeviceManagement(devices);
+        renderBaselineStatus(baseline);
+        renderAnalyticsRecords(summaries, events);
 
         setApiBanner(
             "LIVE BACKEND DATA",
@@ -4555,12 +4678,99 @@ let breathingElapsed = 0;
 let breathingStartedAt = 0;
 const breathingDuration = 56; // Four complete 14-second breathing cycles.
 const breathingTickMs = 100;
+let recoverySequence = readLocal("neurosense_recovery_sequence", {
+    breathing: false,
+    music: false,
+    haptic: false
+});
+
+// A queued command is reused after a page refresh or a temporary timeout.
+// This prevents repeated clicks from creating duplicate motor pulses.
+let pendingHapticCommandId = "";
+let hapticStatusCheckActive = false;
 
 const breathingPhases = [
     { name: "Breathe in", duration: 4, phase: "inhale" },
     { name: "Hold gently", duration: 4, phase: "hold" },
     { name: "Breathe out", duration: 6, phase: "exhale" }
 ];
+
+
+function persistRecoverySequence() {
+    writeLocal("neurosense_recovery_sequence", recoverySequence);
+    renderRecoverySequence();
+    updateHapticUI();
+}
+
+
+function renderRecoverySequence() {
+    const badge = $("recoverySequenceBadge");
+    const status = $("recoverySequenceStatus");
+    if (!badge || !status) return;
+
+    const stepLabel = done => done ? "Completed" : "Locked";
+    $("recoveryStepBreathing").textContent = recoverySequence.breathing ? "Completed" : "Next";
+    $("recoveryStepMusic").textContent = recoverySequence.music ? "Completed" : (recoverySequence.breathing ? "Next" : "Locked");
+    $("recoveryStepHaptic").textContent = recoverySequence.haptic ? "Completed" : (recoverySequence.music ? "Next" : "Locked");
+
+    if (recoverySequence.haptic) {
+        badge.textContent = "Complete";
+        status.textContent = "All three recovery steps were completed in order.";
+    } else if (!recoverySequence.breathing) {
+        badge.textContent = "Step 1 of 3";
+        status.textContent = "Start and complete the breathing exercise to unlock music.";
+    } else if (!recoverySequence.music) {
+        badge.textContent = "Step 2 of 3";
+        status.textContent = "Breathing completed. Select and finish a relaxation music track to unlock haptic feedback.";
+    } else {
+        badge.textContent = "Step 3 of 3";
+        status.textContent = "Music completed. Enable haptics and connect the paired ESP32 to finish the sequence.";
+    }
+
+    const musicInput = $("musicFileInput");
+    const audio = $("relaxationAudio");
+    if (musicInput) musicInput.disabled = !recoverySequence.breathing || recoverySequence.music;
+    if (audio) audio.controls = recoverySequence.breathing && !recoverySequence.music;
+
+    const hapticButton = $("sendHapticTestBtn");
+    if (hapticButton) {
+        hapticButton.disabled = !recoverySequence.music || recoverySequence.haptic ||
+            !hapticEnabled || !hasPrivateApiAccess() || hapticStatusCheckActive;
+        hapticButton.textContent = recoverySequence.haptic
+            ? "Recovery sequence complete"
+            : hapticStatusCheckActive
+                ? "Checking ESP32 acknowledgement..."
+                : pendingHapticCommandId
+                    ? "Check pending haptic command"
+                    : "Queue haptic recovery step · 1000 ms";
+    }
+}
+
+
+function completeRecoveryStep(step) {
+    if (step === "breathing") {
+        recoverySequence = { breathing: true, music: false, haptic: false };
+    } else if (step === "music" && recoverySequence.breathing) {
+        recoverySequence.music = true;
+        recoverySequence.haptic = false;
+    } else if (step === "haptic" && recoverySequence.music) {
+        recoverySequence.haptic = true;
+    }
+    persistRecoverySequence();
+}
+
+
+function resetRecoverySequence() {
+    recoverySequence = { breathing: false, music: false, haptic: false };
+    persistRecoverySequence();
+    stopBreathing();
+    $("relaxationAudio").pause();
+    $("relaxationAudio").currentTime = 0;
+    showToast("Recovery sequence reset. Start again with breathing.");
+}
+
+
+$("resetRecoverySequenceBtn").addEventListener("click", resetRecoverySequence);
 
 
 function updateBreathingUI() {
@@ -4651,6 +4861,7 @@ function completeBreathingSession() {
 
     // The save function chooses backend storage only when authenticated.
     recordRecoverySession("Breathing", breathingDuration);
+    completeRecoveryStep("breathing");
 
     showToast(
         "Breathing session completed. Check Recovery History for its saved record."
@@ -4681,6 +4892,7 @@ function startBreathing() {
 
     if (breathingInterval !== null) return;
 
+    resetRecoverySequence();
     breathingElapsed = 0;
     breathingStartedAt = performance.now();
 
@@ -4746,6 +4958,19 @@ $("musicFileInput").addEventListener("change", event => {
 });
 
 
+$("relaxationAudio").addEventListener("ended", () => {
+    const audio = $("relaxationAudio");
+    if (!recoverySequence.breathing) {
+        showToast("Complete breathing first to follow the recovery sequence.");
+        return;
+    }
+    const duration = Number.isFinite(audio.duration) ? Math.max(1, Math.round(audio.duration)) : 1;
+    recordRecoverySession("Music", duration);
+    completeRecoveryStep("music");
+    showToast("Music session completed. Haptic is now the final step.");
+});
+
+
 $("relaxationAudio").addEventListener("error", () => {
     if (activeMusicUrl) {
         showToast("The selected audio file could not be played.");
@@ -4767,8 +4992,11 @@ function updateHapticUI() {
 
     $("hapticStatusText").textContent =
         hapticEnabled
-            ? "Haptic preference is ON. Hardware connection is pending."
+            ? "Haptic preference is ON. The backend will only deliver commands while this remains enabled."
             : "Haptic preference is OFF.";
+    const testButton = $("sendHapticTestBtn");
+    if (testButton) testButton.disabled = !hapticEnabled || !hasPrivateApiAccess();
+    if ($("recoverySequenceBadge")) renderRecoverySequence();
 }
 
 
@@ -4789,7 +5017,9 @@ async function setHapticPreference(enabled) {
             hapticEnabled = Boolean(result.haptic_enabled);
             writeLocal("neurosense_haptic_enabled", hapticEnabled);
             updateHapticUI();
-            showToast("Haptic preference saved to NeuroSense backend.");
+            showToast(result.cloud_sync === "synced"
+                ? "Haptic preference saved and backed up to Firestore."
+                : "Haptic preference saved for this server session, but cloud backup is not confirmed. Configure Firebase Admin + Firestore before relying on restarts.");
             return;
 
         } catch (error) {
@@ -4820,6 +5050,82 @@ $("settingsHapticToggle").addEventListener("change", event => {
     setHapticPreference(event.target.checked);
 });
 
+
+$("sendHapticTestBtn").addEventListener("click", async () => {
+    if (!hasPrivateApiAccess() || !hapticEnabled || !recoverySequence.music) {
+        showToast("Complete breathing and music, sign in and enable haptic feedback first.");
+        return;
+    }
+    if (hapticStatusCheckActive) return;
+
+    hapticStatusCheckActive = true;
+    renderRecoverySequence();
+    try {
+        if (!pendingHapticCommandId) {
+            const deviceStatus = await apiRequest("/api/device/status");
+            if (!deviceStatus.connected) {
+                showToast("No recently connected ESP32. Connect the wearable before sending a vibration.");
+                return;
+            }
+
+            const devices = await apiRequest("/api/devices");
+            const active = (devices.devices || []).find(item => item.active);
+            if (!active) {
+                showToast("Pair an ESP32 device before sending a vibration.");
+                return;
+            }
+
+            const result = await apiRequest("/api/haptic/commands", {
+                method: "POST",
+                body: JSON.stringify({ device_id: active.device_id, duration_ms: 1000 })
+            });
+            pendingHapticCommandId = result.command_id;
+            writeLocal(hapticPendingStorageKey(), pendingHapticCommandId);
+            if (!pendingHapticCommandId) {
+                throw new Error("Backend did not return a haptic command ID.");
+            }
+            showToast(result.cloud_sync === "synced"
+                ? "Haptic command queued and backed up. Waiting for ESP32 acknowledgement..."
+                : "Haptic command queued for this server session, but Firestore backup is not confirmed. Keep the ESP32 connected; a server restart may clear this command.");
+        } else {
+            showToast("Checking the existing haptic command. No duplicate command will be created.");
+        }
+
+        let acknowledged = false;
+        let expired = false;
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const state = await apiRequest(
+                "/api/haptic/commands/" + encodeURIComponent(pendingHapticCommandId)
+            );
+            if (state.status === "acknowledged") {
+                acknowledged = true;
+                pendingHapticCommandId = "";
+                writeLocal(hapticPendingStorageKey(), "");
+                completeRecoveryStep("haptic");
+                await recordRecoverySession("Haptic", 1);
+                showToast("Recovery sequence complete. ESP32 acknowledged the haptic step.");
+                break;
+            }
+            if (state.status === "expired") {
+                expired = true;
+                pendingHapticCommandId = "";
+                writeLocal("neurosense_pending_haptic_command", "");
+                showToast("Haptic command expired before acknowledgement. You can queue a fresh final step.");
+                break;
+            }
+        }
+        if (!acknowledged && !expired) {
+            showToast("Command is still pending. Keep the wearable connected and check again; a duplicate won't be queued.");
+        }
+    } catch (error) {
+        showToast("Haptic status check failed: " + error.message +
+            (pendingHapticCommandId ? " The existing command ID is retained; retry to check the same command." : ""));
+    } finally {
+        hapticStatusCheckActive = false;
+        renderRecoverySequence();
+    }
+});
 
 /* =========================================================
    L. RECOVERY HISTORY
@@ -4989,8 +5295,15 @@ function initializeApp() {
     refreshPublicSystemStatus();
     configureFirebaseAuthentication();
 
+    if (backendRefreshTimer === null) {
+        backendRefreshTimer = setInterval(() => {
+            if (!document.hidden && hasPrivateApiAccess()) refreshBackendData();
+        }, 30000);
+    }
+
     updateProfileUI();
     updateHapticUI();
+    renderRecoverySequence();
     renderHistory();
     updateAnalyticsCount();
 
@@ -5021,6 +5334,11 @@ window.addEventListener("pagehide", () => {
     }
 
     apiIdToken = null;
+
+    if (backendRefreshTimer !== null) {
+        clearInterval(backendRefreshTimer);
+        backendRefreshTimer = null;
+    }
 
     if (activeMusicUrl) {
         URL.revokeObjectURL(activeMusicUrl);
