@@ -5073,7 +5073,7 @@ $("sendHapticTestBtn").addEventListener("click", async () => {
     } catch (error) {
         showToast("Haptic command was not queued: " + error.message);
     } finally {
-        button.disabled = !hapticEnabled || !hasPrivateApiAccess();
+        renderRecoverySequence();
     }
 });
 
