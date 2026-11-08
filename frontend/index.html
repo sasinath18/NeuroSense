@@ -891,12 +891,34 @@
             border-radius: 13px;
         }
 
+        .camera-frame {
+            aspect-ratio: 4 / 3;
+            max-height: 420px;
+        }
+
         .camera-frame video {
+            position: absolute;
+            inset: 0;
             width: 100%;
             height: 100%;
-            max-height: 420px;
-            object-fit: cover;
+            max-height: none;
+            object-fit: contain;
+            transform: scaleX(-1);
             display: none;
+            z-index: 0;
+        }
+
+        #faceOverlay {
+            position: absolute;
+            display: none;
+            pointer-events: none;
+            transform: scaleX(-1);
+            z-index: 1;
+        }
+
+        .camera-placeholder {
+            position: relative;
+            z-index: 2;
         }
 
         .camera-placeholder {
@@ -2008,6 +2030,9 @@
                                muted
                                playsinline></video>
 
+                        <canvas id="faceOverlay"
+                                aria-hidden="true"></canvas>
+
                         <div id="cameraPlaceholder" class="camera-placeholder">
                             <div class="camera-icon">◉</div>
                             <strong>Camera is currently disabled</strong>
@@ -2075,11 +2100,13 @@
                     </div>
 
                     <div class="notice" style="margin-top:20px">
-                        <strong>Analysis status: Not integrated</strong><br>
-                        This version provides camera permission and preview
-                        handling only. It does not detect emotions or calculate
-                        stress from facial images. A validated analysis model
-                        will be required for that feature.
+                        <strong>Analysis status: Face landmarks only</strong><br>
+                        MediaPipe Face Landmarker detects facial landmarks and
+                        draws a face-mesh overlay locally in this browser.
+                        Webcam frames are not uploaded to NeuroSense or stored
+                        by this feature. The MediaPipe library and model load
+                        from Google's CDN, and its service may collect usage
+                        metrics. This feature does not infer emotion or stress.
                     </div>
 
                 </article>
@@ -3027,9 +3054,469 @@ $("settingsThemeBtn").addEventListener("click", toggleTheme);
 ========================================================= */
 
 let cameraStream = null;
+let faceLandmarker = null;
+let faceLandmarkerPromise = null;
+let faceDrawingUtils = null;
+let faceAnimationFrame = null;
+let faceProcessingActive = false;
+let faceLastVideoTime = -1;
+let faceLastInferenceAt = 0;
+let faceLastTimestamp = 0;
+let faceLastState = "";
+
+
+const FACE_LANDMARKER_VERSION = "1.2.2";
+const FACE_WASM_URL =
+    `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${FACE_LANDMARKER_VERSION}/wasm`;
+const FACE_BUNDLE_URL =
+    `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${FACE_LANDMARKER_VERSION}/vision_bundle.mjs`;
+const FACE_MODEL_URL =
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+
+
+async function loadFaceLandmarker() {
+
+    if (faceLandmarker) return faceLandmarker;
+    if (faceLandmarkerPromise) return faceLandmarkerPromise;
+
+    faceLandmarkerPromise = (async () => {
+
+        const {
+            FilesetResolver,
+            FaceLandmarker,
+            DrawingUtils
+        } = await import(FACE_BUNDLE_URL);
+
+        const vision = await FilesetResolver.forVisionTasks(
+            FACE_WASM_URL
+        );
+
+        const task = await FaceLandmarker.createFromOptions(
+            vision,
+            {
+                baseOptions: {
+                    modelAssetPath: FACE_MODEL_URL
+                },
+                runningMode: "VIDEO",
+                numFaces: 1,
+                minFaceDetectionConfidence: 0.55,
+                minFacePresenceConfidence: 0.55,
+                minTrackingConfidence: 0.55,
+                outputFaceBlendshapes: false,
+                outputFacialTransformationMatrixes: false
+            }
+        );
+
+        faceLandmarker = task;
+        faceDrawingUtils = new DrawingUtils(
+            $("faceOverlay").getContext("2d")
+        );
+
+        return task;
+    })();
+
+    try {
+        return await faceLandmarkerPromise;
+    } catch (error) {
+        faceLandmarkerPromise = null;
+        throw error;
+    }
+
+}
+
+
+function setFaceScanState(state, message) {
+
+    if (state === faceLastState) return;
+    faceLastState = state;
+
+    const badge = $("cameraStatus");
+
+    if (state === "detected") {
+        badge.innerHTML =
+            '<span class="dot green"></span> Face detected';
+    } else if (state === "not-found") {
+        badge.innerHTML =
+            '<span class="dot yellow"></span> Looking for face';
+    } else if (state === "loading") {
+        badge.innerHTML =
+            '<span class="dot yellow"></span> Loading Face Mesh';
+    } else if (state === "error") {
+        badge.innerHTML =
+            '<span class="dot yellow"></span> Mesh unavailable';
+    } else {
+        badge.innerHTML =
+            '<span class="dot red"></span> Camera OFF';
+    }
+
+    if (message) {
+        $("cameraMessage").textContent = message;
+    }
+
+}
+
+
+function sizeFaceOverlay() {
+
+    const video = $("cameraVideo");
+    const frame = video.parentElement;
+    const canvas = $("faceOverlay");
+
+    if (!video.videoWidth || !video.videoHeight) {
+        return false;
+    }
+
+    const frameRect = frame.getBoundingClientRect();
+
+    if (!frameRect.width || !frameRect.height) {
+        return false;
+    }
+
+    const scale = Math.min(
+        frameRect.width / video.videoWidth,
+        frameRect.height / video.videoHeight
+    );
+
+    const displayWidth = video.videoWidth * scale;
+    const displayHeight = video.videoHeight * scale;
+
+    const nextWidth = Math.round(video.videoWidth);
+    const nextHeight = Math.round(video.videoHeight);
+
+    if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
+        canvas.width = nextWidth;
+        canvas.height = nextHeight;
+    }
+
+    canvas.style.width = `${displayWidth}px`;
+    canvas.style.height = `${displayHeight}px`;
+    canvas.style.left =
+        `${(frameRect.width - displayWidth) / 2}px`;
+    canvas.style.top =
+        `${(frameRect.height - displayHeight) / 2}px`;
+    canvas.style.display = "block";
+
+    return true;
+
+}
+
+
+function clearFaceOverlay() {
+
+    const canvas = $("faceOverlay");
+    const context = canvas.getContext("2d");
+
+    context.clearRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+}
+
+
+function drawFaceLandmarks(landmarks) {
+
+    const canvas = $("faceOverlay");
+    const context = canvas.getContext("2d");
+
+    context.clearRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+    // Dense triangular face mesh.
+    faceDrawingUtils.drawConnectors(
+        landmarks,
+        faceLandmarker.constructor.FACE_LANDMARKS_TESSELATION,
+        {
+            color: "rgba(70, 215, 235, 0.55)",
+            lineWidth: 0.55
+        }
+    );
+
+    // Stronger facial contours and feature outlines.
+    const featureLines = [
+        faceLandmarker.constructor.FACE_LANDMARKS_FACE_OVAL,
+        faceLandmarker.constructor.FACE_LANDMARKS_LEFT_EYE,
+        faceLandmarker.constructor.FACE_LANDMARKS_RIGHT_EYE,
+        faceLandmarker.constructor.FACE_LANDMARKS_LEFT_EYEBROW,
+        faceLandmarker.constructor.FACE_LANDMARKS_RIGHT_EYEBROW,
+        faceLandmarker.constructor.FACE_LANDMARKS_LIPS
+    ];
+
+    featureLines.forEach((connections, index) => {
+        if (!connections) return;
+
+        faceDrawingUtils.drawConnectors(
+            landmarks,
+            connections,
+            {
+                color: index === 0
+                    ? "#7CF0D2"
+                    : "#F5D76E",
+                lineWidth: index === 0 ? 1.6 : 1.15
+            }
+        );
+    });
+
+    // Small points make the detected landmarks easy to see.
+    context.fillStyle = "#F6FBFF";
+
+    landmarks.forEach(point => {
+        context.beginPath();
+        context.arc(
+            point.x * canvas.width,
+            point.y * canvas.height,
+            1.05,
+            0,
+            Math.PI * 2
+        );
+        context.fill();
+    });
+
+}
+
+
+function runFaceDetectionLoop() {
+
+    if (!faceProcessingActive) return;
+
+    const video = $("cameraVideo");
+    const now = performance.now();
+
+    if (
+        faceLandmarker &&
+        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+        video.currentTime !== faceLastVideoTime &&
+        now - faceLastInferenceAt >= 66
+    ) {
+
+        faceLastVideoTime = video.currentTime;
+        faceLastInferenceAt = now;
+
+        try {
+
+            const timestamp = Math.max(
+                now,
+                faceLastTimestamp + 1
+            );
+
+            faceLastTimestamp = timestamp;
+
+            const result = faceLandmarker.detectForVideo(
+                video,
+                timestamp
+            );
+
+            const faces = result.faceLandmarks || [];
+
+            if (faces.length > 0) {
+
+                const landmarks = faces[0];
+                drawFaceLandmarks(landmarks);
+
+                setFaceScanState(
+                    "detected",
+                    `Face detected · ${landmarks.length} landmarks · processed on this device.`
+                );
+
+            } else {
+
+                clearFaceOverlay();
+
+                setFaceScanState(
+                    "not-found",
+                    "No face detected. Face the camera and improve the lighting."
+                );
+
+            }
+
+        } catch (error) {
+
+            console.error("Face landmark detection failed:", error);
+            faceProcessingActive = false;
+            clearFaceOverlay();
+
+            setFaceScanState(
+                "error",
+                "Face Mesh stopped because detection failed. Stop the camera and try again."
+            );
+
+        }
+
+    }
+
+    if (faceProcessingActive) {
+        faceAnimationFrame =
+            requestAnimationFrame(runFaceDetectionLoop);
+    }
+
+}
 
 
 async function startCamera() {
+
+    if (cameraStream) return;
+
+    if (!navigator.mediaDevices ||
+        !navigator.mediaDevices.getUserMedia) {
+
+        $("cameraMessage").textContent =
+            "Camera access requires HTTPS or localhost and a supported browser.";
+
+        showToast("Camera is unavailable in this browser context.");
+        return;
+    }
+
+    try {
+
+        $("cameraMessage").textContent =
+            "Requesting camera permission...";
+
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: "user",
+                width: { ideal: 640 },
+                height: { ideal: 480 }
+            },
+            audio: false
+        });
+
+        const video = $("cameraVideo");
+        video.srcObject = cameraStream;
+        video.style.display = "block";
+        $("cameraPlaceholder").classList.add("hidden");
+
+        await video.play();
+
+        $("startCameraBtn").disabled = true;
+        $("stopCameraBtn").disabled = false;
+
+        setFaceScanState(
+            "loading",
+            "Camera is active. Loading the on-device Face Mesh model..."
+        );
+
+        try {
+
+            await loadFaceLandmarker();
+
+            // The user may have stopped the camera while the model was loading.
+            if (!cameraStream) return;
+
+            sizeFaceOverlay();
+            faceProcessingActive = true;
+            faceLastVideoTime = -1;
+            faceLastInferenceAt = 0;
+            faceLastTimestamp = 0;
+
+            setFaceScanState(
+                "not-found",
+                "Face Mesh is active. Look towards the camera."
+            );
+
+            faceAnimationFrame =
+                requestAnimationFrame(runFaceDetectionLoop);
+
+            showToast("Face Mesh is ready.");
+
+        } catch (modelError) {
+
+            console.error("Face Mesh model loading failed:", modelError);
+
+            setFaceScanState(
+                "error",
+                "Camera is on, but Face Mesh could not load. Check your internet connection and reload the page."
+            );
+
+            showToast("Face Mesh model could not be loaded.");
+
+        }
+
+    } catch (error) {
+
+        console.error("Camera access error:", error);
+
+        let message = "Camera access failed.";
+
+        if (error.name === "NotAllowedError") {
+            message = "Camera permission was denied. Enable permission in your browser.";
+        } else if (error.name === "NotFoundError") {
+            message = "No camera was found on this device.";
+        } else if (error.name === "NotReadableError") {
+            message = "Camera may already be in use by another application.";
+        }
+
+        stopCamera();
+        $("cameraMessage").textContent = message;
+        showToast(message);
+
+    }
+
+}
+
+
+function stopCamera() {
+
+    faceProcessingActive = false;
+
+    if (faceAnimationFrame !== null) {
+        cancelAnimationFrame(faceAnimationFrame);
+        faceAnimationFrame = null;
+    }
+
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
+    }
+
+    if ($("cameraVideo")) {
+        $("cameraVideo").pause();
+        $("cameraVideo").srcObject = null;
+        $("cameraVideo").style.display = "none";
+    }
+
+    if ($("faceOverlay")) {
+        clearFaceOverlay();
+        $("faceOverlay").style.display = "none";
+    }
+
+    if ($("cameraPlaceholder")) {
+        $("cameraPlaceholder").classList.remove("hidden");
+    }
+
+    if ($("cameraStatus")) {
+        $("cameraStatus").innerHTML =
+            '<span class="dot red"></span> Camera OFF';
+    }
+
+    if ($("startCameraBtn")) {
+        $("startCameraBtn").disabled = false;
+    }
+
+    if ($("stopCameraBtn")) {
+        $("stopCameraBtn").disabled = true;
+    }
+
+    faceLastState = "";
+
+}
+
+
+$("startCameraBtn").addEventListener("click", startCamera);
+
+$("stopCameraBtn").addEventListener("click", () => {
+    stopCamera();
+    $("cameraMessage").textContent = "Camera stopped. Face Mesh processing has also stopped.";
+    showToast("Camera stopped.");
+});
+
+
+
 
     if (!navigator.mediaDevices ||
         !navigator.mediaDevices.getUserMedia) {
@@ -3126,13 +3613,6 @@ function stopCamera() {
 
 
 $("startCameraBtn").addEventListener("click", startCamera);
-$("stopCameraBtn").addEventListener("click", () => {
-    stopCamera();
-    $("cameraMessage").textContent = "Camera stopped.";
-    showToast("Camera stopped.");
-});
-
-
 /* =========================================================
    I. BREATHING EXERCISE
 ========================================================= */
