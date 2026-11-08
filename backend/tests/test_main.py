@@ -1421,3 +1421,84 @@ def test_production_mode_fails_closed_without_firebase(client, monkeypatch):
     assert response.status_code == 503
     assert response.json()["detail"] == "Firebase authentication is not configured."
 
+
+def test_stress_api_returns_no_score_when_model_is_unavailable(client, monkeypatch):
+    """Stress API must not fabricate a score when there is no loaded model."""
+    monkeypatch.setattr(api, "STRESS_MODEL", None)
+    user_id = "neurosense-stress-model-missing"
+    reading = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 76,
+            "hrv_ms": 42,
+            "gsr_raw": 1700,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers={"X-Demo-User": user_id},
+    )
+    assert reading.status_code == 201
+
+    response = client.get(
+        "/api/stress/latest",
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "model_not_available"
+    assert response.json()["stress_score"] is None
+
+
+def test_stress_api_requires_baseline_before_prediction(client, monkeypatch):
+    """A loaded model cannot infer stress until a personal baseline exists."""
+    monkeypatch.setattr(api, "STRESS_MODEL", object())
+    user_id = "neurosense-stress-baseline-required"
+    reading = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 76,
+            "hrv_ms": 42,
+            "gsr_raw": 1700,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers={"X-Demo-User": user_id},
+    )
+    assert reading.status_code == 201
+
+    response = client.get(
+        "/api/stress/latest",
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "baseline_required"
+    assert response.json()["stress_score"] is None
+
+
+def test_stress_api_excludes_poor_quality_readings(client, monkeypatch):
+    """Poor-quality wearable readings must not be passed to model inference."""
+    monkeypatch.setattr(api, "STRESS_MODEL", object())
+    user_id = "neurosense-stress-poor-quality"
+    reading = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 76,
+            "hrv_ms": 42,
+            "gsr_raw": 1700,
+            "signal_quality": "poor",
+            "source": "wearable",
+        },
+        headers={"X-Demo-User": user_id},
+    )
+    assert reading.status_code == 201
+
+    response = client.get(
+        "/api/stress/latest",
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "poor_signal_quality"
+    assert response.json()["stress_score"] is None
+
