@@ -8,6 +8,8 @@ Tests use an isolated temporary SQLite database. They do not modify
 the developer's local NeuroSense database or require real hardware.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -247,7 +249,7 @@ def test_due_summary_generation_is_visible_in_summary_history(client):
     )
     assert reading.status_code == 201
 
-    created_count = create_due_summaries()
+    created_count = api.create_due_summaries()
     assert created_count >= 1
 
     response = client.get("/api/summaries", headers=headers)
