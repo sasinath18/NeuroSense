@@ -5009,7 +5009,9 @@ async function setHapticPreference(enabled) {
             hapticEnabled = Boolean(result.haptic_enabled);
             writeLocal("neurosense_haptic_enabled", hapticEnabled);
             updateHapticUI();
-            showToast("Haptic preference saved to NeuroSense backend.");
+            showToast(result.cloud_sync === "synced"
+                ? "Haptic preference saved and backed up to Firestore."
+                : "Haptic preference saved for this server session, but cloud backup is not confirmed. Configure Firebase Admin + Firestore before relying on restarts.");
             return;
 
         } catch (error) {
