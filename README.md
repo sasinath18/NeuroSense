@@ -22,12 +22,38 @@ This repository includes a Render Blueprint at `render.yaml`.
 
 The Blueprint uses the free web-service plan, the Singapore region, Python 3.13.14, and the lightweight production dependency list in `requirements-render.txt`.
 
+## Configure Firebase Authentication
+
+The application code supports Firebase Google Sign-In, but Firebase must be configured in your own Firebase project before the sign-in button becomes active.
+
+1. Create a Firebase project in the [Firebase Console](https://console.firebase.google.com/).
+2. Add a Web App to that project. Copy its web configuration values.
+3. In **Authentication → Sign-in method**, enable **Google**.
+4. In **Authentication → Settings → Authorized domains**, add `neurosense-app.onrender.com`. Add `localhost` only if you also use local development.
+5. Create a Firestore database if you want cloud sync.
+6. In **Project settings → Service accounts**, generate a private key JSON. Keep this private file secret.
+7. In Render, open the `neurosense-app` service → **Environment** and add the variables below. Save changes and redeploy.
+
+| Render environment variable | Value |
+|---|---|
+| `FIREBASE_WEB_API_KEY` | Web app `apiKey` |
+| `FIREBASE_WEB_AUTH_DOMAIN` | Web app `authDomain` |
+| `FIREBASE_WEB_PROJECT_ID` | Web app `projectId` |
+| `FIREBASE_WEB_APP_ID` | Web app `appId` |
+| `FIREBASE_WEB_MESSAGING_SENDER_ID` | Web app `messagingSenderId` |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Complete service-account JSON, pasted as compact JSON; mark as secret |
+
+The web configuration is browser-visible by design. The service-account JSON is a private Admin credential and must remain only in Render's secret environment. Never commit it to GitHub or paste it into chat.
+
+The backend exposes only the public Firebase Web App configuration from `/api/public-config`. It never returns the Admin service-account JSON. Google Sign-In activates only when both browser configuration and backend Firebase Admin verification are ready. The backend verifies the Firebase ID token on protected API routes.
+
 ## Current prototype limitations
 
-- The dashboard now reads backend health and, after secure authentication is configured, loads dashboard overview, wearable history, settings and recovery history from FastAPI. It does not generate sample sensor values.
+- The dashboard reads backend health and, after secure authentication is configured, loads dashboard overview, wearable history, settings and recovery history from FastAPI. It does not generate sample sensor values.
 - Face Scan uses MediaPipe Face Landmarker in the browser to draw facial landmarks and a mesh when the user explicitly starts the camera. Frames are processed locally and are not uploaded to the NeuroSense backend. This feature does not infer emotion or stress.
+- Face Scan displays a lighting advisory and a browser-local brightness estimate. This estimate is not a lux measurement and cannot guarantee detection accuracy.
 - ESP32 hardware integration and live sensor validation are not yet complete.
-- Firebase Authentication and Firestore are not configured in this deployment.
+- Firebase project credentials must be configured before production sign-in and private account data can be used.
 - The SQLite database is configured at `/tmp/neurosense.db` on the free preview service. This filesystem is ephemeral, so stored records can be lost when the service restarts or redeploys.
 - The WESAD-trained model is an experimental research prototype, not clinically validated and not intended for diagnosis or treatment.
 
@@ -40,6 +66,8 @@ python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 Open `http://127.0.0.1:8001/dashboard` for the dashboard and `http://127.0.0.1:8001/docs` for API documentation.
+
+For local Firebase testing, set the same `FIREBASE_WEB_*` variables and `FIREBASE_SERVICE_ACCOUNT_JSON` in an untracked `.env` file. Never commit `.env`.
 
 ## Safety and privacy
 
