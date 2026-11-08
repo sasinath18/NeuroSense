@@ -2577,7 +2577,10 @@ def build_recovery_comparison(before, after) -> dict | None:
     if before is None or after is None:
         return None
 
-    comparison = {}
+    comparison = {
+        "before_timestamp": before["timestamp"],
+        "after_timestamp": after["timestamp"]
+    }
 
     for field in (
         "heart_rate_bpm",
