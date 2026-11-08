@@ -1325,3 +1325,99 @@ def test_device_token_is_stored_as_sha256_digest_not_plaintext(client):
     stored_digest = row["token_hash"]
     assert stored_digest != token
     assert len(stored_digest) == 64
+
+
+def test_firebase_auth_rejects_missing_bearer_token(client, monkeypatch):
+    """When Firebase is configured, demo headers must not bypass authentication."""
+    monkeypatch.setattr(api, "FIREBASE_APP", object())
+
+    response = client.get(
+        "/api/settings",
+        headers={"X-Demo-User": "should-not-bypass-firebase"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Firebase Bearer token required."
+
+
+def test_firebase_auth_accepts_verified_bearer_token(client, monkeypatch):
+    """A verified Firebase ID token should resolve the Firebase UID."""
+    fake_app = object()
+    monkeypatch.setattr(api, "FIREBASE_APP", fake_app)
+
+    def fake_verify(token, check_revoked, app):
+        assert token == "unit-test-firebase-token"
+        assert check_revoked is True
+        assert app is fake_app
+        return {"uid": "firebase-test-user-123"}
+
+    monkeypatch.setattr(api.firebase_auth, "verify_id_token", fake_verify)
+
+    response = client.get(
+        "/api/settings",
+        headers={"Authorization": "Bearer unit-test-firebase-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["haptic_enabled"] is False
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    [
+        "unit-test-token-without-scheme",
+        "Basic unit-test-token",
+        "Bearer",
+        "Bearer token extra-part",
+    ],
+)
+def test_firebase_auth_rejects_malformed_authorization_header(
+    client,
+    monkeypatch,
+    authorization,
+):
+    """Firebase mode only accepts a correctly formatted Bearer header."""
+    monkeypatch.setattr(api, "FIREBASE_APP", object())
+
+    response = client.get(
+        "/api/settings",
+        headers={"Authorization": authorization},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == (
+        "Use Authorization: Bearer <Firebase ID token>."
+    )
+
+
+def test_firebase_auth_rejects_invalid_or_expired_token(client, monkeypatch):
+    """Invalid Firebase ID tokens must return 401."""
+    monkeypatch.setattr(api, "FIREBASE_APP", object())
+
+    def reject_token(*args, **kwargs):
+        raise ValueError("invalid token")
+
+    monkeypatch.setattr(api.firebase_auth, "verify_id_token", reject_token)
+
+    response = client.get(
+        "/api/settings",
+        headers={"Authorization": "Bearer invalid-firebase-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired Firebase ID token."
+
+
+def test_production_mode_fails_closed_without_firebase(client, monkeypatch):
+    """Production mode must not silently fall back to development demo auth."""
+    monkeypatch.setattr(api, "FIREBASE_APP", None)
+    monkeypatch.setattr(api, "APP_ENV", "production")
+
+    response = client.get(
+        "/api/settings",
+        headers={"X-Demo-User": "production-demo-user"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Firebase authentication is not configured."
+
