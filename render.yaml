@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: neurosense-app
+    runtime: python
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.14
+      - key: NEUROSENSE_ENV
+        value: production
+      - key: NEUROSENSE_DB_PATH
+        value: /tmp/neurosense.db
