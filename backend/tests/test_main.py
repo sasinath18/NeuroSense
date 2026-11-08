@@ -1027,6 +1027,71 @@ def test_recovery_history_returns_saved_completed_session(client):
     assert body["sessions"][0]["completed"] == 1
 
 
+def test_recovery_history_adds_after_reading_received_after_session_save(client):
+    """History should find the first wearable reading received after a session completes."""
+    headers = {"X-Demo-User": "api-test-recovery-late-after"}
+    now = datetime.now(timezone.utc)
+    started = now - timedelta(seconds=120)
+    completed = now - timedelta(seconds=60)
+
+    before_time = started - timedelta(seconds=10)
+    after_time = completed + timedelta(seconds=10)
+
+    before = client.post(
+        "/api/sensors",
+        json={
+            "timestamp": before_time.isoformat(),
+            "heart_rate_bpm": 84,
+            "hrv_ms": 30,
+            "gsr_raw": 2000,
+            "skin_temperature_c": 33.4,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers=headers,
+    )
+    assert before.status_code == 201
+
+    created = client.post(
+        "/api/recovery/sessions",
+        json={
+            "activity": "breathing",
+            "started_at": started.isoformat(),
+            "completed_at": completed.isoformat(),
+            "duration_seconds": 60,
+            "completed": True,
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    assert created.json()["comparison"] is None
+
+    after = client.post(
+        "/api/sensors",
+        json={
+            "timestamp": after_time.isoformat(),
+            "heart_rate_bpm": 76,
+            "hrv_ms": 39,
+            "gsr_raw": 1650,
+            "skin_temperature_c": 33.1,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers=headers,
+    )
+    assert after.status_code == 201
+
+    history = client.get("/api/recovery/history", headers=headers)
+    assert history.status_code == 200
+
+    comparison = history.json()["sessions"][0]["comparison"]
+    assert comparison["heart_rate_bpm"]["before"] == 84
+    assert comparison["heart_rate_bpm"]["after"] == 76
+    assert comparison["heart_rate_bpm"]["change"] == -8
+    assert comparison["hrv_ms"]["change"] == 9
+    assert comparison["gsr_raw"]["change"] == -350
+
+
 def test_face_scan_status_reports_browser_local_landmark_privacy(client):
     """Face Scan API discloses local landmark processing without stress inference."""
     response = client.get("/api/face-scan/status")
