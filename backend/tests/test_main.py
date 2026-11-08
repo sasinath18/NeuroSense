@@ -272,3 +272,29 @@ def test_paired_device_can_upload_reading_with_valid_device_token(client):
     assert body["reading"]["hrv_ms"] == 44
     assert body["reading"]["gsr_raw"] == 1770
 
+
+def test_device_upload_rejects_missing_device_token(client):
+    """The wearable readings endpoint must reject requests without a token."""
+    pair_response = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": "test-device-missing-token",
+            "device_name": "Missing Token Test",
+        },
+        headers={"X-Demo-User": "api-test-missing-token"},
+    )
+
+    assert pair_response.status_code == 201
+
+    response = client.post(
+        "/api/devices/test-device-missing-token/readings",
+        json={
+            "heart_rate_bpm": 76,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "X-Device-Token header is required."
+
