@@ -4972,6 +4972,7 @@ function updateHapticUI() {
             : "Haptic preference is OFF.";
     const testButton = $("sendHapticTestBtn");
     if (testButton) testButton.disabled = !hapticEnabled || !hasPrivateApiAccess();
+    if ($("recoverySequenceBadge")) renderRecoverySequence();
 }
 
 

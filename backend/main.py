@@ -930,6 +930,28 @@ def authenticated_device(
             status_code=401,
             detail="Device authentication failed."
         )
+
+    # Authenticated polling is also a device heartbeat. Throttle writes so
+    # a one-second command poll does not create a database write each time.
+    now = utc_now()
+    last_seen = parse_iso(row["last_seen"]) if row["last_seen"] else None
+    if last_seen is None or (now - last_seen).total_seconds() >= 15:
+        with db_connection() as db:
+            db.execute(
+                """
+                UPDATE devices SET last_seen = ?
+                WHERE device_id = ? AND user_id = ? AND active = 1
+                """,
+                (iso(now), device_id, row["user_id"]),
+            )
+            updated = db.execute(
+                "SELECT * FROM devices WHERE device_id = ? AND active = 1",
+                (device_id,),
+            ).fetchone()
+        if updated is not None:
+            row = updated
+            sync_device_record(dict(row))
+
     return row
 
 
