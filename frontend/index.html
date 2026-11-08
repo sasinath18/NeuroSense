@@ -1867,6 +1867,26 @@
 
 
                     <article class="card" style="margin-top:17px">
+                        <div class="card-header"><div><h3>Wearable Device Management</h3><p>Pair or remove an ESP32 for this account</p></div></div>
+                        <div class="field"><label for="deviceIdInput">Device ID</label><input id="deviceIdInput" class="form-control" type="text" maxlength="80" value="neurosense-esp32-01"></div>
+                        <div class="field"><label for="deviceNameInput">Device name</label><input id="deviceNameInput" class="form-control" type="text" maxlength="80" value="NeuroSense ESP32"></div>
+                        <button id="pairDeviceBtn" class="secondary-btn" type="button">Pair wearable</button>
+                        <div id="deviceTokenPanel" class="notice hidden" style="margin-top:13px" role="status" aria-live="polite">
+                            <strong>One-time device token</strong><p class="small">Copy this now and store it securely on the ESP32. It will not be shown again.</p>
+                            <code id="deviceTokenValue" style="word-break:break-all"></code>
+                            <button id="copyDeviceTokenBtn" class="secondary-btn" type="button" style="margin-top:10px">Copy token</button>
+                        </div>
+                        <div style="margin-top:16px"><strong class="small">Paired devices</strong><div id="pairedDeviceList" style="margin-top:8px"><p class="muted small">Sign in to load paired devices.</p></div></div>
+                    </article>
+
+                    <article class="card" style="margin-top:17px">
+                        <div class="card-header"><div><h3>Personal Baseline</h3><p>Calibrate from recent wearable readings</p></div><span class="badge" id="baselineStatusBadge">Not calibrated</span></div>
+                        <p id="baselineStatusText" class="muted small">At least 10 good/moderate wearable readings from the last 10 minutes are required.</p>
+                        <p id="baselineCalibratedAt" class="muted small">No calibration recorded.</p>
+                        <button id="calibrateBaselineBtn" class="secondary-btn" type="button">Calibrate baseline · last 10 minutes</button>
+                    </article>
+
+                    <article class="card" style="margin-top:17px">
 
                         <div class="card-header">
                             <div>
@@ -2012,6 +2032,17 @@
                     </div>
                 </article>
 
+            </div>
+
+            <div class="analytics-grid" style="margin-top:17px">
+                <article class="card">
+                    <div class="card-header"><div><h3>Three-hour Summaries</h3><p>Aggregated wearable readings</p></div><span class="badge" id="summaryCountBadge">0 periods</span></div>
+                    <ul id="summaryList" class="muted small" style="padding-left:20px"><li>No summary periods available yet.</li></ul>
+                </article>
+                <article class="card">
+                    <div class="card-header"><div><h3>High-stress Events</h3><p>Experimental model event history</p></div><span class="badge" id="highStressCountBadge">0 events</span></div>
+                    <ul id="highStressEventList" class="muted small" style="padding-left:20px"><li>No high-stress events recorded.</li></ul>
+                </article>
             </div>
 
         </section>
@@ -2655,6 +2686,7 @@ let sensorHistory = [];
 let apiRecoveryHistory = [];
 let hasRemoteRecoveryHistory = false;
 let dashboardOverview = null;
+let backendRefreshTimer = null;
 let apiRefreshInProgress = false;
 
 function hasPrivateApiAccess() {
@@ -2795,7 +2827,7 @@ async function configureFirebaseAuthentication() {
             status.textContent = "Secure Google sign-in is ready. Your private data is loaded only after authentication.";
         }
 
-        authSdk.onAuthStateChanged(firebaseAuth, async user => {
+        authSdk.onIdTokenChanged(firebaseAuth, async user => {
 
             if (!user) {
 
@@ -3263,6 +3295,60 @@ function applyDashboardData(overview, history, settings, recovery) {
     drawAllCharts();
 }
 
+function renderDeviceManagement(payload) {
+    const list = $("pairedDeviceList"); if (!list) return;
+    list.replaceChildren(); const devices = Array.isArray(payload?.devices) ? payload.devices : [];
+    if (!devices.length) { const empty = document.createElement("p"); empty.className="muted small"; empty.textContent="No devices paired to this account."; list.appendChild(empty); return; }
+    devices.forEach(device => {
+        const row=document.createElement("div"); row.className="status-row";
+        const info=document.createElement("div"); const name=document.createElement("strong"); name.textContent=device.device_name || device.device_id;
+        const id=document.createElement("p"); id.className="muted small"; id.textContent=device.device_id; info.append(name,id);
+        const controls=document.createElement("div"); controls.style.display="flex"; controls.style.gap="8px";
+        const badge=document.createElement("span"); badge.className="badge"; badge.textContent=device.active ? "Paired" : "Inactive"; controls.appendChild(badge);
+        if (device.active) { const btn=document.createElement("button"); btn.type="button"; btn.className="danger-btn"; btn.textContent="Unpair";
+            btn.addEventListener("click", async () => { btn.disabled=true; try { await apiRequest("/api/devices/"+encodeURIComponent(device.device_id),{method:"DELETE"}); showToast("Device unpaired."); await refreshBackendData(); } catch(e) { btn.disabled=false; showToast("Unpair failed: "+e.message); } }); controls.appendChild(btn); }
+        row.append(info,controls); list.appendChild(row);
+    });
+}
+
+function renderBaselineStatus(payload) {
+    const base=payload?.baseline || null; const badge=$("baselineStatusBadge"); if (!badge) return;
+    $("baselineStatusText").textContent = base ? (Number(base.sample_count||0)+" eligible wearable readings used.") : "Need at least 10 good/moderate wearable readings from the last 10 minutes.";
+    badge.textContent = base ? "Calibrated" : "Not calibrated";
+    $("baselineCalibratedAt").textContent = base?.calibrated_at ? "Last calibrated: "+formatReadingTime(base.calibrated_at) : "No calibration recorded.";
+}
+
+function renderAnalyticsRecords(summaryPayload,eventPayload) {
+    const summaries=Array.isArray(summaryPayload?.summaries)?summaryPayload.summaries:[];
+    const events=Array.isArray(eventPayload?.events)?eventPayload.events:[];
+    $("summaryCountBadge").textContent=summaries.length+" periods"; $("highStressCountBadge").textContent=events.length+" events";
+    const sl=$("summaryList"); sl.replaceChildren();
+    if (!summaries.length) { const li=document.createElement("li"); li.textContent="No completed three-hour periods yet."; sl.appendChild(li); }
+    summaries.forEach(x=>{ const li=document.createElement("li"); li.textContent=(x.period_end?formatReadingTime(x.period_end):"Unknown time")+" · "+(x.reliable_reading_count||0)+"/"+(x.reading_count||0)+" reliable readings · HR "+(x.avg_heart_rate==null?"--":displayValue(x.avg_heart_rate))+" BPM · HRV "+(x.avg_hrv==null?"--":displayValue(x.avg_hrv,1))+" ms"; sl.appendChild(li); });
+    const el=$("highStressEventList"); el.replaceChildren();
+    if (!events.length) { const li=document.createElement("li"); li.textContent="No high-stress events recorded."; el.appendChild(li); }
+    events.forEach(x=>{ const li=document.createElement("li"); const p=Number(x.stress_probability); li.textContent=(x.occurred_at?formatReadingTime(x.occurred_at):"Unknown time")+" · "+(Number.isFinite(p)?Math.round(p*100)+"% model probability":"Probability unavailable"); el.appendChild(li); });
+}
+
+$("pairDeviceBtn").addEventListener("click",async()=>{
+    if(!hasPrivateApiAccess()){showToast("Sign in before pairing a device.");return;}
+    const deviceId=$("deviceIdInput").value.trim(), deviceName=$("deviceNameInput").value.trim();
+    if(!/^[A-Za-z0-9_.-]{3,80}$/.test(deviceId)||!deviceName||deviceName.length>80){showToast("Enter a valid device ID and name.");return;}
+    const btn=$("pairDeviceBtn");btn.disabled=true;
+    try{const result=await apiRequest("/api/devices/pair",{method:"POST",body:JSON.stringify({device_id:deviceId,device_name:deviceName})});
+        $("deviceTokenValue").textContent=result.device_token||"";$("deviceTokenPanel").classList.remove("hidden");showToast("Device paired. Copy the one-time token now.");await refreshBackendData();
+    }catch(e){showToast("Pairing failed: "+e.message);}finally{btn.disabled=false;}
+});
+
+$("copyDeviceTokenBtn").addEventListener("click",async()=>{const token=$("deviceTokenValue").textContent;if(!token)return;try{await navigator.clipboard.writeText(token);showToast("Device token copied. Keep it secret.");}catch(e){showToast("Clipboard unavailable. Select and copy the token manually.");}});
+
+$("calibrateBaselineBtn").addEventListener("click",async()=>{
+    if(!hasPrivateApiAccess()){showToast("Sign in before calibration.");return;}
+    const btn=$("calibrateBaselineBtn");btn.disabled=true;btn.textContent="Calibrating...";
+    try{const result=await apiRequest("/api/baseline/calibrate?lookback_minutes=10",{method:"POST"});renderBaselineStatus({baseline:result.baseline});showToast("Baseline calibrated using "+result.baseline.sample_count+" readings.");await refreshBackendData();}
+    catch(e){showToast("Baseline calibration failed: "+e.message);}finally{btn.disabled=false;btn.textContent="Calibrate baseline · last 10 minutes";}
+});
+
 async function refreshBackendData() {
     if (apiRefreshInProgress) return;
     apiRefreshInProgress = true;
@@ -3307,7 +3393,11 @@ async function refreshBackendData() {
             apiRequest("/api/dashboard/overview"),
             apiRequest("/api/sensors/history?limit=100"),
             apiRequest("/api/settings"),
-            apiRequest("/api/recovery/history?limit=50")
+            apiRequest("/api/recovery/history?limit=50"),
+            apiRequest("/api/devices"),
+            apiRequest("/api/baseline"),
+            apiRequest("/api/summaries?limit=20"),
+            apiRequest("/api/events/high-stress?limit=20")
         ]);
 
         const failed = results.find(result => result.status === "rejected");
@@ -3325,10 +3415,13 @@ async function refreshBackendData() {
             throw error;
         }
 
-        const [overview, history, settings, recovery] =
+        const [overview, history, settings, recovery, devices, baseline, summaries, events] =
             results.map(result => result.value);
 
         applyDashboardData(overview, history, settings, recovery);
+        renderDeviceManagement(devices);
+        renderBaselineStatus(baseline);
+        renderAnalyticsRecords(summaries, events);
 
         setApiBanner(
             "LIVE BACKEND DATA",
@@ -4743,6 +4836,14 @@ $("musicFileInput").addEventListener("change", event => {
 
     showToast("Audio loaded locally. Press play to listen.");
 
+});
+
+
+$("relaxationAudio").addEventListener("ended", () => {
+    const audio = $("relaxationAudio");
+    const duration = Number.isFinite(audio.duration) ? Math.max(1, Math.round(audio.duration)) : 1;
+    recordRecoverySession("Music", duration);
+    showToast("Music session completed and recorded.");
 });
 
 
