@@ -1238,3 +1238,90 @@ def test_sensor_history_rejects_limit_above_maximum(client):
 
     assert response.status_code == 422
 
+
+
+
+def test_demo_authentication_is_disabled_outside_development(client, monkeypatch):
+    """API Test 7a: X-Demo-User must not authenticate production requests."""
+    monkeypatch.setattr(api, "APP_ENV", "production")
+
+    response = client.get(
+        "/api/settings",
+        headers={"X-Demo-User": "neurosense-production-user"},
+    )
+
+    assert response.status_code == 503
+    assert "Firebase authentication" in response.json()["detail"]
+
+
+def test_firebase_bearer_token_uses_verified_uid(client, monkeypatch):
+    """API Test 7b: Firebase Bearer auth maps verified claims to the user ID."""
+    fake_firebase_app = object()
+    monkeypatch.setattr(api, "FIREBASE_APP", fake_firebase_app)
+
+    def fake_verify_id_token(token, check_revoked, app):
+        assert token == "unit-test-firebase-id-token"
+        assert check_revoked is True
+        assert app is fake_firebase_app
+        return {"uid": "firebase-user-from-claims"}
+
+    monkeypatch.setattr(
+        api.firebase_auth,
+        "verify_id_token",
+        fake_verify_id_token,
+    )
+
+    response = client.get(
+        "/api/settings",
+        headers={
+            "Authorization": "Bearer unit-test-firebase-id-token",
+            "X-Demo-User": "must-not-override-firebase-uid",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["haptic_enabled"] is False
+
+
+def test_invalid_firebase_bearer_token_is_rejected(client, monkeypatch):
+    """API Test 7c: failed Firebase token verification returns 401."""
+    monkeypatch.setattr(api, "FIREBASE_APP", object())
+
+    def reject_token(*args, **kwargs):
+        raise ValueError("Invalid test token")
+
+    monkeypatch.setattr(
+        api.firebase_auth,
+        "verify_id_token",
+        reject_token,
+    )
+
+    response = client.get(
+        "/api/settings",
+        headers={"Authorization": "Bearer invalid-unit-test-token"},
+    )
+
+    assert response.status_code == 401
+    assert "Invalid or expired" in response.json()["detail"]
+
+
+def test_device_token_is_stored_as_sha256_digest_not_plaintext(client):
+    """API Test 7d: device pairing must persist only a token digest."""
+    user_id = "neurosense-device-token-storage-user"
+    paired = pair_test_device(
+        client,
+        user_id,
+        "neurosense-token-hash-device",
+    )
+    token = paired["device_token"]
+
+    with api.db_connection() as db:
+        row = db.execute(
+            "SELECT token_hash FROM devices WHERE device_id = ?",
+            ("neurosense-token-hash-device",),
+        ).fetchone()
+
+    assert row is not None
+    stored_digest = row["token_hash"]
+    assert stored_digest != token
+    assert len(stored_digest) == 64
