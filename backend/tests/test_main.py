@@ -525,3 +525,159 @@ def test_unpaired_device_token_can_no_longer_upload_readings(client):
     )
     assert device_status.status_code == 200
     assert device_status.json()["connected"] is False
+
+
+
+def post_wearable_reading(
+    client,
+    user_id,
+    heart_rate_bpm=72,
+    hrv_ms=40,
+    gsr_raw=1600,
+    skin_temperature_c=33.0,
+    signal_quality="good",
+    timestamp=None,
+):
+    """Create one clearly labelled wearable test reading."""
+    from datetime import datetime, timezone
+
+    payload = {
+        "heart_rate_bpm": heart_rate_bpm,
+        "hrv_ms": hrv_ms,
+        "gsr_raw": gsr_raw,
+        "skin_temperature_c": skin_temperature_c,
+        "signal_quality": signal_quality,
+        "source": "wearable",
+    }
+    if timestamp is not None:
+        payload["timestamp"] = timestamp
+    else:
+        payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    return client.post(
+        "/api/sensors",
+        json=payload,
+        headers={"X-Demo-User": user_id},
+    )
+
+
+def add_ten_wearable_readings(client, user_id):
+    """Provide the minimum 10 recent reliable samples for baseline tests."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    responses = []
+
+    for index in range(10):
+        timestamp = (now - timedelta(seconds=index)).isoformat()
+        response = post_wearable_reading(
+            client,
+            user_id,
+            heart_rate_bpm=70 + index,
+            hrv_ms=40 + index,
+            gsr_raw=1500 + (index * 10),
+            skin_temperature_c=33.0 + (index * 0.1),
+            timestamp=timestamp,
+        )
+        responses.append(response)
+
+    assert all(response.status_code == 201 for response in responses)
+
+
+def test_baseline_calibration_rejects_fewer_than_ten_readings(client):
+    """API Test 4a: baseline requires at least 10 reliable wearable readings."""
+    user_id = "neurosense-baseline-insufficient"
+    post_wearable_reading(client, user_id)
+
+    response = client.post(
+        "/api/baseline/calibrate",
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 422
+    assert "at least 10" in response.json()["detail"].lower()
+
+
+def test_baseline_calibration_saves_and_returns_personal_baseline(client):
+    """API Test 4b: ten recent readings produce a retrievable baseline."""
+    user_id = "neurosense-baseline-success"
+    add_ten_wearable_readings(client, user_id)
+
+    calibrated = client.post(
+        "/api/baseline/calibrate",
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert calibrated.status_code == 200
+    assert calibrated.json()["success"] is True
+    baseline = calibrated.json()["baseline"]
+    assert baseline["sample_count"] == 10
+    assert baseline["heart_rate_bpm"] is not None
+    assert baseline["hrv_ms"] is not None
+    assert baseline["gsr_raw"] is not None
+
+    fetched = client.get(
+        "/api/baseline",
+        headers={"X-Demo-User": user_id},
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["available"] is True
+    assert fetched.json()["baseline"]["sample_count"] == 10
+
+
+def test_stress_prediction_api_uses_baseline_and_records_high_stress_event(
+    client,
+    monkeypatch,
+):
+    """API Test 4c: exercise stress API contract with deterministic mock inference."""
+    user_id = "neurosense-stress-api-user"
+    add_ten_wearable_readings(client, user_id)
+
+    calibrated = client.post(
+        "/api/baseline/calibrate",
+        headers={"X-Demo-User": user_id},
+    )
+    assert calibrated.status_code == 200
+
+    class DeterministicStressModel:
+        classes_ = ["baseline", "stress"]
+
+        def predict_proba(self, matrix):
+            assert matrix.shape == (1, 8)
+            return [[0.20, 0.80]]
+
+    monkeypatch.setattr(
+        api,
+        "STRESS_MODEL",
+        DeterministicStressModel(),
+    )
+
+    reading = post_wearable_reading(
+        client,
+        user_id,
+        heart_rate_bpm=92,
+        hrv_ms=24,
+        gsr_raw=2300,
+        skin_temperature_c=33.5,
+    )
+    assert reading.status_code == 201
+
+    stress = client.get(
+        "/api/stress/latest",
+        headers={"X-Demo-User": user_id},
+    )
+    assert stress.status_code == 200
+    body = stress.json()
+
+    assert body["status"] == "prediction_available"
+    assert body["stress_score"] == 80.0
+    assert body["stress_probability"] == 0.8
+    assert body["model_validated"] is False
+
+    events = client.get(
+        "/api/events/high-stress",
+        headers={"X-Demo-User": user_id},
+    )
+    assert events.status_code == 200
+    assert events.json()["total"] == 1
+    assert events.json()["events"][0]["stress_probability"] == 0.8
