@@ -16,6 +16,54 @@ from fastapi.testclient import TestClient
 from backend import main as api
 
 
+class FakeFirestoreSnapshot:
+    def __init__(self, document_id, payload):
+        self.id = document_id
+        self._payload = payload
+
+    def to_dict(self):
+        return dict(self._payload)
+
+
+class FakeFirestoreCollection:
+    def __init__(self, documents, operations):
+        self.documents = documents
+        self.operations = operations
+
+    def collection(self, name):
+        self.operations.append(("collection", name))
+        return self
+
+    def document(self, name):
+        self.operations.append(("document", name))
+        return self
+
+    def order_by(self, field, direction=None):
+        self.operations.append(("order_by", field, direction))
+        return self
+
+    def limit(self, count):
+        self.operations.append(("limit", count))
+        return self
+
+    def stream(self):
+        self.operations.append(("stream",))
+        return self.documents
+
+
+class FakeFirestoreClient:
+    def __init__(self, documents):
+        self.documents = documents
+        self.operations = []
+
+    def collection(self, name):
+        self.operations.append(("collection", name))
+        return FakeFirestoreCollection(
+            self.documents,
+            self.operations
+        )
+
+
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     """Start the API with an isolated test database and no cloud services."""
@@ -62,6 +110,72 @@ def test_system_status_endpoint(client):
 
     assert body["backend"] == "online"
     assert body["database"] == "sqlite"
+
+
+def test_firestore_collection_reader_accepts_user_subcollection_path(monkeypatch):
+    """Firestore collection paths have odd segment counts: collection/document/collection."""
+    payload = {
+        "id": "cloud-reading-1",
+        "timestamp": "2026-11-08T10:00:00+00:00",
+        "source": "wearable",
+        "heart_rate_bpm": 74.0,
+    }
+    fake_document = FakeFirestoreSnapshot("cloud-reading-1", payload)
+    fake_client = FakeFirestoreClient([fake_document])
+    monkeypatch.setattr(api, "FIRESTORE_CLIENT", fake_client)
+
+    rows = api.firestore_read_collection(
+        ("users", "firebase-user-1", "sensor_readings"),
+        limit=25,
+    )
+
+    assert rows == [{**payload, "document_id": "cloud-reading-1"}]
+    assert fake_client.operations[:3] == [
+        ("collection", "users"),
+        ("document", "firebase-user-1"),
+        ("collection", "sensor_readings"),
+    ]
+    assert ("limit", 25) in fake_client.operations
+    assert ("stream",) in fake_client.operations
+
+
+def test_sensor_history_restores_firestore_backup_when_sqlite_is_empty(
+    client,
+    monkeypatch,
+):
+    """Sensor history should return a user's Firestore backup after an empty SQLite store."""
+    user_id = "firestore-backup-history-user"
+    cloud_reading = {
+        "id": "firestore-reading-1",
+        "timestamp": "2026-11-08T10:00:00+00:00",
+        "received_at": "2026-11-08T10:00:01+00:00",
+        "source": "wearable",
+        "signal_quality": "good",
+        "heart_rate_bpm": 73.0,
+        "hrv_ms": 41.0,
+        "gsr_raw": 1800,
+        "skin_temperature_c": 33.1,
+        "ibi_ms": [810.0, 820.0],
+    }
+    fake_document = FakeFirestoreSnapshot(
+        "firestore-reading-1",
+        cloud_reading,
+    )
+    fake_client = FakeFirestoreClient([fake_document])
+    monkeypatch.setattr(api, "FIRESTORE_CLIENT", fake_client)
+
+    response = client.get(
+        "/api/sensors/history?limit=10",
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["readings"][0]["id"] == "firestore-reading-1"
+    assert body["readings"][0]["heart_rate_bpm"] == 73.0
+    assert ("document", user_id) in fake_client.operations
+    assert ("collection", "sensor_readings") in fake_client.operations
 
 
 def test_public_firebase_config_is_unavailable_without_configuration(client):
