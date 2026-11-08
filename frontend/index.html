@@ -879,6 +879,24 @@
             gap: 17px;
         }
 
+        .camera-warning {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin: 0 0 13px;
+            padding: 12px 14px;
+            color: var(--yellow);
+            background: rgba(231,182,91,.09);
+            border: 1px solid rgba(231,182,91,.3);
+            border-radius: 10px;
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .camera-warning strong {
+            color: var(--yellow);
+        }
+
         .camera-frame {
             width: 100%;
             min-height: 290px;
@@ -1593,12 +1611,12 @@
 
         <section id="page-dashboard" class="page active">
 
-            <div class="demo-banner">
+            <div id="apiStatusBanner" class="demo-banner" role="status" aria-live="polite">
                 <span>
-                    <strong>PREVIEW DATA</strong> ·
-                    All displayed readings and graphs are simulated.
+                    <strong id="apiStatusTitle">CONNECTING TO BACKEND</strong> ·
+                    <span id="apiStatusText">Checking NeuroSense API status...</span>
                 </span>
-                <span>ESP32: Not connected</span>
+                <button id="refreshDataBtn" class="secondary-btn" type="button">Refresh data</button>
             </div>
 
             <div class="dashboard-heading-row">
@@ -1632,11 +1650,11 @@
                     </div>
 
                     <div class="metric-value">
-                        <span id="heartRateValue">76</span>
+                        <span id="heartRateValue">--</span>
                         <span class="metric-unit">BPM</span>
                     </div>
 
-                    <div class="metric-foot">Sample PPG reading</div>
+                    <div id="heartRateFoot" class="metric-foot">No wearable reading yet</div>
 
                 </article>
 
@@ -1649,11 +1667,11 @@
                     </div>
 
                     <div class="metric-value">
-                        <span id="hrvValue">42</span>
+                        <span id="hrvValue">--</span>
                         <span class="metric-unit">ms</span>
                     </div>
 
-                    <div class="metric-foot">Sample HRV reading</div>
+                    <div id="hrvFoot" class="metric-foot">No wearable reading yet</div>
 
                 </article>
 
@@ -1666,11 +1684,11 @@
                     </div>
 
                     <div class="metric-value">
-                        <span id="gsrValue">1850</span>
+                        <span id="gsrValue">--</span>
                         <span class="metric-unit">raw</span>
                     </div>
 
-                    <div class="metric-foot">Sample sensor value</div>
+                    <div id="gsrFoot" class="metric-foot">No wearable reading yet</div>
 
                 </article>
 
@@ -1683,11 +1701,11 @@
                     </div>
 
                     <div class="metric-value">
-                        <span id="temperatureValue">33.2</span>
+                        <span id="temperatureValue">--</span>
                         <span class="metric-unit">°C</span>
                     </div>
 
-                    <div class="metric-foot">Sample value · Not core temperature</div>
+                    <div id="temperatureFoot" class="metric-foot">No wearable reading yet</div>
 
                 </article>
 
@@ -1705,16 +1723,16 @@
                         <div class="card-header">
                             <div>
                                 <h3>Heart Rate Trend</h3>
-                                <p>Sample BPM readings over time</p>
+                                <p>Recorded wearable measurements</p>
                             </div>
 
-                            <span class="badge">Demo chart</span>
+                            <span class="badge" id="heartChartStatus">Waiting for data</span>
                         </div>
 
                         <div class="chart-wrap">
                             <canvas id="heartChart"
                                     role="img"
-                                    aria-label="Sample heart rate trend chart"></canvas>
+                                    aria-label="Wearable heart rate trend chart"></canvas>
                         </div>
 
                         <div class="chart-legend">
@@ -1733,16 +1751,16 @@
                         <div class="card-header">
                             <div>
                                 <h3>HRV Trend</h3>
-                                <p>Sample HRV readings over time</p>
+                                <p>Recorded wearable measurements</p>
                             </div>
 
-                            <span class="badge">Demo chart</span>
+                            <span class="badge" id="hrvChartStatus">Waiting for data</span>
                         </div>
 
                         <div class="chart-wrap">
                             <canvas id="hrvChart"
                                     role="img"
-                                    aria-label="Sample HRV trend chart"></canvas>
+                                    aria-label="Wearable HRV trend chart"></canvas>
                         </div>
 
                         <div class="chart-legend">
@@ -1767,29 +1785,24 @@
                         <div class="card-header">
                             <div>
                                 <h3>Estimated Stress Score</h3>
-                                <p>Illustrative preview only</p>
+                                <p>Latest backend model estimate</p>
                             </div>
-                            <span class="badge">Simulated</span>
+                            <span class="badge" id="stressStatusBadge">No estimate</span>
                         </div>
 
                         <div class="stress-layout">
 
-                            <div class="stress-ring"
-                                 style="--score:67">
-
+                            <div id="stressRing" class="stress-ring" style="--score:0">
                                 <div class="stress-ring-content">
-                                    <strong>67</strong>
+                                    <strong id="stressScoreValue">--</strong>
                                     <span>/100</span>
                                 </div>
-
                             </div>
 
                             <div class="stress-description">
-                                <strong>Demo score</strong>
-                                <p>
-                                    Not produced by a trained model.
-                                    Actual stress estimation is pending
-                                    ML integration and validation.
+                                <strong id="stressSummary">Waiting for wearable data</strong>
+                                <p id="stressDescription">
+                                    A stress estimate appears only when the backend has suitable wearable data, a personal baseline and an available model.
                                 </p>
                             </div>
 
@@ -1797,14 +1810,12 @@
 
                         <div class="status-row">
                             <span>ML model</span>
-                            <span class="badge">
-                                Not integrated
-                            </span>
+                            <span class="badge" id="dashboardModelStatus">Checking</span>
                         </div>
 
                         <div class="status-row">
                             <span>Signal quality</span>
-                            <span class="badge">Sample only</span>
+                            <span class="badge" id="signalQualityStatus">No reading</span>
                         </div>
 
                     </article>
@@ -1821,19 +1832,17 @@
 
                         <div class="status-row">
                             <span>ESP32 device</span>
-                            <span style="color:var(--red)">
-                                ● Offline
-                            </span>
+                            <span id="deviceConnectionStatus">Unknown</span>
                         </div>
 
                         <div class="status-row">
-                            <span>Wi-Fi communication</span>
-                            <span>Not connected</span>
+                            <span>Device communication</span>
+                            <span id="deviceCommunicationStatus">Checking</span>
                         </div>
 
                         <div class="status-row">
                             <span>Last received reading</span>
-                            <span>None</span>
+                            <span id="lastReadingAt">None</span>
                         </div>
 
                     </article>
@@ -1898,26 +1907,24 @@
                 <div class="eyebrow">Performance overview</div>
                 <h1 class="section-title">Analytics</h1>
                 <p class="section-subtitle">
-                    Explore sample physiological trends. These charts
-                    are illustrative until real wearable data is connected.
+                    Explore timestamped physiological readings returned by the NeuroSense backend.
                 </p>
             </div>
 
-            <div class="demo-banner">
-                <span><strong>SIMULATED ANALYTICS</strong> · Not actual measurements.</span>
-                <span>ML validation pending</span>
+            <div id="analyticsStatusBanner" class="demo-banner" role="status">
+                <span><strong>BACKEND DATA</strong> · <span id="analyticsStatusText">Waiting for authenticated readings.</span></span>
             </div>
 
             <div class="analytics-summary">
 
                 <article class="card">
-                    <div class="muted small">Sample Average HR</div>
-                    <div class="summary-value">76 BPM</div>
+                    <div class="muted small">Average Heart Rate</div>
+                    <div class="summary-value" id="averageHeartRate">-- BPM</div>
                 </article>
 
                 <article class="card">
-                    <div class="muted small">Sample Average HRV</div>
-                    <div class="summary-value">42 ms</div>
+                    <div class="muted small">Average HRV</div>
+                    <div class="summary-value" id="averageHrv">-- ms</div>
                 </article>
 
                 <article class="card">
@@ -1933,14 +1940,14 @@
                     <div class="card-header">
                         <div>
                             <h3>Heart Rate History</h3>
-                            <p>Sample BPM trend</p>
+                            <p>Backend wearable history</p>
                         </div>
-                        <span class="badge">Preview</span>
+                        <span class="badge" id="analyticsHeartStatus">No data</span>
                     </div>
                     <div class="chart-wrap">
                         <canvas id="analyticsHeartChart"
                                 role="img"
-                                aria-label="Sample heart rate history chart"></canvas>
+                                aria-label="Wearable heart rate history chart"></canvas>
                     </div>
                 </article>
 
@@ -1948,14 +1955,14 @@
                     <div class="card-header">
                         <div>
                             <h3>HRV History</h3>
-                            <p>Sample millisecond trend</p>
+                            <p>Backend wearable history</p>
                         </div>
-                        <span class="badge">Preview</span>
+                        <span class="badge" id="analyticsHrvStatus">No data</span>
                     </div>
                     <div class="chart-wrap">
                         <canvas id="analyticsHrvChart"
                                 role="img"
-                                aria-label="Sample HRV history chart"></canvas>
+                                aria-label="Wearable HRV history chart"></canvas>
                     </div>
                 </article>
 
@@ -1963,13 +1970,13 @@
                     <div class="card-header">
                         <div>
                             <h3>GSR Samples</h3>
-                            <p>Illustrative raw sensor data</p>
+                            <p>Backend wearable history</p>
                         </div>
                     </div>
                     <div class="chart-wrap">
                         <canvas id="analyticsGsrChart"
                                 role="img"
-                                aria-label="Sample GSR history chart"></canvas>
+                                aria-label="Wearable GSR history chart"></canvas>
                     </div>
                 </article>
 
@@ -1977,13 +1984,13 @@
                     <div class="card-header">
                         <div>
                             <h3>Skin Temperature Samples</h3>
-                            <p>Illustrative surface temperature data</p>
+                            <p>Backend wearable history · surface temperature</p>
                         </div>
                     </div>
                     <div class="chart-wrap">
                         <canvas id="analyticsTempChart"
                                 role="img"
-                                aria-label="Sample skin temperature chart"></canvas>
+                                aria-label="Wearable skin temperature history chart"></canvas>
                     </div>
                 </article>
 
@@ -2021,6 +2028,11 @@
                             <span class="dot red"></span>
                             Camera OFF
                         </span>
+                    </div>
+
+                    <div class="camera-warning" role="note">
+                        <span aria-hidden="true">⚠</span>
+                        <span><strong>Lighting tip:</strong> For best face detection, sit in a well-lit place and face the camera. Low light, strong backlighting or shadows may reduce landmark detection reliability.</span>
                     </div>
 
                     <div class="camera-frame">
@@ -2486,17 +2498,17 @@
 
                     <div class="status-row">
                         <span>Backend API</span>
-                        <span>Not connected</span>
+                        <span id="settingsBackendStatus">Checking</span>
                     </div>
 
                     <div class="status-row">
                         <span>Firebase</span>
-                        <span>Not configured</span>
+                        <span id="settingsFirebaseStatus">Checking</span>
                     </div>
 
                     <div class="status-row">
                         <span>ML model</span>
-                        <span>Not integrated</span>
+                        <span id="settingsModelStatus">Checking</span>
                     </div>
 
                     <div class="status-row">
