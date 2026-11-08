@@ -1914,3 +1914,104 @@ def test_model_features_preserve_valid_zero_measurement():
     assert features["hrv_delta"] == -10.0
     assert features["gsr_delta"] == -100.0
     assert api.np.isnan(features["skin_temperature_c"])
+
+
+def test_haptic_command_status_reports_pending_delivered_and_acknowledged(client):
+    """A user can inspect only their own haptic command lifecycle."""
+    user_id = "neurosense-haptic-status-user"
+    other_user = "neurosense-haptic-status-other"
+    device_id = "neurosense-haptic-status-device"
+    paired = pair_test_device(client, user_id, device_id)
+    user_headers = {"X-Demo-User": user_id}
+
+    client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=user_headers,
+    )
+    created = client.post(
+        "/api/haptic/commands",
+        json={"device_id": device_id, "duration_ms": 1000},
+        headers=user_headers,
+    )
+    assert created.status_code == 201
+    command_id = created.json()["command_id"]
+
+    own_pending = client.get(
+        "/api/haptic/commands/" + command_id,
+        headers=user_headers,
+    )
+    assert own_pending.status_code == 200
+    assert own_pending.json()["status"] == "pending"
+
+    other_access = client.get(
+        "/api/haptic/commands/" + command_id,
+        headers={"X-Demo-User": other_user},
+    )
+    assert other_access.status_code == 404
+
+    polled = client.get(
+        "/api/devices/" + device_id + "/commands",
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert polled.status_code == 200
+    assert len(polled.json()["commands"]) == 1
+
+    delivered = client.get(
+        "/api/haptic/commands/" + command_id,
+        headers=user_headers,
+    )
+    assert delivered.status_code == 200
+    assert delivered.json()["status"] == "delivered"
+
+    ack = client.post(
+        "/api/devices/" + device_id + "/commands/" + command_id + "/ack",
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert ack.status_code == 200
+
+    acknowledged = client.get(
+        "/api/haptic/commands/" + command_id,
+        headers=user_headers,
+    )
+    assert acknowledged.status_code == 200
+    assert acknowledged.json()["status"] == "acknowledged"
+
+
+def test_haptic_command_older_than_sixty_seconds_is_not_delivered(client):
+    """Stale queued haptic commands expire rather than firing much later."""
+    user_id = "neurosense-haptic-expiry-user"
+    device_id = "neurosense-haptic-expiry-device"
+    paired = pair_test_device(client, user_id, device_id)
+    headers = {"X-Demo-User": user_id}
+    client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=headers,
+    )
+    created = client.post(
+        "/api/haptic/commands",
+        json={"device_id": device_id, "duration_ms": 1000},
+        headers=headers,
+    )
+    command_id = created.json()["command_id"]
+
+    with api.db_connection() as db:
+        db.execute(
+            "UPDATE haptic_commands SET created_at = ? WHERE command_id = ?",
+            ("2000-01-01T00:00:00+00:00", command_id),
+        )
+
+    polled = client.get(
+        "/api/devices/" + device_id + "/commands",
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert polled.status_code == 200
+    assert polled.json()["commands"] == []
+
+    status = client.get(
+        "/api/haptic/commands/" + command_id,
+        headers=headers,
+    )
+    assert status.status_code == 200
+    assert status.json()["status"] == "expired"

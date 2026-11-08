@@ -2200,6 +2200,18 @@
                 </p>
             </div>
 
+            <article class="card" style="margin-bottom:17px">
+                <div class="card-header">
+                    <div><h3>Recovery Sequence</h3><p>Complete the steps in order: Breathing → Music → Haptic</p></div>
+                    <span class="badge" id="recoverySequenceBadge">Step 1 of 3</span>
+                </div>
+                <div class="status-row"><span>1. Guided breathing</span><span id="recoveryStepBreathing">Next</span></div>
+                <div class="status-row"><span>2. Relaxation music</span><span id="recoveryStepMusic">Locked</span></div>
+                <div class="status-row"><span>3. Haptic feedback</span><span id="recoveryStepHaptic">Locked</span></div>
+                <p id="recoverySequenceStatus" class="muted small" aria-live="polite">Start and complete the breathing exercise to unlock music.</p>
+                <button id="resetRecoverySequenceBtn" class="secondary-btn" type="button">Reset recovery sequence</button>
+            </article>
+
             <div class="recovery-grid">
 
                 <article class="card breathing-panel">
@@ -4651,12 +4663,90 @@ let breathingElapsed = 0;
 let breathingStartedAt = 0;
 const breathingDuration = 56; // Four complete 14-second breathing cycles.
 const breathingTickMs = 100;
+let recoverySequence = readLocal("neurosense_recovery_sequence", {
+    breathing: false,
+    music: false,
+    haptic: false
+});
 
 const breathingPhases = [
     { name: "Breathe in", duration: 4, phase: "inhale" },
     { name: "Hold gently", duration: 4, phase: "hold" },
     { name: "Breathe out", duration: 6, phase: "exhale" }
 ];
+
+
+function persistRecoverySequence() {
+    writeLocal("neurosense_recovery_sequence", recoverySequence);
+    renderRecoverySequence();
+    updateHapticUI();
+}
+
+
+function renderRecoverySequence() {
+    const badge = $("recoverySequenceBadge");
+    const status = $("recoverySequenceStatus");
+    if (!badge || !status) return;
+
+    const stepLabel = done => done ? "Completed" : "Locked";
+    $("recoveryStepBreathing").textContent = recoverySequence.breathing ? "Completed" : "Next";
+    $("recoveryStepMusic").textContent = recoverySequence.music ? "Completed" : (recoverySequence.breathing ? "Next" : "Locked");
+    $("recoveryStepHaptic").textContent = recoverySequence.haptic ? "Completed" : (recoverySequence.music ? "Next" : "Locked");
+
+    if (recoverySequence.haptic) {
+        badge.textContent = "Complete";
+        status.textContent = "All three recovery steps were completed in order.";
+    } else if (!recoverySequence.breathing) {
+        badge.textContent = "Step 1 of 3";
+        status.textContent = "Start and complete the breathing exercise to unlock music.";
+    } else if (!recoverySequence.music) {
+        badge.textContent = "Step 2 of 3";
+        status.textContent = "Breathing completed. Select and finish a relaxation music track to unlock haptic feedback.";
+    } else {
+        badge.textContent = "Step 3 of 3";
+        status.textContent = "Music completed. Enable haptics and connect the paired ESP32 to finish the sequence.";
+    }
+
+    const musicInput = $("musicFileInput");
+    const audio = $("relaxationAudio");
+    if (musicInput) musicInput.disabled = !recoverySequence.breathing || recoverySequence.music;
+    if (audio) audio.controls = recoverySequence.breathing && !recoverySequence.music;
+
+    const hapticButton = $("sendHapticTestBtn");
+    if (hapticButton) {
+        hapticButton.disabled = !recoverySequence.music || recoverySequence.haptic ||
+            !hapticEnabled || !hasPrivateApiAccess();
+        hapticButton.textContent = recoverySequence.haptic
+            ? "Recovery sequence complete"
+            : "Queue haptic recovery step · 1000 ms";
+    }
+}
+
+
+function completeRecoveryStep(step) {
+    if (step === "breathing") {
+        recoverySequence = { breathing: true, music: false, haptic: false };
+    } else if (step === "music" && recoverySequence.breathing) {
+        recoverySequence.music = true;
+        recoverySequence.haptic = false;
+    } else if (step === "haptic" && recoverySequence.music) {
+        recoverySequence.haptic = true;
+    }
+    persistRecoverySequence();
+}
+
+
+function resetRecoverySequence() {
+    recoverySequence = { breathing: false, music: false, haptic: false };
+    persistRecoverySequence();
+    stopBreathing();
+    $("relaxationAudio").pause();
+    $("relaxationAudio").currentTime = 0;
+    showToast("Recovery sequence reset. Start again with breathing.");
+}
+
+
+$("resetRecoverySequenceBtn").addEventListener("click", resetRecoverySequence);
 
 
 function updateBreathingUI() {
@@ -4747,6 +4837,7 @@ function completeBreathingSession() {
 
     // The save function chooses backend storage only when authenticated.
     recordRecoverySession("Breathing", breathingDuration);
+    completeRecoveryStep("breathing");
 
     showToast(
         "Breathing session completed. Check Recovery History for its saved record."
@@ -4777,6 +4868,7 @@ function startBreathing() {
 
     if (breathingInterval !== null) return;
 
+    resetRecoverySequence();
     breathingElapsed = 0;
     breathingStartedAt = performance.now();
 
@@ -4844,9 +4936,14 @@ $("musicFileInput").addEventListener("change", event => {
 
 $("relaxationAudio").addEventListener("ended", () => {
     const audio = $("relaxationAudio");
+    if (!recoverySequence.breathing) {
+        showToast("Complete breathing first to follow the recovery sequence.");
+        return;
+    }
     const duration = Number.isFinite(audio.duration) ? Math.max(1, Math.round(audio.duration)) : 1;
     recordRecoverySession("Music", duration);
-    showToast("Music session completed and recorded.");
+    completeRecoveryStep("music");
+    showToast("Music session completed. Haptic is now the final step.");
 });
 
 
@@ -4928,8 +5025,8 @@ $("settingsHapticToggle").addEventListener("change", event => {
 
 
 $("sendHapticTestBtn").addEventListener("click", async () => {
-    if (!hasPrivateApiAccess() || !hapticEnabled) {
-        showToast("Sign in and enable haptic feedback first.");
+    if (!hasPrivateApiAccess() || !hapticEnabled || !recoverySequence.music) {
+        showToast("Complete breathing and music, sign in and enable haptic feedback first.");
         return;
     }
     const button = $("sendHapticTestBtn");
@@ -4949,9 +5046,29 @@ $("sendHapticTestBtn").addEventListener("click", async () => {
         }
         await apiRequest("/api/haptic/commands", {
             method: "POST",
-            body: JSON.stringify({ device_id: active.device_id, duration_ms: 500 })
+            body: JSON.stringify({ device_id: active.device_id, duration_ms: 1000 })
         });
-        showToast("500 ms haptic command queued. The ESP32 must poll and acknowledge it.");
+        showToast("1 second haptic command queued. Waiting for ESP32 acknowledgement...");
+
+        let acknowledged = false;
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const state = await apiRequest("/api/haptic/commands/" + encodeURIComponent(result.command_id));
+            if (state.status === "acknowledged") {
+                acknowledged = true;
+                completeRecoveryStep("haptic");
+                await recordRecoverySession("Haptic", 1);
+                showToast("Recovery sequence complete. ESP32 acknowledged the haptic step.");
+                break;
+            }
+            if (state.status === "expired") {
+                showToast("Haptic command expired before the ESP32 acknowledged it. Retry the final step.");
+                break;
+            }
+        }
+        if (!acknowledged) {
+            showToast("Haptic command is still awaiting acknowledgement. Keep the wearable connected and check again.");
+        }
     } catch (error) {
         showToast("Haptic command was not queued: " + error.message);
     } finally {
@@ -5135,6 +5252,7 @@ function initializeApp() {
 
     updateProfileUI();
     updateHapticUI();
+    renderRecoverySequence();
     renderHistory();
     updateAnalyticsCount();
 

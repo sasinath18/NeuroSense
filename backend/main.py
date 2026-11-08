@@ -2781,6 +2781,18 @@ def poll_device_commands(
                 ),
             )
 
+        expiry_cutoff = iso(utc_now() - timedelta(seconds=60))
+        db.execute(
+            """
+            UPDATE haptic_commands
+            SET command_status = 'expired'
+            WHERE device_id = ?
+            AND user_id = ?
+            AND command_status = 'pending'
+            AND created_at < ?
+            """,
+            (device_id, user_id, expiry_cutoff),
+        )
         rows = db.execute(
             """
             SELECT command_id, duration_ms, created_at
@@ -2788,10 +2800,11 @@ def poll_device_commands(
             WHERE device_id = ?
             AND user_id = ?
             AND command_status = 'pending'
+            AND created_at >= ?
             ORDER BY created_at ASC
             LIMIT 10
             """,
-            (device_id, user_id),
+            (device_id, user_id, expiry_cutoff),
         ).fetchall()
 
         delivered_at = iso()
@@ -2828,6 +2841,46 @@ def poll_device_commands(
         })
 
     return {"commands": response_commands}
+
+
+@app.get("/api/haptic/commands/{command_id}")
+def haptic_command_status(
+    command_id: str,
+    user_id: str = Depends(current_user_id),
+):
+    with db_connection() as db:
+        row = db.execute(
+            """
+            SELECT command_id, device_id, duration_ms, command_status,
+                   created_at, delivered_at, acknowledged_at
+            FROM haptic_commands
+            WHERE command_id = ? AND user_id = ?
+            """,
+            (command_id, user_id),
+        ).fetchone()
+
+    command = dict(row) if row is not None else None
+    if command is None:
+        command = firestore_read_document(
+            ("users", user_id, "haptic_commands"),
+            command_id,
+        )
+
+    if command is None or str(command.get("user_id") or user_id) != user_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Haptic command not found for this account."
+        )
+
+    return {
+        "command_id": command_id,
+        "device_id": command.get("device_id"),
+        "duration_ms": command.get("duration_ms"),
+        "status": command.get("command_status", "unknown"),
+        "created_at": command.get("created_at"),
+        "delivered_at": command.get("delivered_at"),
+        "acknowledged_at": command.get("acknowledged_at"),
+    }
 
 
 @app.post(
