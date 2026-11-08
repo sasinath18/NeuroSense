@@ -735,3 +735,74 @@ def test_user_cannot_unpair_another_users_device(client):
 
     assert second.status_code == 404
 
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2099-01-01T00:00:00+00:00",
+        "2020-01-01T00:00:00+00:00",
+    ],
+)
+def test_sensor_reading_rejects_timestamps_outside_allowed_window(client, timestamp):
+    """Sensor readings too far in the future or older than 24 hours must be rejected."""
+    response = client.post(
+        "/api/sensors",
+        json={
+            "timestamp": timestamp,
+            "heart_rate_bpm": 72,
+            "signal_quality": "good",
+            "source": "simulated",
+        },
+        headers={"X-Demo-User": "api-test-invalid-timestamp"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_sensor_reading_rejects_out_of_range_measurements(client):
+    """Pydantic measurement bounds should reject implausible input values."""
+    response = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 221,
+            "gsr_raw": 1200,
+            "signal_quality": "good",
+            "source": "simulated",
+        },
+        headers={"X-Demo-User": "api-test-invalid-range"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_sensor_reading_rejects_unknown_payload_fields(client):
+    """Strict request models must reject unexpected sensor fields."""
+    response = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 72,
+            "signal_quality": "good",
+            "source": "simulated",
+            "unapproved_field": "must not be accepted",
+        },
+        headers={"X-Demo-User": "api-test-extra-field"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_sensor_reading_rejects_invalid_ibi_intervals(client):
+    """IBI values outside the supported physiological range must be rejected."""
+    response = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 72,
+            "ibi_ms": [100, 105, 110],
+            "signal_quality": "good",
+            "source": "simulated",
+        },
+        headers={"X-Demo-User": "api-test-invalid-ibi"},
+    )
+
+    assert response.status_code == 422
+
