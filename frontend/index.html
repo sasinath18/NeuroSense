@@ -1040,6 +1040,112 @@
             font-weight: 800;
         }
 
+        .face-analysis-card {
+            display: grid;
+            gap: 14px;
+            align-content: start;
+        }
+
+        .face-scan-metrics {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 9px;
+        }
+
+        .face-scan-metric {
+            min-width: 0;
+            padding: 11px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface-2);
+            display: grid;
+            gap: 7px;
+        }
+
+        .face-scan-metric strong {
+            color: var(--text);
+            font-size: clamp(15px, 2vw, 21px);
+            overflow-wrap: anywhere;
+        }
+
+        .face-scan-metric:first-child strong {
+            color: var(--accent-hover);
+            font-size: 25px;
+        }
+
+        .face-scan-metric strong small {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .face-scan-progress {
+            height: 9px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: var(--ring-track);
+            border: 1px solid var(--border);
+        }
+
+        .face-scan-progress-fill {
+            width: 0%;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--accent), var(--chart-2));
+            transition: width .2s linear;
+        }
+
+        .face-pulse-chart-wrap {
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 11px;
+            background: var(--surface-2);
+        }
+
+        .face-pulse-chart-wrap .card-header {
+            margin-bottom: 8px;
+        }
+
+        #facePulseChart {
+            width: 100%;
+            height: 118px;
+            display: block;
+        }
+
+        #faceRppgStatusBadge[data-tone="good"] {
+            color: var(--green);
+            border-color: color-mix(in srgb, var(--green) 45%, transparent);
+        }
+
+        #faceRppgStatusBadge[data-tone="warning"] {
+            color: var(--yellow);
+            border-color: color-mix(in srgb, var(--yellow) 45%, transparent);
+        }
+
+        #faceRppgStatusBadge[data-tone="danger"] {
+            color: var(--red);
+            border-color: color-mix(in srgb, var(--red) 45%, transparent);
+        }
+
+        .face-stress-notice {
+            border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+        }
+
+        @media (max-width: 520px) {
+            .face-scan-metrics {
+                grid-template-columns: 1fr;
+            }
+
+            .face-scan-metric {
+                grid-template-columns: 1fr auto;
+                align-items: center;
+            }
+
+            .face-scan-metric strong {
+                text-align: right;
+            }
+        }
+
         /* =================================================
            8. RECOVERY
         ================================================= */
@@ -2119,8 +2225,8 @@
                 <div class="eyebrow">Optional camera feature</div>
                 <h1 class="section-title">Face Scan</h1>
                 <p class="section-subtitle">
-                    Start the camera here or from the Dashboard. It stays active
-                    while you move between NeuroSense pages until you stop it.
+                    Run a 120-second camera-only pulse scan. No ESP32 or wearable
+                    sensors are needed for this mode.
                 </p>
             </div>
 
@@ -2198,49 +2304,77 @@
                 </div>
 
 
-                <article class="card">
+                <article class="card face-analysis-card">
 
                     <div class="card-header">
                         <div>
-                            <h3>Privacy and Analysis</h3>
-                            <p>How this feature will work</p>
+                            <h3>Face-only Physiological Scan</h3>
+                            <p>Camera-based pulse estimation · no wearable required</p>
+                        </div>
+                        <span id="faceRppgStatusBadge" class="badge" data-tone="neutral">Ready</span>
+                    </div>
+
+                    <div class="notice">
+                        Sit comfortably, face the camera and keep your head still.
+                        Use even lighting and avoid direct sunlight or strong backlighting.
+                        The scan collects 120 seconds of facial colour signals locally.
+                    </div>
+
+                    <div class="face-scan-metrics">
+                        <div class="face-scan-metric">
+                            <span class="muted small">Camera-estimated pulse</span>
+                            <strong id="facePulseValue">-- <small>BPM</small></strong>
+                        </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Signal quality</span>
+                            <strong id="faceSignalQuality">Not measured</strong>
+                        </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Recording</span>
+                            <strong id="faceScanElapsed">0 / 120 sec</strong>
                         </div>
                     </div>
 
-                    <div class="privacy-list">
+                    <div class="face-scan-progress" aria-label="Face scan progress">
+                        <div id="faceScanProgressBar" class="face-scan-progress-fill"></div>
+                    </div>
+                    <p id="faceScanProgressText" class="muted small">Ready to start a 120-second scan.</p>
 
-                        <div class="privacy-item">
-                            <span class="check">✓</span>
-                            <span>Camera starts only after your action and permission.</span>
+                    <div class="face-pulse-chart-wrap">
+                        <div class="card-header">
+                            <div>
+                                <h3>Extracted pulse signal</h3>
+                                <p>Processed RGB variation · not raw video</p>
+                            </div>
+                            <span id="facePulseWindowBadge" class="badge">Waiting</span>
                         </div>
-
-                        <div class="privacy-item">
-                            <span class="check">✓</span>
-                            <span>Camera can be stopped at any time.</span>
-                        </div>
-
-                        <div class="privacy-item">
-                            <span class="check">✓</span>
-                            <span>Camera stays active while you move between NeuroSense pages. Use Stop Camera when finished.</span>
-                        </div>
-
-                        <div class="privacy-item">
-                            <span class="check">✓</span>
-                            <span>Face landmarks are processed locally in this browser.</span>
-                        </div>
-
+                        <canvas id="facePulseChart" role="img" aria-label="Extracted remote photoplethysmography pulse waveform"></canvas>
                     </div>
 
-                    <div class="notice" style="margin-top:20px">
-                        <strong>Analysis status: Face landmarks only</strong><br>
-                        MediaPipe Face Landmarker detects facial landmarks and
-                        draws a face-mesh overlay locally in this browser.
-                        Webcam frames are not uploaded to NeuroSense or stored
-                        by this feature. The MediaPipe library and model load
-                        from Google's CDN, and its service may collect usage
-                        metrics. This feature detects landmarks only; it is not
-                        currently an input to the wearable stress model and does
-                        not infer emotion or stress.
+                    <div class="face-actions">
+                        <button id="startFaceOnlyScanBtn" class="primary-btn" type="button">
+                            Start 120-second Face Scan
+                        </button>
+                        <button id="stopFaceOnlyScanBtn" class="secondary-btn" type="button" disabled>
+                            Stop Analysis
+                        </button>
+                    </div>
+
+                    <p id="faceRppgMessage" class="muted small" role="status" aria-live="polite">
+                        Start the camera first, then begin the face-only scan. The camera can remain on for preview after analysis.
+                    </p>
+
+                    <div class="notice face-stress-notice">
+                        <strong>Face-only stress estimate: Not available yet.</strong>
+                        Heart-rate extraction is the first stage. A separate face-only stress model
+                        must be trained and validated against reference measurements before a stress
+                        score can be shown. Facial expression alone is not used to infer stress.
+                    </div>
+
+                    <div class="privacy-list" style="margin-top:14px">
+                        <div class="privacy-item"><span class="check">✓</span><span>Face regions and rPPG signals are processed in this browser.</span></div>
+                        <div class="privacy-item"><span class="check">✓</span><span>No webcam frames or extracted pulse samples are uploaded or stored by this scan.</span></div>
+                        <div class="privacy-item"><span class="check">✓</span><span>Stop Analysis ends the 120-second measurement; Stop Camera switches the webcam off.</span></div>
                     </div>
 
                 </article>
@@ -4136,6 +4270,19 @@ let faceLastInferenceAt = 0;
 let faceLastTimestamp = 0;
 let faceLastState = "";
 
+const FACE_RPPG_DURATION_SECONDS = 120;
+const FACE_RPPG_WINDOW_SECONDS = 30;
+const FACE_RPPG_SAMPLE_RATE = 15;
+const FACE_RPPG_ROI_LANDMARKS = [10, 109, 338, 50, 280];
+let faceRppgCanvas = null;
+let faceRppgContext = null;
+let faceRppgSamples = [];
+let faceRppgEstimates = [];
+let faceOnlyScanActive = false;
+let faceOnlyScanStartedAt = 0;
+let faceOnlyScanTimer = null;
+let faceLastRppgEstimateAt = 0;
+
 
 const FACE_LANDMARKER_VERSION = "1.2.2";
 const FACE_WASM_URL =
@@ -4537,6 +4684,26 @@ function runFaceDetectionLoop() {
                 const landmarks = faces[0];
                 drawFaceLandmarks(landmarks);
 
+                if (faceOnlyScanActive) {
+                    const rppgSample = collectFaceRppgSample(video, landmarks, now);
+                    if (rppgSample) {
+                        faceRppgSamples.push(rppgSample);
+                        if (faceRppgSamples.length > 2200) {
+                            faceRppgSamples.shift();
+                        }
+
+                        const scanElapsed = (now - faceOnlyScanStartedAt) / 1000;
+                        if (
+                            scanElapsed >= FACE_RPPG_WINDOW_SECONDS &&
+                            now - faceLastRppgEstimateAt >= 5000
+                        ) {
+                            faceLastRppgEstimateAt = now;
+                            const pulseResult = estimateFacePulse(faceRppgSamples);
+                            displayFacePulseEstimate(pulseResult);
+                        }
+                    }
+                }
+
                 setFaceScanState(
                     "detected",
                     `Face detected · ${landmarks.length} landmarks · processed on this device.`
@@ -4575,6 +4742,488 @@ function runFaceDetectionLoop() {
 
 }
 
+
+function setFaceRppgStatus(label, tone = "neutral") {
+    const badge = $("faceRppgStatusBadge");
+    if (!badge) return;
+    badge.textContent = label;
+    badge.dataset.tone = tone;
+}
+
+function meanOf(values) {
+    return values.length
+        ? values.reduce((total, value) => total + value, 0) / values.length
+        : 0;
+}
+
+function standardDeviation(values) {
+    if (values.length < 2) return 0;
+    const average = meanOf(values);
+    const variance = meanOf(values.map(value => (value - average) ** 2));
+    return Math.sqrt(variance);
+}
+
+function collectFaceRppgSample(video, landmarks, timestamp) {
+    if (!faceRppgCanvas) {
+        faceRppgCanvas = document.createElement("canvas");
+        faceRppgCanvas.width = 320;
+        faceRppgCanvas.height = 240;
+        faceRppgContext = faceRppgCanvas.getContext(
+            "2d",
+            { willReadFrequently: true }
+        );
+    }
+
+    if (!faceRppgContext || !video.videoWidth || !video.videoHeight) return null;
+
+    try {
+        faceRppgContext.drawImage(video, 0, 0, 320, 240);
+        const frame = faceRppgContext.getImageData(0, 0, 320, 240);
+        const pixels = frame.data;
+        const radius = 4;
+        const regions = [];
+
+        for (const landmarkIndex of FACE_RPPG_ROI_LANDMARKS) {
+            const point = landmarks[landmarkIndex];
+            if (!point) continue;
+
+            const centerX = Math.round(point.x * 320);
+            const centerY = Math.round(point.y * 240);
+            let red = 0;
+            let green = 0;
+            let blue = 0;
+            let count = 0;
+
+            for (let dy = -radius; dy <= radius; dy++) {
+                for (let dx = -radius; dx <= radius; dx++) {
+                    if ((dx * dx) + (dy * dy) > radius * radius) continue;
+                    const x = centerX + dx;
+                    const y = centerY + dy;
+                    if (x < 0 || x >= 320 || y < 0 || y >= 240) continue;
+
+                    const offset = ((y * 320) + x) * 4;
+                    red += pixels[offset];
+                    green += pixels[offset + 1];
+                    blue += pixels[offset + 2];
+                    count++;
+                }
+            }
+
+            if (count) {
+                regions.push({
+                    r: red / count,
+                    g: green / count,
+                    b: blue / count
+                });
+            }
+        }
+
+        if (regions.length < 3) return null;
+
+        const r = meanOf(regions.map(region => region.r));
+        const g = meanOf(regions.map(region => region.g));
+        const b = meanOf(regions.map(region => region.b));
+        const luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
+
+        if (![r, g, b, luminance].every(Number.isFinite)) return null;
+        return { t: timestamp, r, g, b, luminance, regionCount: regions.length };
+    } catch (error) {
+        console.warn("Could not sample face skin regions for rPPG:", error);
+        return null;
+    }
+}
+
+function resampleFaceRgb(samples, sampleRate = FACE_RPPG_SAMPLE_RATE) {
+    if (samples.length < 2) return null;
+
+    const firstTime = samples[0].t;
+    const lastTime = samples[samples.length - 1].t;
+    const durationSeconds = (lastTime - firstTime) / 1000;
+    if (durationSeconds < FACE_RPPG_WINDOW_SECONDS - 1) return null;
+
+    let maximumGapMs = 0;
+    for (let index = 1; index < samples.length; index++) {
+        maximumGapMs = Math.max(
+            maximumGapMs,
+            samples[index].t - samples[index - 1].t
+        );
+    }
+    if (maximumGapMs > 500) return null;
+
+    const count = Math.floor(durationSeconds * sampleRate);
+    if (count < sampleRate * 20) return null;
+
+    const output = { r: [], g: [], b: [], luminance: [] };
+    let leftIndex = 0;
+
+    for (let index = 0; index < count; index++) {
+        const targetTime = firstTime + (index * 1000 / sampleRate);
+
+        while (
+            leftIndex < samples.length - 2 &&
+            samples[leftIndex + 1].t < targetTime
+        ) {
+            leftIndex++;
+        }
+
+        const left = samples[leftIndex];
+        const right = samples[Math.min(leftIndex + 1, samples.length - 1)];
+        const span = right.t - left.t;
+        const ratio = span > 0
+            ? Math.max(0, Math.min(1, (targetTime - left.t) / span))
+            : 0;
+
+        for (const channel of ["r", "g", "b", "luminance"]) {
+            output[channel].push(
+                left[channel] + ((right[channel] - left[channel]) * ratio)
+            );
+        }
+    }
+
+    return {
+        ...output,
+        sampleRate,
+        durationSeconds,
+        sourceSampleCount: samples.length
+    };
+}
+
+function buildPosPulseSignal(rgb) {
+    const channelMeans = {
+        r: meanOf(rgb.r),
+        g: meanOf(rgb.g),
+        b: meanOf(rgb.b)
+    };
+    if (Object.values(channelMeans).some(value => value < 1)) return null;
+
+    const normalized = rgb.r.map((_, index) => ({
+        r: rgb.r[index] / channelMeans.r,
+        g: rgb.g[index] / channelMeans.g,
+        b: rgb.b[index] / channelMeans.b
+    }));
+
+    const signalOne = normalized.map(value => value.g - value.b);
+    const signalTwo = normalized.map(value => value.g + value.b - (2 * value.r));
+    const deviationOne = standardDeviation(signalOne);
+    const deviationTwo = standardDeviation(signalTwo);
+    if (deviationOne < 1e-6 || deviationTwo < 1e-6) return null;
+
+    const alpha = deviationOne / deviationTwo;
+    const pulse = signalOne.map(
+        (value, index) => value + (alpha * signalTwo[index])
+    );
+
+    // Remove mean and linear trend before spectral analysis.
+    const count = pulse.length;
+    const xMean = (count - 1) / 2;
+    const yMean = meanOf(pulse);
+    let numerator = 0;
+    let denominator = 0;
+
+    pulse.forEach((value, index) => {
+        numerator += (index - xMean) * (value - yMean);
+        denominator += (index - xMean) ** 2;
+    });
+
+    const slope = denominator ? numerator / denominator : 0;
+    return pulse.map((value, index) => {
+        const detrended = value - yMean - (slope * (index - xMean));
+        const hann = 0.5 - (0.5 * Math.cos(
+            (2 * Math.PI * index) / Math.max(1, count - 1)
+        ));
+        return detrended * hann;
+    });
+}
+
+function estimateFacePulse(samples) {
+    const latestTime = samples.length ? samples[samples.length - 1].t : 0;
+    const windowStart = latestTime - (FACE_RPPG_WINDOW_SECONDS * 1000);
+    const windowSamples = samples.filter(sample => sample.t >= windowStart);
+
+    if (windowSamples.length < 240) {
+        return { valid: false, quality: "Collecting", message: "Collecting a stable 30-second signal window." };
+    }
+
+    const rgb = resampleFaceRgb(windowSamples);
+    if (!rgb) {
+        return { valid: false, quality: "Poor", message: "Not enough continuous face samples. Keep your face visible and still." };
+    }
+
+    const actualSampleRate = (windowSamples.length - 1) /
+        Math.max(0.001, (windowSamples[windowSamples.length - 1].t - windowSamples[0].t) / 1000);
+    const averageLuminance = meanOf(rgb.luminance);
+    const brightnessVariation = standardDeviation(rgb.luminance) /
+        Math.max(1, averageLuminance);
+
+    if (
+        actualSampleRate < 8 ||
+        averageLuminance < 35 ||
+        averageLuminance > 235 ||
+        brightnessVariation > 0.22
+    ) {
+        return {
+            valid: false,
+            quality: "Poor",
+            message: "Signal quality is low. Improve lighting, keep your face centred and avoid movement."
+        };
+    }
+
+    const pulseSignal = buildPosPulseSignal(rgb);
+    if (!pulseSignal) {
+        return { valid: false, quality: "Poor", message: "Could not isolate a stable pulse signal from this recording." };
+    }
+
+    const sampleRate = rgb.sampleRate;
+    const spectralMagnitudes = [];
+    const frequencyStep = 0.01;
+
+    // Search a broad plausible pulse band (42–180 BPM).
+    for (let frequency = 0.7; frequency <= 3.0001; frequency += frequencyStep) {
+        let real = 0;
+        let imaginary = 0;
+        pulseSignal.forEach((value, index) => {
+            const angle = (2 * Math.PI * frequency * index) / sampleRate;
+            real += value * Math.cos(angle);
+            imaginary -= value * Math.sin(angle);
+        });
+        spectralMagnitudes.push({
+            frequency,
+            magnitude: Math.sqrt((real * real) + (imaginary * imaginary))
+        });
+    }
+
+    let peakIndex = 0;
+    spectralMagnitudes.forEach((entry, index) => {
+        if (entry.magnitude > spectralMagnitudes[peakIndex].magnitude) {
+            peakIndex = index;
+        }
+    });
+
+    const peak = spectralMagnitudes[peakIndex];
+    const noiseBins = spectralMagnitudes
+        .filter((entry, index) => Math.abs(index - peakIndex) > 5)
+        .map(entry => entry.magnitude);
+    const peakRatio = peak.magnitude / Math.max(1e-9, meanOf(noiseBins));
+
+    // Parabolic peak interpolation refines the frequency between bins.
+    let frequencyOffset = 0;
+    if (peakIndex > 0 && peakIndex < spectralMagnitudes.length - 1) {
+        const left = spectralMagnitudes[peakIndex - 1].magnitude;
+        const centre = peak.magnitude;
+        const right = spectralMagnitudes[peakIndex + 1].magnitude;
+        const curvature = left - (2 * centre) + right;
+        if (Math.abs(curvature) > 1e-9) {
+            frequencyOffset = 0.5 * (left - right) / curvature;
+            frequencyOffset = Math.max(-1, Math.min(1, frequencyOffset));
+        }
+    }
+
+    const frequency = peak.frequency + (frequencyOffset * frequencyStep);
+    const bpm = frequency * 60;
+    const quality = peakRatio >= 4 ? "Good" : peakRatio >= 1.8 ? "Moderate" : "Poor";
+
+    if (!Number.isFinite(bpm) || bpm < 42 || bpm > 180 || quality === "Poor") {
+        return {
+            valid: false,
+            quality: "Poor",
+            pulseSignal,
+            message: "A consistent pulse peak was not found. Try again with steadier lighting and less movement."
+        };
+    }
+
+    return {
+        valid: true,
+        bpm,
+        quality,
+        pulseSignal,
+        message: quality === "Good"
+            ? "A clear camera pulse signal was detected."
+            : "Pulse signal detected, but the estimate may be less reliable."
+    };
+}
+
+function drawFacePulseWaveform(signal) {
+    const canvas = $("facePulseChart");
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const pixelRatio = window.devicePixelRatio || 1;
+    const width = Math.max(320, Math.round(rect.width * pixelRatio));
+    const height = Math.max(100, Math.round(rect.height * pixelRatio));
+    if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+    }
+
+    const context = canvas.getContext("2d");
+    context.clearRect(0, 0, width, height);
+    context.strokeStyle = cssVariable("--grid");
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(0, height / 2);
+    context.lineTo(width, height / 2);
+    context.stroke();
+
+    if (!signal || signal.length < 2) {
+        context.fillStyle = cssVariable("--muted");
+        context.font = "12px Segoe UI, Arial";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(
+            "Pulse waveform will appear after enough signal is collected",
+            width / 2,
+            height / 2
+        );
+        return;
+    }
+
+    const display = signal.slice(-Math.min(signal.length, 300));
+    const maximum = Math.max(1e-6, ...display.map(value => Math.abs(value)));
+    context.strokeStyle = cssVariable("--chart-2");
+    context.lineWidth = 2 * pixelRatio;
+    context.lineJoin = "round";
+    context.lineCap = "round";
+    context.beginPath();
+
+    display.forEach((value, index) => {
+        const x = (index / Math.max(1, display.length - 1)) * width;
+        const y = (height / 2) - ((value / maximum) * (height * 0.38));
+        if (index === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+    });
+    context.stroke();
+}
+
+function resetFaceOnlyScanUI() {
+    $("facePulseValue").innerHTML = '-- <small>BPM</small>';
+    $("faceSignalQuality").textContent = "Not measured";
+    $("faceScanElapsed").textContent = "0 / 120 sec";
+    $("faceScanProgressBar").style.width = "0%";
+    $("faceScanProgressText").textContent = "Ready to start a 120-second scan.";
+    $("facePulseWindowBadge").textContent = "Waiting";
+    $("faceRppgMessage").textContent = "Collecting local facial colour signals. Keep your face still and evenly lit.";
+    setFaceRppgStatus("Collecting", "warning");
+    drawFacePulseWaveform(null);
+}
+
+function updateFaceOnlyProgress() {
+    if (!faceOnlyScanActive) return;
+    const elapsed = Math.min(
+        FACE_RPPG_DURATION_SECONDS,
+        (performance.now() - faceOnlyScanStartedAt) / 1000
+    );
+    const percentage = (elapsed / FACE_RPPG_DURATION_SECONDS) * 100;
+    $("faceScanProgressBar").style.width = percentage + "%";
+    $("faceScanElapsed").textContent =
+        Math.floor(elapsed) + " / " + FACE_RPPG_DURATION_SECONDS + " sec";
+    $("faceScanProgressText").textContent =
+        "Recording facial pulse signal · " + Math.floor(percentage) + "% complete";
+}
+
+function displayFacePulseEstimate(result) {
+    $("faceSignalQuality").textContent = result.quality || "Poor";
+    $("facePulseWindowBadge").textContent = result.quality || "Poor";
+    $("faceRppgMessage").textContent = result.message || "No stable pulse estimate available.";
+
+    if (result.valid) {
+        faceRppgEstimates.push(result.bpm);
+        faceRppgEstimates = faceRppgEstimates.slice(-3);
+        const sorted = [...faceRppgEstimates].sort((a, b) => a - b);
+        const smoothed = sorted[Math.floor(sorted.length / 2)];
+        $("facePulseValue").innerHTML = Math.round(smoothed) + " <small>BPM</small>";
+        setFaceRppgStatus("Pulse detected", result.quality === "Good" ? "good" : "warning");
+        drawFacePulseWaveform(result.pulseSignal);
+    } else {
+        $("facePulseValue").innerHTML = '-- <small>BPM</small>';
+        setFaceRppgStatus("Signal check", "warning");
+        if (result.pulseSignal) drawFacePulseWaveform(result.pulseSignal);
+    }
+}
+
+function beginFaceOnlyScan() {
+    if (!cameraStream || !faceProcessingActive || faceOnlyScanActive) return;
+
+    faceRppgSamples = [];
+    faceRppgEstimates = [];
+    faceOnlyScanActive = true;
+    faceOnlyScanStartedAt = performance.now();
+    faceLastRppgEstimateAt = 0;
+    $("startFaceOnlyScanBtn").disabled = true;
+    $("stopFaceOnlyScanBtn").disabled = false;
+    $("facePulseWindowBadge").textContent = "Collecting";
+    setFaceRppgStatus("Collecting", "warning");
+    $("faceRppgMessage").textContent =
+        "Scan started. Keep your head still, face the camera and maintain even lighting.";
+
+    updateFaceOnlyProgress();
+    if (faceOnlyScanTimer !== null) clearInterval(faceOnlyScanTimer);
+    faceOnlyScanTimer = setInterval(() => {
+        updateFaceOnlyProgress();
+        const elapsed = (performance.now() - faceOnlyScanStartedAt) / 1000;
+        if (elapsed >= FACE_RPPG_DURATION_SECONDS) finishFaceOnlyScan();
+    }, 250);
+}
+
+async function startFaceOnlyScan() {
+    if (faceOnlyScanActive) return;
+
+    if (!cameraStream) {
+        await startCamera();
+    }
+
+    if (!cameraStream || !faceProcessingActive) {
+        $("faceRppgMessage").textContent =
+            "Camera or Face Mesh is not ready. Allow camera access and try again.";
+        setFaceRppgStatus("Camera needed", "warning");
+        return;
+    }
+
+    resetFaceOnlyScanUI();
+    beginFaceOnlyScan();
+}
+
+function finishFaceOnlyScan() {
+    if (!faceOnlyScanActive) return;
+
+    updateFaceOnlyProgress();
+    faceOnlyScanActive = false;
+    if (faceOnlyScanTimer !== null) {
+        clearInterval(faceOnlyScanTimer);
+        faceOnlyScanTimer = null;
+    }
+
+    $("startFaceOnlyScanBtn").disabled = false;
+    $("stopFaceOnlyScanBtn").disabled = true;
+    $("faceScanProgressBar").style.width = "100%";
+    $("faceScanProgressText").textContent = "120-second face-only scan completed.";
+
+    const result = estimateFacePulse(faceRppgSamples);
+    displayFacePulseEstimate(result);
+    if (!result.valid) {
+        $("faceRppgMessage").textContent =
+            "Scan completed, but a reliable pulse estimate could not be extracted. Improve lighting and repeat the scan.";
+        setFaceRppgStatus("No reliable estimate", "danger");
+    } else {
+        $("faceRppgMessage").textContent =
+            "Scan complete. Camera-estimated pulse: " + Math.round(result.bpm) +
+            " BPM. This is an experimental, non-medical estimate.";
+    }
+}
+
+function stopFaceOnlyScan() {
+    if (!faceOnlyScanActive) return;
+
+    faceOnlyScanActive = false;
+    if (faceOnlyScanTimer !== null) {
+        clearInterval(faceOnlyScanTimer);
+        faceOnlyScanTimer = null;
+    }
+    $("startFaceOnlyScanBtn").disabled = false;
+    $("stopFaceOnlyScanBtn").disabled = true;
+    $("faceScanProgressText").textContent = "Face-only analysis stopped by the user.";
+    $("faceRppgMessage").textContent = "Analysis stopped. The camera preview can remain on.";
+    setFaceRppgStatus("Stopped", "neutral");
+}
 
 async function startCamera() {
 
@@ -4693,6 +5342,7 @@ async function startCamera() {
 
 function stopCamera() {
 
+    stopFaceOnlyScan();
     cameraRequestId += 1;
     faceProcessingActive = false;
     resetFaceLightingCheck();
@@ -4741,6 +5391,8 @@ function stopCamera() {
 
 
 $("startCameraBtn").addEventListener("click", startCamera);
+$("startFaceOnlyScanBtn").addEventListener("click", startFaceOnlyScan);
+$("stopFaceOnlyScanBtn").addEventListener("click", stopFaceOnlyScan);
 
 $("stopCameraBtn").addEventListener("click", () => {
     stopCamera();
