@@ -329,6 +329,30 @@ def initialize_tls():
     TLS_CONTEXT = context
 
 
+def validate_configuration():
+    """Fail fast when local secrets or the cloud transport are not configured."""
+    if not WIFI_SSID or WIFI_SSID == "YOUR_WIFI_NAME":
+        raise RuntimeError(
+            "Configure WIFI_SSID in neurosense_secrets.py before starting."
+        )
+    if not WIFI_PASSWORD or WIFI_PASSWORD == "YOUR_WIFI_PASSWORD":
+        raise RuntimeError(
+            "Configure WIFI_PASSWORD in neurosense_secrets.py before starting."
+        )
+    if not DEVICE_TOKEN or DEVICE_TOKEN == "PASTE_NEW_DEVICE_TOKEN_HERE":
+        raise RuntimeError(
+            "Pair this ESP32 in NeuroSense and configure its one-time device token."
+        )
+    if USE_HTTPS and API_PORT != 443:
+        raise RuntimeError(
+            "Cloud HTTPS must use port 443. Do not weaken TLS for deployment."
+        )
+    if not USE_HTTPS and API_HOST == "neurosense-app.onrender.com":
+        raise RuntimeError(
+            "Plain HTTP is not permitted for the public NeuroSense service."
+        )
+
+
 def connect_wifi():
 
     print("\nConnecting to Wi-Fi...")
@@ -845,6 +869,7 @@ def main():
 
     motor.value(0)
 
+    validate_configuration()
     connect_wifi()
 
     sensor = MAX30102(i2c)
