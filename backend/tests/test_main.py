@@ -1126,3 +1126,115 @@ def test_haptic_command_rejects_unpaired_device(client):
     )
 
     assert response.status_code == 404
+
+
+def test_sensor_latest_returns_the_last_saved_reading(client):
+    """GET /api/sensors/latest should return the user's most recent saved reading."""
+    headers = {"X-Demo-User": "neurosense-sensor-latest-user"}
+
+    first = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 70,
+            "hrv_ms": 45,
+            "gsr_raw": 1500,
+            "signal_quality": "good",
+            "source": "simulated",
+        },
+        headers=headers,
+    )
+    second = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 84,
+            "hrv_ms": 35,
+            "gsr_raw": 1900,
+            "signal_quality": "moderate",
+            "source": "simulated",
+        },
+        headers=headers,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    latest = client.get("/api/sensors/latest", headers=headers)
+    assert latest.status_code == 200
+    body = latest.json()
+    assert body["data"] is not None
+    assert body["data"]["id"] == second.json()["reading"]["id"]
+    assert body["data"]["heart_rate_bpm"] == 84
+    assert body["data"]["hrv_ms"] == 35
+    assert body["data"]["gsr_raw"] == 1900
+
+
+def test_sensor_history_returns_saved_records_only_for_current_user(client):
+    """GET /api/sensors/history should list saved readings for one user only."""
+    user_a = {"X-Demo-User": "neurosense-sensor-history-a"}
+    user_b = {"X-Demo-User": "neurosense-sensor-history-b"}
+
+    first = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 71,
+            "gsr_raw": 1510,
+            "source": "simulated",
+            "signal_quality": "good",
+        },
+        headers=user_a,
+    )
+    second = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 82,
+            "gsr_raw": 1860,
+            "source": "simulated",
+            "signal_quality": "moderate",
+        },
+        headers=user_a,
+    )
+    other_user = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 90,
+            "gsr_raw": 2100,
+            "source": "simulated",
+            "signal_quality": "good",
+        },
+        headers=user_b,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert other_user.status_code == 201
+
+    history_a = client.get(
+        "/api/sensors/history?limit=10",
+        headers=user_a,
+    )
+    assert history_a.status_code == 200
+    body_a = history_a.json()
+    assert body_a["total"] == 2
+    returned_ids = {item["id"] for item in body_a["readings"]}
+    assert returned_ids == {
+        first.json()["reading"]["id"],
+        second.json()["reading"]["id"],
+    }
+
+    history_b = client.get(
+        "/api/sensors/history?limit=10",
+        headers=user_b,
+    )
+    assert history_b.status_code == 200
+    body_b = history_b.json()
+    assert body_b["total"] == 1
+    assert body_b["readings"][0]["id"] == other_user.json()["reading"]["id"]
+
+
+def test_sensor_history_rejects_limit_above_maximum(client):
+    """History pagination must enforce the API maximum limit."""
+    response = client.get(
+        "/api/sensors/history?limit=501",
+        headers={"X-Demo-User": "neurosense-sensor-history-limit"},
+    )
+
+    assert response.status_code == 422
+
