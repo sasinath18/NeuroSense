@@ -2094,7 +2094,7 @@
 
                         <div class="privacy-item">
                             <span class="check">✓</span>
-                            <span>Facial cues will be optional supporting information.</span>
+                            <span>Face landmarks are processed locally in this browser.</span>
                         </div>
 
                     </div>
@@ -3037,7 +3037,10 @@ let resizeTimer = null;
 
 window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(drawAllCharts, 150);
+    resizeTimer = setTimeout(() => {
+        drawAllCharts();
+        if (cameraStream) sizeFaceOverlay();
+    }, 150);
 });
 
 
@@ -3055,7 +3058,9 @@ $("settingsThemeBtn").addEventListener("click", toggleTheme);
 
 let cameraStream = null;
 let faceLandmarker = null;
+let faceLandmarkerClass = null;
 let faceLandmarkerPromise = null;
+let cameraRequestId = 0;
 let faceDrawingUtils = null;
 let faceAnimationFrame = null;
 let faceProcessingActive = false;
@@ -3108,6 +3113,7 @@ async function loadFaceLandmarker() {
         );
 
         faceLandmarker = task;
+        faceLandmarkerClass = FaceLandmarker;
         faceDrawingUtils = new DrawingUtils(
             $("faceOverlay").getContext("2d")
         );
@@ -3231,7 +3237,7 @@ function drawFaceLandmarks(landmarks) {
     // Dense triangular face mesh.
     faceDrawingUtils.drawConnectors(
         landmarks,
-        faceLandmarker.constructor.FACE_LANDMARKS_TESSELATION,
+        faceLandmarkerClass.FACE_LANDMARKS_TESSELATION,
         {
             color: "rgba(70, 215, 235, 0.55)",
             lineWidth: 0.55
@@ -3240,12 +3246,14 @@ function drawFaceLandmarks(landmarks) {
 
     // Stronger facial contours and feature outlines.
     const featureLines = [
-        faceLandmarker.constructor.FACE_LANDMARKS_FACE_OVAL,
-        faceLandmarker.constructor.FACE_LANDMARKS_LEFT_EYE,
-        faceLandmarker.constructor.FACE_LANDMARKS_RIGHT_EYE,
-        faceLandmarker.constructor.FACE_LANDMARKS_LEFT_EYEBROW,
-        faceLandmarker.constructor.FACE_LANDMARKS_RIGHT_EYEBROW,
-        faceLandmarker.constructor.FACE_LANDMARKS_LIPS
+        faceLandmarkerClass.FACE_LANDMARKS_FACE_OVAL,
+        faceLandmarkerClass.FACE_LANDMARKS_LEFT_EYE,
+        faceLandmarkerClass.FACE_LANDMARKS_RIGHT_EYE,
+        faceLandmarkerClass.FACE_LANDMARKS_LEFT_IRIS,
+        faceLandmarkerClass.FACE_LANDMARKS_RIGHT_IRIS,
+        faceLandmarkerClass.FACE_LANDMARKS_LEFT_EYEBROW,
+        faceLandmarkerClass.FACE_LANDMARKS_RIGHT_EYEBROW,
+        faceLandmarkerClass.FACE_LANDMARKS_LIPS
     ];
 
     featureLines.forEach((connections, index) => {
@@ -3361,6 +3369,7 @@ function runFaceDetectionLoop() {
 async function startCamera() {
 
     if (cameraStream) return;
+    const requestId = ++cameraRequestId;
 
     if (!navigator.mediaDevices ||
         !navigator.mediaDevices.getUserMedia) {
@@ -3377,7 +3386,7 @@ async function startCamera() {
         $("cameraMessage").textContent =
             "Requesting camera permission...";
 
-        cameraStream = await navigator.mediaDevices.getUserMedia({
+        const stream = await navigator.mediaDevices.getUserMedia({
             video: {
                 facingMode: "user",
                 width: { ideal: 640 },
@@ -3385,6 +3394,13 @@ async function startCamera() {
             },
             audio: false
         });
+
+        if (requestId !== cameraRequestId) {
+            stream.getTracks().forEach(track => track.stop());
+            return;
+        }
+
+        cameraStream = stream;
 
         const video = $("cameraVideo");
         video.srcObject = cameraStream;
@@ -3426,6 +3442,8 @@ async function startCamera() {
 
         } catch (modelError) {
 
+            if (!cameraStream || requestId !== cameraRequestId) return;
+
             console.error("Face Mesh model loading failed:", modelError);
 
             setFaceScanState(
@@ -3438,6 +3456,8 @@ async function startCamera() {
         }
 
     } catch (error) {
+
+        if (requestId !== cameraRequestId) return;
 
         console.error("Camera access error:", error);
 
@@ -3462,6 +3482,7 @@ async function startCamera() {
 
 function stopCamera() {
 
+    cameraRequestId += 1;
     faceProcessingActive = false;
 
     if (faceAnimationFrame !== null) {
