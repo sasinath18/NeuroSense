@@ -31,6 +31,20 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Validate frontend JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          html = Path("frontend/index.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL | re.IGNORECASE)
+          if len(scripts) != 1:
+              raise SystemExit(f"Expected one inline application script, found {len(scripts)}")
+          Path("/tmp/neurosense-frontend.js").write_text(scripts[0], encoding="utf-8")
+          PY
+          node --check /tmp/neurosense-frontend.js
+
       - name: Run backend tests
         run: |
           python -m pytest backend/tests/test_main.py -v
