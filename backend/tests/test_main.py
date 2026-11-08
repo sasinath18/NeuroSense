@@ -1863,3 +1863,54 @@ def test_haptic_queue_is_not_delivered_after_user_disables_preference(client):
     )
     assert polled.status_code == 200
     assert polled.json()["commands"] == []
+
+
+def test_model_features_preserve_missing_sensor_values_for_imputation():
+    """Unavailable optional sensor channels must not become fake zero values."""
+    reading = {
+        "heart_rate_bpm": 78.0,
+        "hrv_ms": None,
+        "gsr_raw": None,
+        "skin_temperature_c": None,
+    }
+    baseline = {
+        "heart_rate_bpm": 72.0,
+        "hrv_ms": None,
+        "gsr_raw": None,
+        "skin_temperature_c": None,
+    }
+
+    features = api.build_model_features(reading, baseline)
+
+    assert features["heart_rate_bpm"] == 78.0
+    assert features["heart_rate_delta"] == 6.0
+    assert api.np.isnan(features["hrv_ms"])
+    assert api.np.isnan(features["gsr_raw"])
+    assert api.np.isnan(features["skin_temperature_c"])
+    assert api.np.isnan(features["hrv_delta"])
+    assert api.np.isnan(features["gsr_delta"])
+    assert api.np.isnan(features["skin_temperature_delta"])
+
+
+def test_model_features_preserve_valid_zero_measurement():
+    """A supplied numeric zero is not confused with a missing value."""
+    features = api.build_model_features(
+        {
+            "heart_rate_bpm": 72.0,
+            "hrv_ms": 0.0,
+            "gsr_raw": 0,
+            "skin_temperature_c": None,
+        },
+        {
+            "heart_rate_bpm": 72.0,
+            "hrv_ms": 10.0,
+            "gsr_raw": 100,
+            "skin_temperature_c": None,
+        },
+    )
+
+    assert features["hrv_ms"] == 0.0
+    assert features["gsr_raw"] == 0.0
+    assert features["hrv_delta"] == -10.0
+    assert features["gsr_delta"] == -100.0
+    assert api.np.isnan(features["skin_temperature_c"])

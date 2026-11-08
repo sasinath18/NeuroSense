@@ -1341,49 +1341,32 @@ def build_model_features(
     reading: dict,
     baseline: dict
 ) -> dict:
+    """Build model inputs while preserving unavailable sensors as NaN.
+
+    The fitted preprocessing pipeline contains a median imputer. Missing
+    optional measurements must reach that imputer rather than being encoded
+    as a physiological value of zero.
+    """
+
+    def number_or_nan(value) -> float:
+        return float(value) if value is not None else float("nan")
 
     def delta(field: str) -> float:
-
         current = reading.get(field)
         base = baseline.get(field)
-
         if current is None or base is None:
-            return 0.0
-
+            return float("nan")
         return float(current) - float(base)
 
     return {
-        "heart_rate_bpm": float(
-            reading.get("heart_rate_bpm") or 0
-        ),
-
-        "hrv_ms": float(
-            reading.get("hrv_ms") or 0
-        ),
-
-        "gsr_raw": float(
-            reading.get("gsr_raw") or 0
-        ),
-
-        "skin_temperature_c": float(
-            reading.get("skin_temperature_c") or 0
-        ),
-
-        "heart_rate_delta": delta(
-            "heart_rate_bpm"
-        ),
-
-        "hrv_delta": delta(
-            "hrv_ms"
-        ),
-
-        "gsr_delta": delta(
-            "gsr_raw"
-        ),
-
-        "skin_temperature_delta": delta(
-            "skin_temperature_c"
-        )
+        "heart_rate_bpm": number_or_nan(reading.get("heart_rate_bpm")),
+        "hrv_ms": number_or_nan(reading.get("hrv_ms")),
+        "gsr_raw": number_or_nan(reading.get("gsr_raw")),
+        "skin_temperature_c": number_or_nan(reading.get("skin_temperature_c")),
+        "heart_rate_delta": delta("heart_rate_bpm"),
+        "hrv_delta": delta("hrv_ms"),
+        "gsr_delta": delta("gsr_raw"),
+        "skin_temperature_delta": delta("skin_temperature_c"),
     }
 
 
