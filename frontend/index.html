@@ -4669,6 +4669,11 @@ let recoverySequence = readLocal("neurosense_recovery_sequence", {
     haptic: false
 });
 
+// A queued command is reused after a page refresh or a temporary timeout.
+// This prevents repeated clicks from creating duplicate motor pulses.
+let pendingHapticCommandId = readLocal("neurosense_pending_haptic_command", "");
+let hapticStatusCheckActive = false;
+
 const breathingPhases = [
     { name: "Breathe in", duration: 4, phase: "inhale" },
     { name: "Hold gently", duration: 4, phase: "hold" },
@@ -4715,10 +4720,14 @@ function renderRecoverySequence() {
     const hapticButton = $("sendHapticTestBtn");
     if (hapticButton) {
         hapticButton.disabled = !recoverySequence.music || recoverySequence.haptic ||
-            !hapticEnabled || !hasPrivateApiAccess();
+            !hapticEnabled || !hasPrivateApiAccess() || hapticStatusCheckActive;
         hapticButton.textContent = recoverySequence.haptic
             ? "Recovery sequence complete"
-            : "Queue haptic recovery step · 1000 ms";
+            : hapticStatusCheckActive
+                ? "Checking ESP32 acknowledgement..."
+                : pendingHapticCommandId
+                    ? "Check pending haptic command"
+                    : "Queue haptic recovery step · 1000 ms";
     }
 }
 
@@ -5030,49 +5039,71 @@ $("sendHapticTestBtn").addEventListener("click", async () => {
         showToast("Complete breathing and music, sign in and enable haptic feedback first.");
         return;
     }
-    const button = $("sendHapticTestBtn");
-    button.disabled = true;
+    if (hapticStatusCheckActive) return;
+
+    hapticStatusCheckActive = true;
+    renderRecoverySequence();
     try {
-        const deviceStatus = await apiRequest("/api/device/status");
-        const connected = Boolean(deviceStatus.connected);
-        if (!connected) {
-            showToast("No recently connected ESP32. Connect the wearable before sending a test vibration.");
-            return;
+        if (!pendingHapticCommandId) {
+            const deviceStatus = await apiRequest("/api/device/status");
+            if (!deviceStatus.connected) {
+                showToast("No recently connected ESP32. Connect the wearable before sending a vibration.");
+                return;
+            }
+
+            const devices = await apiRequest("/api/devices");
+            const active = (devices.devices || []).find(item => item.active);
+            if (!active) {
+                showToast("Pair an ESP32 device before sending a vibration.");
+                return;
+            }
+
+            const result = await apiRequest("/api/haptic/commands", {
+                method: "POST",
+                body: JSON.stringify({ device_id: active.device_id, duration_ms: 1000 })
+            });
+            pendingHapticCommandId = result.command_id;
+            writeLocal("neurosense_pending_haptic_command", pendingHapticCommandId);
+            if (!pendingHapticCommandId) {
+                throw new Error("Backend did not return a haptic command ID.");
+            }
+            showToast("Haptic command queued. Waiting for ESP32 acknowledgement...");
+        } else {
+            showToast("Checking the existing haptic command. No duplicate command will be created.");
         }
-        const devices = await apiRequest("/api/devices");
-        const active = (devices.devices || []).find(item => item.active);
-        if (!active) {
-            showToast("Pair an ESP32 device before sending a vibration.");
-            return;
-        }
-        await apiRequest("/api/haptic/commands", {
-            method: "POST",
-            body: JSON.stringify({ device_id: active.device_id, duration_ms: 1000 })
-        });
-        showToast("1 second haptic command queued. Waiting for ESP32 acknowledgement...");
 
         let acknowledged = false;
+        let expired = false;
         for (let attempt = 0; attempt < 30; attempt += 1) {
             await new Promise(resolve => setTimeout(resolve, 1000));
-            const state = await apiRequest("/api/haptic/commands/" + encodeURIComponent(result.command_id));
+            const state = await apiRequest(
+                "/api/haptic/commands/" + encodeURIComponent(pendingHapticCommandId)
+            );
             if (state.status === "acknowledged") {
                 acknowledged = true;
+                pendingHapticCommandId = "";
+                writeLocal("neurosense_pending_haptic_command", "");
                 completeRecoveryStep("haptic");
                 await recordRecoverySession("Haptic", 1);
                 showToast("Recovery sequence complete. ESP32 acknowledged the haptic step.");
                 break;
             }
             if (state.status === "expired") {
-                showToast("Haptic command expired before the ESP32 acknowledged it. Retry the final step.");
+                expired = true;
+                pendingHapticCommandId = "";
+                writeLocal("neurosense_pending_haptic_command", "");
+                showToast("Haptic command expired before acknowledgement. You can queue a fresh final step.");
                 break;
             }
         }
-        if (!acknowledged) {
-            showToast("Haptic command is still awaiting acknowledgement. Keep the wearable connected and check again.");
+        if (!acknowledged && !expired) {
+            showToast("Command is still pending. Keep the wearable connected and check again; a duplicate won't be queued.");
         }
     } catch (error) {
-        showToast("Haptic command was not queued: " + error.message);
+        showToast("Haptic status check failed: " + error.message +
+            (pendingHapticCommandId ? " The existing command ID is retained; retry to check the same command." : ""));
     } finally {
+        hapticStatusCheckActive = false;
         renderRecoverySequence();
     }
 });
