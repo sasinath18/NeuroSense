@@ -2184,8 +2184,12 @@
                         Start when you are comfortable
                     </div>
 
+                    <div id="breathPhaseCountdown" class="muted small">
+                        4 sec phase
+                    </div>
+
                     <div id="breathCountdown" class="breath-timer">
-                        60 sec
+                        56 sec total
                     </div>
 
                     <p class="muted small">
@@ -4249,7 +4253,9 @@ $("stopCameraBtn").addEventListener("click", () => {
 
 let breathingInterval = null;
 let breathingElapsed = 0;
-const breathingDuration = 60;
+let breathingStartedAt = 0;
+const breathingDuration = 56; // Four complete 14-second breathing cycles.
+const breathingTickMs = 100;
 
 const breathingPhases = [
     { name: "Breathe in", duration: 4, phase: "inhale" },
@@ -4260,21 +4266,28 @@ const breathingPhases = [
 
 function updateBreathingUI() {
 
-    const cycleLength = 14;
-    const position = breathingElapsed % cycleLength;
+    const cycleLength = breathingPhases.reduce(
+        (total, phase) => total + phase.duration,
+        0
+    );
+
+    const cyclePosition = breathingElapsed % cycleLength;
 
     let accumulated = 0;
     let selectedPhase = breathingPhases[0];
-    let phaseRemaining = 4;
+    let phaseRemaining = selectedPhase.duration;
 
     for (const phase of breathingPhases) {
 
-        if (position < accumulated + phase.duration) {
+        if (cyclePosition < accumulated + phase.duration) {
 
             selectedPhase = phase;
 
-            phaseRemaining =
-                phase.duration - (position - accumulated);
+            const elapsedInPhase = cyclePosition - accumulated;
+            phaseRemaining = Math.max(
+                1,
+                Math.ceil(phase.duration - elapsedInPhase)
+            );
 
             break;
         }
@@ -4283,66 +4296,103 @@ function updateBreathingUI() {
     }
 
     $("breathPhase").textContent = selectedPhase.name;
+    $("breathPhaseCountdown").textContent =
+        `${phaseRemaining} sec remaining in this phase`;
+
     $("breathOrb").dataset.phase = selectedPhase.phase;
     $("breathOrb").textContent = selectedPhase.name;
 
+    const totalRemaining = Math.max(
+        0,
+        Math.ceil(breathingDuration - breathingElapsed)
+    );
+
     $("breathCountdown").textContent =
-        Math.ceil(breathDuration - breathingElapsed) + " sec";
+        `${totalRemaining} sec remaining`;
 }
 
 
 function stopBreathing() {
 
-    if (breathingInterval) {
+    if (breathingInterval !== null) {
         clearInterval(breathingInterval);
         breathingInterval = null;
     }
 
+    breathingStartedAt = 0;
+    breathingElapsed = 0;
+
     $("breathOrb").dataset.phase = "rest";
     $("breathOrb").textContent = "Ready";
     $("breathPhase").textContent = "Session stopped or not started";
-    $("breathCountdown").textContent = "60 sec";
+    $("breathPhaseCountdown").textContent = "4 sec phase";
+    $("breathCountdown").textContent = `${breathingDuration} sec total`;
 
     $("startBreathingBtn").disabled = false;
 }
 
 
+function completeBreathingSession() {
+
+    if (breathingInterval !== null) {
+        clearInterval(breathingInterval);
+        breathingInterval = null;
+    }
+
+    breathingElapsed = breathingDuration;
+    breathingStartedAt = 0;
+
+    $("breathOrb").dataset.phase = "rest";
+    $("breathOrb").textContent = "Complete";
+    $("breathPhase").textContent = "Session completed";
+    $("breathPhaseCountdown").textContent = "All four cycles completed";
+    $("breathCountdown").textContent = "Done";
+
+    $("startBreathingBtn").disabled = false;
+
+    // The save function chooses backend storage only when authenticated.
+    recordRecoverySession("Breathing", breathingDuration);
+
+    showToast(
+        "Breathing session completed. Check Recovery History for its saved record."
+    );
+}
+
+
+function tickBreathingSession() {
+
+    if (!breathingStartedAt) return;
+
+    breathingElapsed = Math.min(
+        breathingDuration,
+        (performance.now() - breathingStartedAt) / 1000
+    );
+
+    if (breathingElapsed >= breathingDuration) {
+        completeBreathingSession();
+        return;
+    }
+
+    updateBreathingUI();
+
+}
+
+
 function startBreathing() {
 
-    if (breathingInterval) return;
+    if (breathingInterval !== null) return;
 
     breathingElapsed = 0;
+    breathingStartedAt = performance.now();
 
     $("startBreathingBtn").disabled = true;
 
     updateBreathingUI();
 
-    breathingInterval = setInterval(() => {
-
-        breathingElapsed++;
-
-        if (breathingElapsed >= breathingDuration) {
-
-            clearInterval(breathingInterval);
-            breathingInterval = null;
-
-            recordRecoverySession("Breathing", breathingDuration);
-
-            $("breathOrb").dataset.phase = "rest";
-            $("breathOrb").textContent = "Complete";
-            $("breathPhase").textContent = "Session completed";
-            $("breathCountdown").textContent = "Done";
-
-            $("startBreathingBtn").disabled = false;
-
-            showToast("Breathing session completed. Check Recovery History for its saved record.");
-
-            return;
-        }
-
-        updateBreathingUI();
-
-    }, 1000);
+    breathingInterval = setInterval(
+        tickBreathingSession,
+        breathingTickMs
+    );
 
 }
 
