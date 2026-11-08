@@ -2015,3 +2015,65 @@ def test_haptic_command_older_than_sixty_seconds_is_not_delivered(client):
     )
     assert status.status_code == 200
     assert status.json()["status"] == "expired"
+
+def test_pending_haptic_command_restores_from_firestore_after_sqlite_reset(client, monkeypatch):
+    """A queued command is restored from cloud backup after an ephemeral DB reset."""
+    user_id = "neurosense-haptic-cloud-restore-user"
+    device_id = "neurosense-haptic-cloud-restore-device"
+    paired = pair_test_device(client, user_id, device_id)
+    headers = {"X-Demo-User": user_id}
+
+    enabled = client.put(
+        "/api/settings/haptic",
+        json={"haptic_enabled": True},
+        headers=headers,
+    )
+    assert enabled.status_code == 200
+
+    queued = client.post(
+        "/api/haptic/commands",
+        json={"device_id": device_id, "duration_ms": 700},
+        headers=headers,
+    )
+    assert queued.status_code == 201
+    command_id = queued.json()["command_id"]
+
+    with api.db_connection() as db:
+        command_row = db.execute(
+            "SELECT * FROM haptic_commands WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        cloud_command = dict(command_row)
+        db.execute(
+            "DELETE FROM haptic_commands WHERE command_id = ?",
+            (command_id,),
+        )
+
+    monkeypatch.setattr(
+        api,
+        "firestore_read_collection",
+        lambda path, **kwargs: [dict(cloud_command)]
+        if path == ("users", user_id, "haptic_commands") else [],
+    )
+    monkeypatch.setattr(api, "firestore_write", lambda *args, **kwargs: "synced")
+
+    polled = client.get(
+        "/api/devices/{}/commands".format(device_id),
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert polled.status_code == 200
+    assert polled.json()["commands"] == [
+        {
+            "command_id": command_id,
+            "duration_ms": 700,
+            "created_at": cloud_command["created_at"],
+        }
+    ]
+
+    status = client.get(
+        "/api/haptic/commands/" + command_id,
+        headers=headers,
+    )
+    assert status.status_code == 200
+    assert status.json()["status"] == "delivered"
+
