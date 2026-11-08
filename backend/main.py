@@ -37,6 +37,7 @@ from dotenv import load_dotenv
 from fastapi import (
     Depends, FastAPI, Header, HTTPException, Query, status
 )
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from pydantic import (
@@ -1655,6 +1656,22 @@ app.add_middleware(
 # ============================================================
 # 16. HOME AND HEALTH ENDPOINTS
 # ============================================================
+
+@app.get("/dashboard", include_in_schema=False)
+def dashboard():
+    """Serve the single-file NeuroSense web dashboard."""
+    dashboard_file = BASE_DIR / "frontend" / "index.html"
+    if not dashboard_file.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail="NeuroSense dashboard file is unavailable."
+        )
+    return FileResponse(
+        dashboard_file,
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache"}
+    )
+
 
 @app.get("/")
 def home():
