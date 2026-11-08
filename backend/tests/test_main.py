@@ -1502,3 +1502,48 @@ def test_stress_api_excludes_poor_quality_readings(client, monkeypatch):
     assert response.json()["status"] == "poor_signal_quality"
     assert response.json()["stress_score"] is None
 
+
+
+
+def test_root_endpoint_reports_neurosense_identity(client):
+    """API Test 8a: the root endpoint returns the expected service identity."""
+    response = client.get("/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project"] == "NeuroSense"
+    assert body["version"] == "3.0.0"
+    assert body["status"] == "online"
+
+
+def test_three_hour_summary_generation_is_idempotent(client):
+    """API Test 8b: the same three-hour summary window is not duplicated."""
+    from datetime import datetime, timedelta, timezone
+
+    user_id = "neurosense-summary-idempotency-user"
+    timestamp = (
+        datetime.now(timezone.utc) - timedelta(hours=7)
+    ).isoformat()
+
+    reading = post_wearable_reading(
+        client,
+        user_id,
+        heart_rate_bpm=77,
+        hrv_ms=41,
+        gsr_raw=1680,
+        timestamp=timestamp,
+    )
+    assert reading.status_code == 201
+
+    first_creation = api.create_due_summaries()
+    second_creation = api.create_due_summaries()
+
+    assert first_creation == 1
+    assert second_creation == 0
+
+    history = client.get(
+        "/api/summaries",
+        headers={"X-Demo-User": user_id},
+    )
+    assert history.status_code == 200
+    assert history.json()["total"] == 1
