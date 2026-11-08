@@ -2572,6 +2572,38 @@ def acknowledge_device_command(
 # 23. RECOVERY SESSION AND BEFORE/AFTER COMPARISON
 # ============================================================
 
+def build_recovery_comparison(before, after) -> dict | None:
+
+    if before is None or after is None:
+        return None
+
+    comparison = {}
+
+    for field in (
+        "heart_rate_bpm",
+        "hrv_ms",
+        "gsr_raw",
+        "skin_temperature_c"
+    ):
+        before_value = before[field]
+        after_value = after[field]
+
+        comparison[field] = {
+            "before": before_value,
+            "after": after_value,
+            "change": (
+                round(after_value - before_value, 2)
+                if (
+                    before_value is not None
+                    and after_value is not None
+                )
+                else None
+            )
+        }
+
+    return comparison
+
+
 @app.post(
     "/api/recovery/sessions",
     status_code=status.HTTP_201_CREATED
@@ -2709,38 +2741,10 @@ def save_recovery_session(
         session_doc
     )
 
-    comparison = None
-
-    if before and after:
-
-        comparison = {}
-
-        for field in (
-            "heart_rate_bpm",
-            "hrv_ms",
-            "gsr_raw",
-            "skin_temperature_c"
-        ):
-
-            before_value = before[field]
-            after_value = after[field]
-
-            comparison[field] = {
-                "before": before_value,
-                "after": after_value,
-
-                "change": (
-                    round(
-                        after_value - before_value,
-                        2
-                    )
-                    if (
-                        before_value is not None
-                        and after_value is not None
-                    )
-                    else None
-                )
-            }
+    comparison = build_recovery_comparison(
+        before,
+        after
+    )
 
     return {
         "success": True,
@@ -2770,7 +2774,9 @@ def recovery_history(
                 started_at,
                 completed_at,
                 duration_seconds,
-                completed
+                completed,
+                before_reading_json,
+                after_reading_json
             FROM recovery_sessions
             WHERE user_id = ?
             ORDER BY completed_at DESC
@@ -2782,11 +2788,82 @@ def recovery_history(
             )
         ).fetchall()
 
+        sessions = []
+
+        for row in rows:
+
+            item = dict(row)
+
+            before = (
+                json.loads(item["before_reading_json"])
+                if item.get("before_reading_json")
+                else None
+            )
+
+            after = (
+                json.loads(item["after_reading_json"])
+                if item.get("after_reading_json")
+                else None
+            )
+
+            # A post-session reading may arrive after the recovery
+            # record is saved. Re-query it when history is requested.
+            if before is None:
+                before = db.execute(
+                    """
+                    SELECT
+                        heart_rate_bpm,
+                        hrv_ms,
+                        gsr_raw,
+                        skin_temperature_c,
+                        timestamp
+                    FROM sensor_readings
+                    WHERE user_id = ?
+                    AND source = 'wearable'
+                    AND timestamp <= ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """,
+                    (
+                        user_id,
+                        item["started_at"]
+                    )
+                ).fetchone()
+
+            if after is None:
+                after = db.execute(
+                    """
+                    SELECT
+                        heart_rate_bpm,
+                        hrv_ms,
+                        gsr_raw,
+                        skin_temperature_c,
+                        timestamp
+                    FROM sensor_readings
+                    WHERE user_id = ?
+                    AND source = 'wearable'
+                    AND timestamp >= ?
+                    ORDER BY timestamp ASC
+                    LIMIT 1
+                    """,
+                    (
+                        user_id,
+                        item["completed_at"]
+                    )
+                ).fetchone()
+
+            item.pop("before_reading_json", None)
+            item.pop("after_reading_json", None)
+            item["comparison"] = build_recovery_comparison(
+                before,
+                after
+            )
+
+            sessions.append(item)
+
     return {
-        "total": len(rows),
-        "sessions": [
-            dict(row) for row in rows
-        ]
+        "total": len(sessions),
+        "sessions": sessions
     }
 
 
