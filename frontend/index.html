@@ -3161,6 +3161,7 @@ function renderRecoveryComparison(comparison) {
     const after = {};
 
     Object.entries(comparison).forEach(([field, values]) => {
+        if (field === "before_timestamp" || field === "after_timestamp") return;
         before[field] = values.before;
         after[field] = values.after;
     });
@@ -3168,8 +3169,8 @@ function renderRecoveryComparison(comparison) {
     setText("recoveryBeforeValue", formatRecoveryReading(before));
     setText("recoveryAfterValue", formatRecoveryReading(after));
 
-    const beforeTime = Object.values(comparison).find(value => value.before_timestamp)?.before_timestamp;
-    const afterTime = Object.values(comparison).find(value => value.after_timestamp)?.after_timestamp;
+    const beforeTime = comparison.before_timestamp || null;
+    const afterTime = comparison.after_timestamp || null;
 
     setText(
         "recoveryBeforeText",
