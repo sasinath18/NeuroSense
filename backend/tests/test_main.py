@@ -200,3 +200,36 @@ def test_device_pairing_creates_device_and_returns_one_time_token(client):
     assert len(body["device_token"]) >= 24
     assert "shown only once" in body["warning"]
 
+
+def test_device_list_returns_devices_for_authenticated_user(client):
+    """Verify a newly paired device appears in that user's device list."""
+    headers = {"X-Demo-User": "api-test-device-list"}
+    device_id = "test-device-list-01"
+
+    pair_response = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "Device List Test",
+        },
+        headers=headers,
+    )
+
+    assert pair_response.status_code == 201
+
+    list_response = client.get(
+        "/api/devices",
+        headers=headers,
+    )
+
+    assert list_response.status_code == 200
+    devices = list_response.json()["devices"]
+    matching = [
+        item for item in devices
+        if item["device_id"] == device_id
+    ]
+
+    assert len(matching) == 1
+    assert matching[0]["device_name"] == "Device List Test"
+    assert matching[0]["active"] == 1
+
