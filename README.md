@@ -24,7 +24,7 @@ The Blueprint uses the free web-service plan, the Singapore region, Python 3.13.
 
 ## Current prototype limitations
 
-- The dashboard frontend is currently a standalone UI preview and still uses demo/simulated display values. It is not yet connected to the live FastAPI sensor endpoints.
+- The dashboard now reads backend health and, after secure authentication is configured, loads dashboard overview, wearable history, settings and recovery history from FastAPI. It does not generate sample sensor values.
 - Face Scan uses MediaPipe Face Landmarker in the browser to draw facial landmarks and a mesh when the user explicitly starts the camera. Frames are processed locally and are not uploaded to the NeuroSense backend. This feature does not infer emotion or stress.
 - ESP32 hardware integration and live sensor validation are not yet complete.
 - Firebase Authentication and Firestore are not configured in this deployment.
