@@ -73,6 +73,22 @@ FIREBASE_SERVICE_ACCOUNT_PATH = os.getenv(
     "FIREBASE_SERVICE_ACCOUNT_PATH", ""
 ).strip()
 
+# Keep this JSON value in the hosting provider's secret environment.
+# It is never returned by any public API.
+FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv(
+    "FIREBASE_SERVICE_ACCOUNT_JSON", ""
+).strip()
+
+FIREBASE_WEB_CONFIG = {
+    "apiKey": os.getenv("FIREBASE_WEB_API_KEY", "").strip(),
+    "authDomain": os.getenv("FIREBASE_WEB_AUTH_DOMAIN", "").strip(),
+    "projectId": os.getenv("FIREBASE_WEB_PROJECT_ID", "").strip(),
+    "appId": os.getenv("FIREBASE_WEB_APP_ID", "").strip(),
+    "messagingSenderId": os.getenv(
+        "FIREBASE_WEB_MESSAGING_SENDER_ID", ""
+    ).strip(),
+}
+
 ML_MODEL_PATH = Path(
     os.getenv(
         "NEUROSENSE_MODEL_PATH",
@@ -308,23 +324,38 @@ def initialize_firebase() -> None:
 
     global FIREBASE_APP, FIRESTORE_CLIENT
 
-    if not FIREBASE_SERVICE_ACCOUNT_PATH:
+    certificate_source = None
+    service_account_json = FIREBASE_SERVICE_ACCOUNT_JSON
 
+    if service_account_json:
+        try:
+            certificate_source = json.loads(service_account_json)
+            if not isinstance(certificate_source, dict):
+                raise ValueError("Service-account JSON must be an object.")
+        except Exception:
+            logger.exception(
+                "FIREBASE_SERVICE_ACCOUNT_JSON is invalid JSON."
+            )
+            return
+
+    elif FIREBASE_SERVICE_ACCOUNT_PATH:
+        credential_path = Path(FIREBASE_SERVICE_ACCOUNT_PATH)
+
+        if not credential_path.is_absolute():
+            credential_path = BASE_DIR / credential_path
+
+        if not credential_path.is_file():
+            logger.error(
+                "Firebase service-account file does not exist: %s",
+                credential_path
+            )
+            return
+
+        certificate_source = str(credential_path)
+
+    else:
         logger.info(
-            "Firebase is not configured; development authentication will be used."
-        )
-        return
-
-    credential_path = Path(FIREBASE_SERVICE_ACCOUNT_PATH)
-
-    if not credential_path.is_absolute():
-        credential_path = BASE_DIR / credential_path
-
-    if not credential_path.is_file():
-
-        logger.error(
-            "Firebase service-account file does not exist: %s",
-            credential_path
+            "Firebase Admin is not configured; production user APIs remain protected."
         )
         return
 
@@ -336,7 +367,7 @@ def initialize_firebase() -> None:
         except ValueError:
 
             FIREBASE_APP = firebase_admin.initialize_app(
-                credentials.Certificate(str(credential_path))
+                credentials.Certificate(certificate_source)
             )
 
         FIRESTORE_CLIENT = firestore.client(
@@ -352,6 +383,17 @@ def initialize_firebase() -> None:
         logger.exception(
             "Firebase initialization failed."
         )
+
+
+def firebase_web_configured() -> bool:
+    required_fields = (
+        "apiKey",
+        "authDomain",
+        "projectId",
+        "appId",
+        "messagingSenderId"
+    )
+    return all(FIREBASE_WEB_CONFIG.get(field) for field in required_fields)
 
 
 # ============================================================
@@ -1711,6 +1753,24 @@ def health():
     }
 
 
+@app.get("/api/public-config")
+def public_config():
+    """Return Firebase browser configuration only; never expose Admin credentials."""
+    web_ready = firebase_web_configured()
+    admin_ready = FIREBASE_APP is not None
+
+    return {
+        "firebase_web_configured": web_ready,
+        "firebase_auth_backend_ready": admin_ready,
+        "firebase_sign_in_ready": web_ready and admin_ready,
+        "firebase": (
+            dict(FIREBASE_WEB_CONFIG)
+            if web_ready and admin_ready
+            else None
+        )
+    }
+
+
 @app.get("/api/system/status")
 def system_status():
 
@@ -1730,6 +1790,13 @@ def system_status():
 
         "firebase_firestore": (
             FIRESTORE_CLIENT is not None
+        ),
+
+        "firebase_web_configured": firebase_web_configured(),
+
+        "firebase_sign_in_ready": (
+            FIREBASE_APP is not None
+            and firebase_web_configured()
         ),
 
         "ml_model_loaded": (
