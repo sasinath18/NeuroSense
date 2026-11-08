@@ -581,3 +581,59 @@ def test_recovery_session_is_saved_and_returned_in_history(client):
     assert history.json()["total"] == 1
     assert history.json()["sessions"][0]["session_id"] == body["session"]["session_id"]
 
+
+def test_dashboard_overview_returns_empty_user_state(client):
+    """Dashboard overview should return a clean waiting state for a new user."""
+    response = client.get(
+        "/api/dashboard/overview",
+        headers={"X-Demo-User": "api-test-dashboard-empty"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["device_connected"] is False
+    assert body["latest_reading"] is None
+    assert body["stress"]["status"] == "waiting_for_wearable_data"
+    assert body["stress"]["stress_score"] is None
+    assert body["haptic_enabled"] is False
+
+
+def test_latest_stress_waits_until_wearable_data_exists(client):
+    """Stress endpoint should not invent a score before wearable data arrives."""
+    response = client.get(
+        "/api/stress/latest",
+        headers={"X-Demo-User": "api-test-stress-empty"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "waiting_for_data"
+    assert body["stress_score"] is None
+
+
+def test_summary_and_high_stress_history_endpoints_return_empty_lists(client):
+    """Summary and high-stress event history should return empty results for a new user."""
+    headers = {"X-Demo-User": "api-test-empty-histories"}
+
+    summaries = client.get("/api/summaries", headers=headers)
+    assert summaries.status_code == 200
+    assert summaries.json()["total"] == 0
+    assert summaries.json()["summaries"] == []
+
+    events = client.get("/api/events/high-stress", headers=headers)
+    assert events.status_code == 200
+    assert events.json()["total"] == 0
+    assert events.json()["events"] == []
+
+
+def test_face_scan_status_enforces_preview_only_privacy_state(client):
+    """Face scan status must disclose that analysis is not integrated."""
+    response = client.get("/api/face-scan/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is False
+    assert body["status"] == "analysis_not_integrated"
+    assert body["image_storage"] is False
+    assert "OFF by default" in body["camera_policy"]
+
