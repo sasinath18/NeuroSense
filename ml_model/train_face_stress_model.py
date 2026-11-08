@@ -7,6 +7,7 @@ loaded. Video is decoded locally and is never uploaded by this script.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import sys
@@ -65,21 +66,42 @@ def parse_stress_label(value: Any) -> int | None:
 def read_stress_labels(path: Path) -> list[int | None]:
     """Choose the CSV column with the largest count of recognized labels."""
     try:
-        frame = pd.read_csv(path, header=None, dtype=str, sep=None, engine="python")
+        sample = path.read_text(encoding="utf-8-sig")[:8192]
+        try:
+            delimiter = csv.Sniffer().sniff(
+                sample, delimiters=",;\\t"
+            ).delimiter
+        except csv.Error:
+            # Single-column files have no delimiter for Sniffer to detect.
+            delimiter = ","
+        frame = pd.read_csv(
+            path, header=None, dtype=str, sep=delimiter, engine="python"
+        )
     except Exception as exc:
         raise ValueError(f"Could not read {path}: {exc}") from exc
     if frame.empty:
         raise ValueError(f"Stress label file is empty: {path}")
 
+    # Some exports include a one-cell header; remove only known header names.
+    first_row = [str(value).strip().lower() for value in frame.iloc[0].tolist()]
+    header_names = {"stress", "stress_level", "stress level", "label", "labels"}
+    if any(value in header_names for value in first_row):
+        frame = frame.iloc[1:].reset_index(drop=True)
+
     candidates = []
     for column in frame.columns:
-        parsed = [parse_stress_label(value) for value in frame[column].tolist()]
-        valid_count = sum(value is not None for value in parsed)
-        if valid_count:
-            candidates.append((valid_count, parsed))
+        raw_values = frame[column].tolist()
+        parsed = [parse_stress_label(value) for value in raw_values]
+        recognized_count = sum(
+            value is not None
+            or str(raw).strip().lower() in {"unknown", "nan", "none", ""}
+            for raw, value in zip(raw_values, parsed)
+        )
+        if recognized_count:
+            candidates.append((recognized_count, parsed))
     if not candidates:
         raise ValueError(
-            f"No documented 0/1/2 labels found in {path}. "
+            f"No documented 0/1/2/unknown labels found in {path}. "
             "Inspect the provider's CSV schema rather than guessing a mapping."
         )
     return max(candidates, key=lambda item: item[0])[1]
