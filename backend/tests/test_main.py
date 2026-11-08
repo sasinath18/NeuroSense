@@ -982,15 +982,19 @@ def test_recovery_history_returns_saved_completed_session(client):
     assert body["sessions"][0]["completed"] == 1
 
 
-def test_face_scan_status_reports_camera_privacy_and_not_integrated_state(client):
-    """Face Scan API should explicitly disclose preview-only analysis status."""
+def test_face_scan_status_reports_browser_local_landmark_privacy(client):
+    """Face Scan API discloses local landmark processing without stress inference."""
     response = client.get("/api/face-scan/status")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["available"] is False
-    assert body["status"] == "analysis_not_integrated"
+    assert body["available"] is True
+    assert body["status"] == "browser_local_landmark_detection_only"
+    assert body["processing"] == "on_device_browser"
+    assert body["raw_frames_uploaded"] is False
     assert body["image_storage"] is False
+    assert body["emotion_inference"] is False
+    assert body["stress_inference"] is False
     assert "OFF by default" in body["camera_policy"]
 
 
@@ -1046,15 +1050,19 @@ def test_recovery_session_is_saved_and_returned_in_history(client):
     assert history.json()["sessions"][0]["activity"] == "breathing"
 
 
-def test_face_scan_status_enforces_preview_only_privacy_contract(client):
-    """API Test 6c: backend reports analysis unavailable and does not store images."""
+def test_face_scan_status_enforces_local_landmark_privacy_contract(client):
+    """API Test 6c: backend reports local landmarks and does not store images."""
     response = client.get("/api/face-scan/status")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["available"] is False
-    assert body["status"] == "analysis_not_integrated"
+    assert body["available"] is True
+    assert body["status"] == "browser_local_landmark_detection_only"
+    assert body["processing"] == "on_device_browser"
+    assert body["raw_frames_uploaded"] is False
     assert body["image_storage"] is False
+    assert body["emotion_inference"] is False
+    assert body["stress_inference"] is False
     assert "OFF by default" in body["camera_policy"]
 
 
