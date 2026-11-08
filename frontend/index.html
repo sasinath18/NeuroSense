@@ -49,7 +49,7 @@
             --text: #192335;
             --muted: #53627a;
             --subtle: #748198;
-            --border: #dce2eb;
+            --border: #c4cedd;
             --accent: #326db9;
             --accent-hover: #235caa;
             --accent-soft: rgba(50,109,185,.10);
@@ -60,7 +60,7 @@
             --chart-1: #286cbd;
             --chart-2: #14855e;
             --chart-3: #a87318;
-            --shadow: 0 10px 28px rgba(40,55,80,.07);
+            --shadow: 0 10px 28px rgba(40,55,80,.10);
             --input: #f7f9fc;
             --ring-track: #e0e6ef;
         }
@@ -441,6 +441,10 @@
             z-index: 20;
         }
 
+        .sidebar-backdrop {
+            display: none;
+        }
+
         .sidebar-brand {
             padding: 0 9px 25px;
         }
@@ -655,6 +659,35 @@
             height: 18px;
         }
 
+        .metric-card:nth-child(1) .metric-icon {
+            color: #df536e;
+            background: rgba(223,83,110,.14);
+        }
+
+        .metric-card:nth-child(2) .metric-icon {
+            color: #8a6cda;
+            background: rgba(138,108,218,.15);
+        }
+
+        .metric-card:nth-child(3) .metric-icon {
+            color: #d28a22;
+            background: rgba(210,138,34,.16);
+        }
+
+        .metric-card:nth-child(4) .metric-icon {
+            color: #2198bd;
+            background: rgba(33,152,189,.15);
+        }
+
+        .dashboard-camera-slot,
+        .face-camera-slot {
+            min-width: 0;
+        }
+
+        .dashboard-camera-slot {
+            margin-bottom: 17px;
+        }
+
         .metric-value {
             font-size: 29px;
             font-weight: 800;
@@ -730,6 +763,7 @@
 
         .stress-ring {
             --score: 67;
+            --stress-color: var(--green);
             position: relative;
             width: 120px;
             height: 120px;
@@ -738,7 +772,7 @@
             place-items: center;
             flex-shrink: 0;
             background: conic-gradient(
-                var(--chart-3) calc(var(--score) * 1%),
+                var(--stress-color) calc(var(--score) * 1%),
                 var(--ring-track) 0
             );
         }
@@ -1279,8 +1313,24 @@
                 left: 0;
             }
 
+            .sidebar {
+                z-index: 30;
+            }
+
+            .sidebar-backdrop.visible {
+                display: block;
+                position: fixed;
+                inset: 0;
+                padding: 0;
+                border: 0;
+                background: rgba(8, 12, 20, .48);
+                z-index: 25;
+            }
+
             .menu-button {
                 display: inline-flex;
+                position: relative;
+                z-index: 31;
             }
 
             .app-main {
@@ -1560,6 +1610,12 @@
 
     </aside>
 
+    <button id="sidebarBackdrop"
+            class="sidebar-backdrop"
+            type="button"
+            aria-label="Close navigation menu"
+            tabindex="-1"></button>
+
 
     <!-- MAIN CONTENT -->
 
@@ -1572,7 +1628,10 @@
             <div class="topbar-left">
 
                 <button id="menuBtn" class="icon-btn menu-button"
-                        aria-label="Open navigation menu">
+                        type="button"
+                        aria-label="Open navigation menu"
+                        aria-expanded="false"
+                        aria-controls="sidebar">
                     ☰
                 </button>
 
@@ -1735,6 +1794,8 @@
                 <!-- LEFT COLUMN -->
 
                 <div>
+
+                    <div id="dashboardCameraSlot" class="dashboard-camera-slot"></div>
 
                     <article class="card chart-card">
 
@@ -2065,12 +2126,13 @@
 
             <div class="face-grid">
 
-                <article class="card">
+                <div id="faceCameraSlot" class="face-camera-slot">
+                <article id="faceCameraCard" class="card">
 
                     <div class="card-header">
                         <div>
-                            <h3>Camera Preview</h3>
-                            <p>Camera is OFF by default</p>
+                            <h3>Live Face Scan</h3>
+                            <p>On-device face landmarks · runs alongside wearable readings</p>
                         </div>
 
                         <span id="cameraStatus" class="badge">
@@ -2133,6 +2195,7 @@
                     </p>
 
                 </article>
+                </div>
 
 
                 <article class="card">
@@ -2158,7 +2221,7 @@
 
                         <div class="privacy-item">
                             <span class="check">✓</span>
-                            <span>Camera remains OFF when you leave this page.</span>
+                            <span>Camera stays active while you move between NeuroSense pages. Use Stop Camera when finished.</span>
                         </div>
 
                         <div class="privacy-item">
@@ -2175,7 +2238,9 @@
                         Webcam frames are not uploaded to NeuroSense or stored
                         by this feature. The MediaPipe library and model load
                         from Google's CDN, and its service may collect usage
-                        metrics. This feature does not infer emotion or stress.
+                        metrics. This feature detects landmarks only; it is not
+                        currently an input to the wearable stress model and does
+                        not infer emotion or stress.
                     </div>
 
                 </article>
@@ -2556,41 +2621,7 @@
                 </article>
 
 
-                <article class="card">
 
-                    <div class="card-header">
-                        <div>
-                            <h3>System Information</h3>
-                            <p>Current integration status</p>
-                        </div>
-                    </div>
-
-                    <div class="status-row">
-                        <span>Frontend</span>
-                        <span style="color:var(--green)">Loaded</span>
-                    </div>
-
-                    <div class="status-row">
-                        <span>Backend API</span>
-                        <span id="settingsBackendStatus">Checking</span>
-                    </div>
-
-                    <div class="status-row">
-                        <span>Firebase</span>
-                        <span id="settingsFirebaseStatus">Checking</span>
-                    </div>
-
-                    <div class="status-row">
-                        <span>ML model</span>
-                        <span id="settingsModelStatus">Checking</span>
-                    </div>
-
-                    <div class="status-row">
-                        <span>ESP32</span>
-                        <span>Not connected</span>
-                    </div>
-
-                </article>
 
             </div>
 
@@ -3139,7 +3170,10 @@ function clearLiveSensorDisplay(message = "No authenticated wearable readings av
     );
     setText("stressStatusBadge", "No estimate");
     const ring = $("stressRing");
-    if (ring) ring.style.setProperty("--score", "0");
+    if (ring) {
+        ring.style.setProperty("--score", "0");
+        ring.style.setProperty("--stress-color", "var(--green)");
+    }
 }
 
 function applyStressResult(stress) {
@@ -3156,7 +3190,15 @@ function applyStressResult(stress) {
             "WESAD-trained model output. This model is not clinically validated and is not a diagnosis."
         );
         setText("stressStatusBadge", "Experimental");
-        if (ring) ring.style.setProperty("--score", String(numericScore));
+        if (ring) {
+            const stressColor = numericScore < 34
+                ? "var(--green)"
+                : numericScore < 67
+                    ? "var(--yellow)"
+                    : "var(--red)";
+            ring.style.setProperty("--score", String(numericScore));
+            ring.style.setProperty("--stress-color", stressColor);
+        }
         return;
     }
 
@@ -3623,14 +3665,21 @@ const pageTitles = {
 };
 
 
+function placeFaceCameraPanel(pageName) {
+    const panel = $("faceCameraCard");
+    const destinationId = pageName === "face"
+        ? "faceCameraSlot"
+        : "dashboardCameraSlot";
+    const destination = $(destinationId);
+
+    if (panel && destination && panel.parentElement !== destination) {
+        destination.appendChild(panel);
+    }
+}
+
 function setActivePage(pageName) {
 
     if (!pageTitles[pageName]) return;
-
-    // Stop camera whenever the user leaves Face Scan.
-    if (pageName !== "face") {
-        stopCamera();
-    }
 
     document.querySelectorAll(".page").forEach(page => {
         page.classList.remove("active");
@@ -3651,7 +3700,8 @@ function setActivePage(pageName) {
 
     $("topPageTitle").textContent = pageTitles[pageName];
 
-    $("sidebar").classList.remove("open");
+    placeFaceCameraPanel(pageName);
+    setSidebarOpen(false);
 
     if (pageName === "history") {
         renderHistory();
@@ -3662,6 +3712,14 @@ function setActivePage(pageName) {
     }
 
     setTimeout(drawAllCharts, 70);
+    if (cameraStream) {
+        setTimeout(() => {
+            if (!cameraStream) return;
+            sizeFaceOverlay();
+            const video = $("cameraVideo");
+            if (video && video.paused) video.play().catch(() => {});
+        }, 90);
+    }
 }
 
 
@@ -3679,8 +3737,30 @@ document.querySelectorAll("[data-go]").forEach(button => {
 });
 
 
+function setSidebarOpen(open) {
+    const isOpen = Boolean(open);
+    const sidebar = $("sidebar");
+    const menuButton = $("menuBtn");
+    const backdrop = $("sidebarBackdrop");
+
+    sidebar.classList.toggle("open", isOpen);
+    backdrop.classList.toggle("visible", isOpen);
+    menuButton.setAttribute("aria-expanded", String(isOpen));
+    menuButton.setAttribute(
+        "aria-label",
+        isOpen ? "Close navigation menu" : "Open navigation menu"
+    );
+    menuButton.textContent = isOpen ? "×" : "☰";
+}
+
 $("menuBtn").addEventListener("click", () => {
-    $("sidebar").classList.toggle("open");
+    setSidebarOpen(!$("sidebar").classList.contains("open"));
+});
+
+$("sidebarBackdrop").addEventListener("click", () => setSidebarOpen(false));
+
+document.addEventListener("keydown", event => {
+    if (event.key === "Escape") setSidebarOpen(false);
 });
 
 
@@ -5306,6 +5386,7 @@ function initializeApp() {
     renderRecoverySequence();
     renderHistory();
     updateAnalyticsCount();
+    placeFaceCameraPanel("dashboard");
 
     $("currentDate").textContent =
         new Date().toLocaleDateString([], {
