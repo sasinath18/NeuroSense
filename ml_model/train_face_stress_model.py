@@ -69,7 +69,7 @@ def read_stress_labels(path: Path) -> list[int | None]:
         sample = path.read_text(encoding="utf-8-sig")[:8192]
         try:
             delimiter = csv.Sniffer().sniff(
-                sample, delimiters=",;\\t"
+                sample, delimiters=",;\t"
             ).delimiter
         except csv.Error:
             # Single-column files have no delimiter for Sniffer to detect.
