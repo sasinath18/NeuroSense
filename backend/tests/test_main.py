@@ -179,3 +179,24 @@ def test_sensor_history_returns_saved_readings(client):
         for item in body["readings"]
     )
 
+
+def test_device_pairing_creates_device_and_returns_one_time_token(client):
+    """Pair a device and verify a usable token is returned only in the response."""
+    device_id = "test-device-pairing-01"
+    response = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "NeuroSense Test Wearable",
+        },
+        headers={"X-Demo-User": "api-test-device-pairing"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["success"] is True
+    assert body["device_id"] == device_id
+    assert isinstance(body["device_token"], str)
+    assert len(body["device_token"]) >= 24
+    assert "shown only once" in body["warning"]
+
