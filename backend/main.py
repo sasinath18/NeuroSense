@@ -1736,7 +1736,7 @@ def system_status():
             STRESS_MODEL is not None
         ),
 
-        "face_scan_analysis": "not_integrated",
+        "face_scan_analysis": "browser_local_landmark_detection_only",
         "timestamp": iso()
     }
 
@@ -2813,20 +2813,22 @@ def high_stress_events(
 def face_scan_status():
 
     return {
-        "available": False,
-        "status": "analysis_not_integrated",
-
+        "available": True,
+        "status": "browser_local_landmark_detection_only",
+        "processing": "on_device_browser",
         "camera_policy": (
             "Camera remains browser-side, "
             "user-triggered and OFF by default."
         ),
-
+        "raw_frames_uploaded": False,
         "image_storage": False,
-
+        "emotion_inference": False,
+        "stress_inference": False,
         "message": (
-            "A validated facial-feature analysis component "
-            "has not been integrated. No stress inference "
-            "is made from the webcam preview."
+            "Face landmarks and mesh overlays are processed "
+            "locally in the browser. Webcam frames are not "
+            "uploaded to the NeuroSense backend or stored. "
+            "Emotion and stress inference are not included."
         )
     }
 
