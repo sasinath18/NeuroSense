@@ -260,3 +260,99 @@ def test_due_summary_generation_is_visible_in_summary_history(client):
     assert body["summaries"][0]["avg_hrv"] == 36
     assert body["summaries"][0]["avg_gsr"] == 1700
 
+
+
+
+def test_sensor_post_rejects_out_of_range_heart_rate(client):
+    """API Test 2a: reject physiological values outside the schema range."""
+    response = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 221,
+            "source": "simulated",
+            "signal_quality": "good",
+        },
+        headers={"X-Demo-User": "neurosense-validation-user"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_sensor_post_rejects_timestamp_too_far_in_future(client):
+    """API Test 2b: reject readings more than five minutes ahead."""
+    from datetime import datetime, timedelta, timezone
+
+    future_timestamp = (
+        datetime.now(timezone.utc) + timedelta(minutes=10)
+    ).isoformat()
+
+    response = client.post(
+        "/api/sensors",
+        json={
+            "timestamp": future_timestamp,
+            "heart_rate_bpm": 72,
+            "source": "simulated",
+            "signal_quality": "good",
+        },
+        headers={"X-Demo-User": "neurosense-validation-user"},
+    )
+
+    assert response.status_code == 422
+    assert "future" in response.json()["detail"].lower()
+
+
+def test_sensor_post_rejects_reading_older_than_24_hours(client):
+    """API Test 2c: reject stale sensor readings."""
+    from datetime import datetime, timedelta, timezone
+
+    old_timestamp = (
+        datetime.now(timezone.utc) - timedelta(hours=25)
+    ).isoformat()
+
+    response = client.post(
+        "/api/sensors",
+        json={
+            "timestamp": old_timestamp,
+            "heart_rate_bpm": 72,
+            "source": "simulated",
+            "signal_quality": "good",
+        },
+        headers={"X-Demo-User": "neurosense-validation-user"},
+    )
+
+    assert response.status_code == 422
+    assert "24-hour" in response.json()["detail"]
+
+
+def test_sensor_readings_are_isolated_between_demo_users(client):
+    """API Test 2d: one demo user must not see another user's readings."""
+    alice_headers = {"X-Demo-User": "neurosense-alice"}
+    bob_headers = {"X-Demo-User": "neurosense-bob"}
+
+    created = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 74,
+            "hrv_ms": 40,
+            "gsr_raw": 1700,
+            "source": "simulated",
+            "signal_quality": "moderate",
+        },
+        headers=alice_headers,
+    )
+
+    assert created.status_code == 201
+
+    alice_latest = client.get(
+        "/api/sensors/latest",
+        headers=alice_headers,
+    )
+    bob_latest = client.get(
+        "/api/sensors/latest",
+        headers=bob_headers,
+    )
+
+    assert alice_latest.status_code == 200
+    assert alice_latest.json()["data"] is not None
+    assert bob_latest.status_code == 200
+    assert bob_latest.json()["data"] is None
