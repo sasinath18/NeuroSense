@@ -400,3 +400,54 @@ def test_unpair_device_marks_device_inactive(client):
     assert len(matching) == 1
     assert matching[0]["active"] == 0
 
+
+def test_baseline_calibration_rejects_insufficient_readings(client):
+    """Baseline calibration requires at least ten usable wearable readings."""
+    response = client.post(
+        "/api/baseline/calibrate?lookback_minutes=10",
+        headers={"X-Demo-User": "api-test-baseline-insufficient"},
+    )
+
+    assert response.status_code == 422
+    assert "Need at least 10" in response.json()["detail"]
+
+
+def test_baseline_calibration_and_retrieval(client):
+    """Ten usable wearable readings should create a retrievable baseline."""
+    headers = {"X-Demo-User": "api-test-baseline-success"}
+
+    for index in range(10):
+        reading_response = client.post(
+            "/api/sensors",
+            json={
+                "heart_rate_bpm": 60 + index,
+                "hrv_ms": 30 + index,
+                "gsr_raw": 1000 + index,
+                "signal_quality": "good",
+                "source": "wearable",
+            },
+            headers=headers,
+        )
+        assert reading_response.status_code == 201
+
+    calibration_response = client.post(
+        "/api/baseline/calibrate?lookback_minutes=10",
+        headers=headers,
+    )
+
+    assert calibration_response.status_code == 200
+    calibration = calibration_response.json()
+    assert calibration["success"] is True
+    assert calibration["baseline"]["sample_count"] == 10
+    assert calibration["baseline"]["heart_rate_bpm"] == 64.5
+    assert calibration["baseline"]["hrv_ms"] == 34.5
+    assert calibration["baseline"]["gsr_raw"] == 1004.5
+
+    get_response = client.get("/api/baseline", headers=headers)
+
+    assert get_response.status_code == 200
+    baseline_body = get_response.json()
+    assert baseline_body["available"] is True
+    assert baseline_body["baseline"]["sample_count"] == 10
+    assert baseline_body["baseline"]["heart_rate_bpm"] == 64.5
+
