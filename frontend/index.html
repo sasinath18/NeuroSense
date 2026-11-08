@@ -5084,7 +5084,9 @@ $("sendHapticTestBtn").addEventListener("click", async () => {
             if (!pendingHapticCommandId) {
                 throw new Error("Backend did not return a haptic command ID.");
             }
-            showToast("Haptic command queued. Waiting for ESP32 acknowledgement...");
+            showToast(result.cloud_sync === "synced"
+                ? "Haptic command queued and backed up. Waiting for ESP32 acknowledgement..."
+                : "Haptic command queued for this server session, but Firestore backup is not confirmed. Keep the ESP32 connected; a server restart may clear this command.");
         } else {
             showToast("Checking the existing haptic command. No duplicate command will be created.");
         }
