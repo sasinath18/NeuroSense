@@ -485,6 +485,95 @@ def firestore_write(
         return "failed"
 
 
+def firestore_read_document(
+    collection_path: tuple[str, ...],
+    document_id: str
+) -> dict | None:
+
+    if FIRESTORE_CLIENT is None:
+        return None
+
+    if not collection_path or len(collection_path) % 2 == 0:
+        logger.error("Invalid Firestore collection path: %s", collection_path)
+        return None
+
+    try:
+        reference = FIRESTORE_CLIENT.collection(collection_path[0])
+
+        for index, segment in enumerate(collection_path[1:], start=1):
+            if index % 2 == 1:
+                reference = reference.document(segment)
+            else:
+                reference = reference.collection(segment)
+
+        snapshot = reference.document(document_id).get()
+
+        if not snapshot.exists:
+            return None
+
+        return snapshot.to_dict() or {}
+
+    except Exception:
+        logger.exception(
+            "Firestore document read failed for %s/%s",
+            collection_path,
+            document_id
+        )
+        return None
+
+
+def firestore_read_collection(
+    collection_path: tuple[str, ...],
+    limit: int = 100,
+    order_by: str | None = None,
+    descending: bool = True
+) -> list[dict]:
+
+    if FIRESTORE_CLIENT is None:
+        return []
+
+    if not collection_path or len(collection_path) % 2 == 1:
+        logger.error("Invalid Firestore document path: %s", collection_path)
+        return []
+
+    try:
+        reference = FIRESTORE_CLIENT.collection(collection_path[0])
+
+        for index, segment in enumerate(collection_path[1:], start=1):
+            if index % 2 == 1:
+                reference = reference.document(segment)
+            else:
+                reference = reference.collection(segment)
+
+        if order_by:
+            direction = (
+                firestore.Query.DESCENDING
+                if descending
+                else firestore.Query.ASCENDING
+            )
+            reference = reference.order_by(
+                order_by,
+                direction=direction
+            )
+
+        documents = reference.limit(limit).stream()
+        results = []
+
+        for document in documents:
+            data = document.to_dict() or {}
+            data.setdefault("document_id", document.id)
+            results.append(data)
+
+        return results
+
+    except Exception:
+        logger.exception(
+            "Firestore collection read failed for %s",
+            collection_path
+        )
+        return []
+
+
 # ============================================================
 # 7. REQUEST VALIDATION MODELS
 # ============================================================
@@ -1002,7 +1091,15 @@ def baseline_for_user(
             (user_id,)
         ).fetchone()
 
-    return row_dict(row)
+    local_baseline = row_dict(row)
+
+    if local_baseline is not None:
+        return local_baseline
+
+    return firestore_read_document(
+        ("users", user_id, "baselines"),
+        "current"
+    )
 
 
 def calibrate_baseline(
@@ -1302,6 +1399,18 @@ def predict_stress(
                             reading["timestamp"]
                         )
                     )
+
+                firestore_write(
+                    ("users", user_id, "high_stress_events"),
+                    event_id,
+                    {
+                        "event_id": event_id,
+                        "user_id": user_id,
+                        "reading_id": reading["id"],
+                        "stress_probability": probability,
+                        "occurred_at": reading["timestamp"]
+                    }
+                )
 
             return result
 
@@ -2047,6 +2156,14 @@ def latest_reading(
             else None
         )
 
+    else:
+        cloud_rows = firestore_read_collection(
+            ("users", user_id, "sensor_readings"),
+            limit=1,
+            order_by="timestamp"
+        )
+        data = cloud_rows[0] if cloud_rows else None
+
     return {
         "data": data
     }
@@ -2076,11 +2193,43 @@ def sensor_history(
             (user_id, limit)
         ).fetchall()
 
+    combined = []
+    seen_ids = set()
+
+    for row in rows:
+        item = dict(row)
+        item["ibi_ms"] = (
+            json.loads(item.pop("ibi_ms_json"))
+            if item.get("ibi_ms_json")
+            else None
+        )
+        combined.append(item)
+        seen_ids.add(item["id"])
+
+    # Merge Firestore copies to recover readings after an ephemeral
+    # Render filesystem restart; SQLite remains the preferred fast path.
+    cloud_rows = firestore_read_collection(
+        ("users", user_id, "sensor_readings"),
+        limit=limit,
+        order_by="timestamp"
+    )
+
+    for item in cloud_rows:
+        reading_id = item.get("id") or item.get("document_id")
+        if reading_id and reading_id not in seen_ids:
+            item.setdefault("id", reading_id)
+            combined.append(item)
+            seen_ids.add(reading_id)
+
+    combined.sort(
+        key=lambda item: item.get("timestamp") or "",
+        reverse=True
+    )
+    combined = combined[:limit]
+
     return {
-        "total": len(rows),
-        "readings": [
-            dict(row) for row in rows
-        ]
+        "total": len(combined),
+        "readings": combined
     }
 
 
@@ -2261,11 +2410,31 @@ def dashboard_overview(
         for row in device_rows
     )
 
+    if settings is None:
+        cloud_settings = firestore_read_document(
+            ("users", user_id, "settings"),
+            "preferences"
+        )
+        if cloud_settings is not None:
+            settings = {
+                "haptic_enabled": int(
+                    bool(cloud_settings.get("haptic_enabled", False))
+                )
+            }
+
     reading = row_dict(latest)
+
+    if reading is None:
+        cloud_readings = firestore_read_collection(
+            ("users", user_id, "sensor_readings"),
+            limit=1,
+            order_by="timestamp"
+        )
+        reading = cloud_readings[0] if cloud_readings else None
 
     if (
         reading
-        and reading["source"] == "wearable"
+        and reading.get("source") == "wearable"
     ):
 
         prediction = predict_stress(
@@ -2315,6 +2484,17 @@ def get_settings(
         ).fetchone()
 
     if row is None:
+        cloud_settings = firestore_read_document(
+            ("users", user_id, "settings"),
+            "preferences"
+        )
+        if cloud_settings is not None:
+            return {
+                "haptic_enabled": bool(
+                    cloud_settings.get("haptic_enabled", False)
+                ),
+                "updated_at": cloud_settings.get("updated_at")
+            }
 
         return {
             "haptic_enabled": False,
@@ -2864,6 +3044,18 @@ def recovery_history(
 
             sessions.append(item)
 
+    if not sessions:
+        sessions = firestore_read_collection(
+            ("users", user_id, "recovery_sessions"),
+            limit=limit,
+            order_by="completed_at"
+        )
+        for session in sessions:
+            session.setdefault(
+                "comparison",
+                None
+            )
+
     return {
         "total": len(sessions),
         "sessions": sessions
@@ -2901,11 +3093,18 @@ def summary_history(
             )
         ).fetchall()
 
+    summaries = [dict(row) for row in rows]
+
+    if not summaries:
+        summaries = firestore_read_collection(
+            ("users", user_id, "summaries"),
+            limit=limit,
+            order_by="period_end"
+        )
+
     return {
-        "total": len(rows),
-        "summaries": [
-            dict(row) for row in rows
-        ]
+        "total": len(summaries),
+        "summaries": summaries
     }
 
 
@@ -2944,11 +3143,18 @@ def high_stress_events(
             )
         ).fetchall()
 
+    events = [dict(row) for row in rows]
+
+    if not events:
+        events = firestore_read_collection(
+            ("users", user_id, "high_stress_events"),
+            limit=limit,
+            order_by="occurred_at"
+        )
+
     return {
-        "total": len(rows),
-        "events": [
-            dict(row) for row in rows
-        ]
+        "total": len(events),
+        "events": events
     }
 
 
