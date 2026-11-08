@@ -859,6 +859,7 @@ def test_haptic_setting_can_be_enabled_disabled_and_retrieved(client):
     )
     assert enabled.status_code == 200
     assert enabled.json()["haptic_enabled"] is True
+    assert "cloud_sync" in enabled.json()
 
     fetched_enabled = client.get("/api/settings", headers=headers)
     assert fetched_enabled.status_code == 200
