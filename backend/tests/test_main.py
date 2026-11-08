@@ -143,3 +143,39 @@ def test_latest_sensor_reading_returns_saved_record(client):
     assert body["data"]["gsr_raw"] == 1920
     assert body["data"]["source"] == "simulated"
 
+
+def test_sensor_history_returns_saved_readings(client):
+    """GET sensor history and verify the record created for this user."""
+    headers = {"X-Demo-User": "api-test-history"}
+
+    create_response = client.post(
+        "/api/sensors",
+        json={
+            "heart_rate_bpm": 73,
+            "hrv_ms": 45,
+            "gsr_raw": 1650,
+            "signal_quality": "good",
+            "source": "simulated",
+        },
+        headers=headers,
+    )
+
+    assert create_response.status_code == 201
+    created_id = create_response.json()["reading"]["id"]
+
+    history_response = client.get(
+        "/api/sensors/history?limit=10",
+        headers=headers,
+    )
+
+    assert history_response.status_code == 200
+    body = history_response.json()
+    assert body["total"] >= 1
+    assert any(
+        item["id"] == created_id
+        and item["heart_rate_bpm"] == 73
+        and item["hrv_ms"] == 45
+        and item["gsr_raw"] == 1650
+        for item in body["readings"]
+    )
+
