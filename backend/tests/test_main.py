@@ -147,3 +147,116 @@ def test_sensor_post_accepts_valid_simulated_reading_and_persists_it(client):
     assert history.status_code == 200
     assert history.json()["total"] == 1
     assert history.json()["readings"][0]["id"] == saved["id"]
+
+
+def test_recovery_session_rejects_completion_before_start(client):
+    """Recovery sessions must not complete before their start time."""
+    response = client.post(
+        "/api/recovery/sessions",
+        json={
+            "activity": "breathing",
+            "started_at": "2026-11-08T09:00:00+00:00",
+            "completed_at": "2026-11-08T08:59:00+00:00",
+            "duration_seconds": 60,
+            "completed": True,
+        },
+        headers={"X-Demo-User": "api-test-recovery-invalid-time"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "completed_at cannot be earlier than started_at."
+
+
+def test_recovery_session_returns_before_after_comparison(client):
+    """Recovery API should compare wearable readings around the session."""
+    headers = {"X-Demo-User": "api-test-recovery-comparison"}
+    now = datetime.now(timezone.utc)
+    started = now - timedelta(seconds=90)
+    completed = now - timedelta(seconds=30)
+    before_time = started - timedelta(seconds=15)
+    after_time = completed + timedelta(seconds=15)
+
+    before = client.post(
+        "/api/sensors",
+        json={
+            "timestamp": before_time.isoformat(),
+            "heart_rate_bpm": 82,
+            "hrv_ms": 32,
+            "gsr_raw": 1900,
+            "skin_temperature_c": 33.2,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers=headers,
+    )
+    after = client.post(
+        "/api/sensors",
+        json={
+            "timestamp": after_time.isoformat(),
+            "heart_rate_bpm": 75,
+            "hrv_ms": 40,
+            "gsr_raw": 1600,
+            "skin_temperature_c": 33.0,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers=headers,
+    )
+    assert before.status_code == 201
+    assert after.status_code == 201
+
+    response = client.post(
+        "/api/recovery/sessions",
+        json={
+            "activity": "breathing",
+            "started_at": started.isoformat(),
+            "completed_at": completed.isoformat(),
+            "duration_seconds": 60,
+            "completed": True,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    comparison = response.json()["comparison"]
+    assert comparison is not None
+    assert comparison["heart_rate_bpm"]["before"] == 82
+    assert comparison["heart_rate_bpm"]["after"] == 75
+    assert comparison["heart_rate_bpm"]["change"] == -7
+    assert comparison["hrv_ms"]["change"] == 8
+    assert comparison["gsr_raw"]["change"] == -300
+
+
+def test_due_summary_generation_is_visible_in_summary_history(client):
+    """A completed three-hour window should appear through the summaries API."""
+    headers = {"X-Demo-User": "api-test-three-hour-summary"}
+    old_timestamp = datetime.now(timezone.utc) - timedelta(hours=7)
+
+    reading = client.post(
+        "/api/sensors",
+        json={
+            "timestamp": old_timestamp.isoformat(),
+            "heart_rate_bpm": 80,
+            "hrv_ms": 36,
+            "gsr_raw": 1700,
+            "skin_temperature_c": 33.1,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers=headers,
+    )
+    assert reading.status_code == 201
+
+    created_count = create_due_summaries()
+    assert created_count >= 1
+
+    response = client.get("/api/summaries", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] >= 1
+    assert body["summaries"][0]["reading_count"] == 1
+    assert body["summaries"][0]["reliable_reading_count"] == 1
+    assert body["summaries"][0]["avg_heart_rate"] == 80
+    assert body["summaries"][0]["avg_hrv"] == 36
+    assert body["summaries"][0]["avg_gsr"] == 1700
+
