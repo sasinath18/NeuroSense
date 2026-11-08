@@ -30,9 +30,21 @@ The application code supports Firebase Google Sign-In, but Firebase must be conf
 2. Add a Web App to that project. Copy its web configuration values.
 3. In **Authentication → Sign-in method**, enable **Google**.
 4. In **Authentication → Settings → Authorized domains**, add `neurosense-app.onrender.com`. Add `localhost` only if you also use local development.
-5. Create a Firestore database if you want cloud sync.
-6. In **Project settings → Service accounts**, generate a private key JSON. Keep this private file secret.
-7. In Render, open the `neurosense-app` service → **Environment** and add the variables below. Save changes and redeploy.
+5. Create a **Cloud Firestore** database in **Production mode** if you want cloud sync. This backend accesses Firestore through the server-side Admin SDK; the browser does not access Firestore directly.
+6. In **Firestore → Rules**, keep direct client access denied. The Admin SDK uses service-account IAM permissions and bypasses client security rules:
+
+   ```text
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /{document=**} {
+         allow read, write: if false;
+       }
+     }
+   }
+   ```
+7. In **Project settings → Service accounts**, generate a private key JSON. Keep this private file secret.
+8. In Render, open the `neurosense-app` service → **Environment** and add the variables below. Save changes and redeploy.
 
 | Render environment variable | Value |
 |---|---|
