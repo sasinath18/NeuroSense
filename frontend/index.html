@@ -1040,6 +1040,112 @@
             font-weight: 800;
         }
 
+        .face-analysis-card {
+            display: grid;
+            gap: 14px;
+            align-content: start;
+        }
+
+        .face-scan-metrics {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 9px;
+        }
+
+        .face-scan-metric {
+            min-width: 0;
+            padding: 11px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface-2);
+            display: grid;
+            gap: 7px;
+        }
+
+        .face-scan-metric strong {
+            color: var(--text);
+            font-size: clamp(15px, 2vw, 21px);
+            overflow-wrap: anywhere;
+        }
+
+        .face-scan-metric:first-child strong {
+            color: var(--accent-hover);
+            font-size: 25px;
+        }
+
+        .face-scan-metric strong small {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .face-scan-progress {
+            height: 9px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: var(--ring-track);
+            border: 1px solid var(--border);
+        }
+
+        .face-scan-progress-fill {
+            width: 0%;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--accent), var(--chart-2));
+            transition: width .2s linear;
+        }
+
+        .face-pulse-chart-wrap {
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 11px;
+            background: var(--surface-2);
+        }
+
+        .face-pulse-chart-wrap .card-header {
+            margin-bottom: 8px;
+        }
+
+        #facePulseChart {
+            width: 100%;
+            height: 118px;
+            display: block;
+        }
+
+        #faceRppgStatusBadge[data-tone="good"] {
+            color: var(--green);
+            border-color: color-mix(in srgb, var(--green) 45%, transparent);
+        }
+
+        #faceRppgStatusBadge[data-tone="warning"] {
+            color: var(--yellow);
+            border-color: color-mix(in srgb, var(--yellow) 45%, transparent);
+        }
+
+        #faceRppgStatusBadge[data-tone="danger"] {
+            color: var(--red);
+            border-color: color-mix(in srgb, var(--red) 45%, transparent);
+        }
+
+        .face-stress-notice {
+            border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+        }
+
+        @media (max-width: 520px) {
+            .face-scan-metrics {
+                grid-template-columns: 1fr;
+            }
+
+            .face-scan-metric {
+                grid-template-columns: 1fr auto;
+                align-items: center;
+            }
+
+            .face-scan-metric strong {
+                text-align: right;
+            }
+        }
+
         /* =================================================
            8. RECOVERY
         ================================================= */
@@ -2119,8 +2225,8 @@
                 <div class="eyebrow">Optional camera feature</div>
                 <h1 class="section-title">Face Scan</h1>
                 <p class="section-subtitle">
-                    Start the camera here or from the Dashboard. It stays active
-                    while you move between NeuroSense pages until you stop it.
+                    Run a 120-second camera-only pulse scan. No ESP32 or wearable
+                    sensors are needed for this mode.
                 </p>
             </div>
 
@@ -2198,49 +2304,77 @@
                 </div>
 
 
-                <article class="card">
+                <article class="card face-analysis-card">
 
                     <div class="card-header">
                         <div>
-                            <h3>Privacy and Analysis</h3>
-                            <p>How this feature will work</p>
+                            <h3>Face-only Physiological Scan</h3>
+                            <p>Camera-based pulse estimation · no wearable required</p>
+                        </div>
+                        <span id="faceRppgStatusBadge" class="badge" data-tone="neutral">Ready</span>
+                    </div>
+
+                    <div class="notice">
+                        Sit comfortably, face the camera and keep your head still.
+                        Use even lighting and avoid direct sunlight or strong backlighting.
+                        The scan collects 120 seconds of facial colour signals locally.
+                    </div>
+
+                    <div class="face-scan-metrics">
+                        <div class="face-scan-metric">
+                            <span class="muted small">Camera-estimated pulse</span>
+                            <strong id="facePulseValue">-- <small>BPM</small></strong>
+                        </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Signal quality</span>
+                            <strong id="faceSignalQuality">Not measured</strong>
+                        </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Recording</span>
+                            <strong id="faceScanElapsed">0 / 120 sec</strong>
                         </div>
                     </div>
 
-                    <div class="privacy-list">
+                    <div class="face-scan-progress" aria-label="Face scan progress">
+                        <div id="faceScanProgressBar" class="face-scan-progress-fill"></div>
+                    </div>
+                    <p id="faceScanProgressText" class="muted small">Ready to start a 120-second scan.</p>
 
-                        <div class="privacy-item">
-                            <span class="check">✓</span>
-                            <span>Camera starts only after your action and permission.</span>
+                    <div class="face-pulse-chart-wrap">
+                        <div class="card-header">
+                            <div>
+                                <h3>Extracted pulse signal</h3>
+                                <p>Processed RGB variation · not raw video</p>
+                            </div>
+                            <span id="facePulseWindowBadge" class="badge">Waiting</span>
                         </div>
-
-                        <div class="privacy-item">
-                            <span class="check">✓</span>
-                            <span>Camera can be stopped at any time.</span>
-                        </div>
-
-                        <div class="privacy-item">
-                            <span class="check">✓</span>
-                            <span>Camera stays active while you move between NeuroSense pages. Use Stop Camera when finished.</span>
-                        </div>
-
-                        <div class="privacy-item">
-                            <span class="check">✓</span>
-                            <span>Face landmarks are processed locally in this browser.</span>
-                        </div>
-
+                        <canvas id="facePulseChart" role="img" aria-label="Extracted remote photoplethysmography pulse waveform"></canvas>
                     </div>
 
-                    <div class="notice" style="margin-top:20px">
-                        <strong>Analysis status: Face landmarks only</strong><br>
-                        MediaPipe Face Landmarker detects facial landmarks and
-                        draws a face-mesh overlay locally in this browser.
-                        Webcam frames are not uploaded to NeuroSense or stored
-                        by this feature. The MediaPipe library and model load
-                        from Google's CDN, and its service may collect usage
-                        metrics. This feature detects landmarks only; it is not
-                        currently an input to the wearable stress model and does
-                        not infer emotion or stress.
+                    <div class="face-actions">
+                        <button id="startFaceOnlyScanBtn" class="primary-btn" type="button">
+                            Start 120-second Face Scan
+                        </button>
+                        <button id="stopFaceOnlyScanBtn" class="secondary-btn" type="button" disabled>
+                            Stop Analysis
+                        </button>
+                    </div>
+
+                    <p id="faceRppgMessage" class="muted small" role="status" aria-live="polite">
+                        Start the camera first, then begin the face-only scan. The camera can remain on for preview after analysis.
+                    </p>
+
+                    <div class="notice face-stress-notice">
+                        <strong>Face-only stress estimate: Not available yet.</strong>
+                        Heart-rate extraction is the first stage. A separate face-only stress model
+                        must be trained and validated against reference measurements before a stress
+                        score can be shown. Facial expression alone is not used to infer stress.
+                    </div>
+
+                    <div class="privacy-list" style="margin-top:14px">
+                        <div class="privacy-item"><span class="check">✓</span><span>Face regions and rPPG signals are processed in this browser.</span></div>
+                        <div class="privacy-item"><span class="check">✓</span><span>No webcam frames or extracted pulse samples are uploaded or stored by this scan.</span></div>
+                        <div class="privacy-item"><span class="check">✓</span><span>Stop Analysis ends the 120-second measurement; Stop Camera switches the webcam off.</span></div>
                     </div>
 
                 </article>
