@@ -64,12 +64,57 @@ def test_system_status_endpoint(client):
     assert body["database"] == "sqlite"
 
 
+def test_public_firebase_config_is_unavailable_without_configuration(client):
+    """Public config must not expose unconfigured or private Firebase credentials."""
+    response = client.get("/api/public-config")
+
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["firebase_web_configured"] is False
+    assert body["firebase_auth_backend_ready"] is False
+    assert body["firebase_sign_in_ready"] is False
+    assert body["firebase"] is None
+    assert "FIREBASE_SERVICE_ACCOUNT_JSON" not in response.text
+
+
+def test_public_firebase_config_exposes_only_browser_fields_when_ready(client, monkeypatch):
+    """Browser config is public, but Admin service-account credentials never are."""
+    monkeypatch.setattr(
+        api,
+        "FIREBASE_WEB_CONFIG",
+        {
+            "apiKey": "public-web-key",
+            "authDomain": "neurosense-test.firebaseapp.com",
+            "projectId": "neurosense-test",
+            "appId": "1:123:web:abc",
+            "messagingSenderId": "123",
+        },
+    )
+    monkeypatch.setattr(api, "FIREBASE_APP", object())
+
+    response = client.get("/api/public-config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["firebase_web_configured"] is True
+    assert body["firebase_auth_backend_ready"] is True
+    assert body["firebase_sign_in_ready"] is True
+    assert body["firebase"]["apiKey"] == "public-web-key"
+    assert set(body["firebase"]) == {
+        "apiKey", "authDomain", "projectId", "appId", "messagingSenderId"
+    }
+    assert "serviceAccount" not in response.text
+    assert "private_key" not in response.text
+
+
 @pytest.mark.parametrize(
     ("path", "method"),
     [
         ("/", "get"),
         ("/health", "get"),
         ("/api/system/status", "get"),
+        ("/api/public-config", "get"),
         ("/api/devices/pair", "post"),
         ("/api/devices", "get"),
         ("/api/devices/{device_id}", "delete"),
