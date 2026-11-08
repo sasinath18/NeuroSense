@@ -298,3 +298,30 @@ def test_device_upload_rejects_missing_device_token(client):
     assert response.status_code == 401
     assert response.json()["detail"] == "X-Device-Token header is required."
 
+
+def test_device_upload_rejects_invalid_device_token(client):
+    """A token with the wrong secret must not authorize device uploads."""
+    device_id = "test-device-invalid-token"
+    pair_response = client.post(
+        "/api/devices/pair",
+        json={
+            "device_id": device_id,
+            "device_name": "Invalid Token Test",
+        },
+        headers={"X-Demo-User": "api-test-invalid-token"},
+    )
+
+    assert pair_response.status_code == 201
+
+    response = client.post(
+        f"/api/devices/{device_id}/readings",
+        json={
+            "heart_rate_bpm": 76,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        headers={"X-Device-Token": "x" * 48},
+    )
+
+    assert response.status_code == 401
+
