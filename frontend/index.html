@@ -897,6 +897,24 @@
             color: var(--yellow);
         }
 
+        .camera-warning[data-lighting="dim"] {
+            background: rgba(225, 112, 87, .1);
+            border-color: rgba(225, 112, 87, .38);
+            color: var(--text);
+        }
+
+        .camera-warning[data-lighting="ok"] {
+            background: rgba(53, 185, 139, .08);
+            border-color: rgba(53, 185, 139, .3);
+            color: var(--text);
+        }
+
+        .camera-warning .lighting-state {
+            display: block;
+            margin-top: 4px;
+            font-weight: 600;
+        }
+
         .camera-frame {
             width: 100%;
             min-height: 290px;
@@ -2028,9 +2046,17 @@
                         </span>
                     </div>
 
-                    <div class="camera-warning" role="note">
+                    <div id="faceLightingWarning"
+                         class="camera-warning"
+                         data-lighting="idle"
+                         role="status"
+                         aria-live="polite">
                         <span aria-hidden="true">⚠</span>
-                        <span><strong>Lighting tip:</strong> For best face detection, sit in a well-lit place and face the camera. Low light, strong backlighting or shadows may reduce landmark detection reliability.</span>
+                        <span>
+                            <strong>Lighting tip:</strong>
+                            For best face detection, sit in a well-lit place and face the camera. Low light, strong backlighting or shadows may reduce landmark detection reliability.
+                            <span id="faceLightingStatus" class="lighting-state">Lighting check starts when the camera is on.</span>
+                        </span>
                     </div>
 
                     <div class="camera-frame">
@@ -3824,12 +3850,155 @@ function drawFaceLandmarks(landmarks) {
 }
 
 
+let faceLightingCanvas = null;
+let faceLightingContext = null;
+let faceLastLightingCheckAt = 0;
+let faceLowLightSamples = 0;
+let faceGoodLightSamples = 0;
+let faceLightingState = "idle";
+
+
+function setFaceLightingState(state, message) {
+
+    faceLightingState = state;
+
+    const warning = $("faceLightingWarning");
+    const status = $("faceLightingStatus");
+
+    if (warning) {
+        warning.dataset.lighting = state;
+    }
+
+    if (status) {
+        status.textContent = message;
+    }
+
+}
+
+
+function checkFaceLighting(video, now) {
+
+    // Sample at a low rate to avoid unnecessary CPU work.
+    if (now - faceLastLightingCheckAt < 800) return;
+    faceLastLightingCheckAt = now;
+
+    if (!video.videoWidth || !video.videoHeight) return;
+
+    try {
+
+        if (!faceLightingCanvas) {
+            faceLightingCanvas = document.createElement("canvas");
+            faceLightingCanvas.width = 80;
+            faceLightingCanvas.height = 60;
+            faceLightingContext = faceLightingCanvas.getContext(
+                "2d",
+                { willReadFrequently: true }
+            );
+        }
+
+        if (!faceLightingContext) return;
+
+        // Inspect the centre of the camera frame where the face is normally positioned.
+        const cropWidth = video.videoWidth * 0.48;
+        const cropHeight = video.videoHeight * 0.68;
+        const cropX = (video.videoWidth - cropWidth) / 2;
+        const cropY = (video.videoHeight - cropHeight) / 2;
+
+        faceLightingContext.drawImage(
+            video,
+            cropX,
+            cropY,
+            cropWidth,
+            cropHeight,
+            0,
+            0,
+            faceLightingCanvas.width,
+            faceLightingCanvas.height
+        );
+
+        const pixels = faceLightingContext.getImageData(
+            0,
+            0,
+            faceLightingCanvas.width,
+            faceLightingCanvas.height
+        ).data;
+
+        let luminanceTotal = 0;
+        let darkPixelCount = 0;
+        let pixelCount = 0;
+
+        for (let index = 0; index < pixels.length; index += 16) {
+            const luminance =
+                0.2126 * pixels[index] +
+                0.7152 * pixels[index + 1] +
+                0.0722 * pixels[index + 2];
+
+            luminanceTotal += luminance;
+            if (luminance < 38) darkPixelCount++;
+            pixelCount++;
+        }
+
+        if (!pixelCount) return;
+
+        const averageLuminance = luminanceTotal / pixelCount;
+        const darkPixelRatio = darkPixelCount / pixelCount;
+
+        // This is a rough image-brightness indicator, not a lux meter.
+        const lowLight = averageLuminance < 68 || darkPixelRatio > 0.58;
+        const brighter = averageLuminance > 92 && darkPixelRatio < 0.38;
+
+        if (lowLight) {
+            faceLowLightSamples++;
+            faceGoodLightSamples = 0;
+        } else if (brighter) {
+            faceGoodLightSamples++;
+            faceLowLightSamples = 0;
+        } else {
+            faceLowLightSamples = Math.max(0, faceLowLightSamples - 1);
+            faceGoodLightSamples = Math.max(0, faceGoodLightSamples - 1);
+        }
+
+        if (faceLowLightSamples >= 2 && faceLightingState !== "dim") {
+            setFaceLightingState(
+                "dim",
+                "Low light detected. Move to a brighter place and avoid strong backlighting; face landmarks may become less reliable."
+            );
+        } else if (faceGoodLightSamples >= 2 && faceLightingState !== "ok") {
+            setFaceLightingState(
+                "ok",
+                "Brightness appears sufficient. Keep your face evenly lit for more stable tracking."
+            );
+        }
+
+    } catch (error) {
+        console.warn("Face lighting check could not run:", error);
+    }
+
+}
+
+
+function resetFaceLightingCheck() {
+
+    faceLastLightingCheckAt = 0;
+    faceLowLightSamples = 0;
+    faceGoodLightSamples = 0;
+
+    setFaceLightingState(
+        "idle",
+        "Lighting check starts when the camera is on."
+    );
+
+}
+
+
 function runFaceDetectionLoop() {
 
     if (!faceProcessingActive) return;
 
     const video = $("cameraVideo");
     const now = performance.now();
+
+    checkFaceLighting(video, now);
 
     if (
         faceLandmarker &&
@@ -3964,6 +4133,7 @@ async function startCamera() {
             faceLastVideoTime = -1;
             faceLastInferenceAt = 0;
             faceLastTimestamp = 0;
+            resetFaceLightingCheck();
 
             setFaceScanState(
                 "not-found",
@@ -4019,6 +4189,7 @@ function stopCamera() {
 
     cameraRequestId += 1;
     faceProcessingActive = false;
+    resetFaceLightingCheck();
 
     if (faceAnimationFrame !== null) {
         cancelAnimationFrame(faceAnimationFrame);
