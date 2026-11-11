@@ -2694,7 +2694,7 @@
                     <div class="notice">
                         Sit comfortably, face the camera and keep your head still.
                         Use even lighting and avoid direct sunlight or strong backlighting.
-                        The scan collects 120 seconds of facial colour signals locally.
+                        The scan collects 120 seconds of facial colour signals locally. Blink counting first calibrates to your open eyes; keep both eyes visible, avoid glare on glasses, and look towards the camera.
                     </div>
 
                     <div class="face-scan-metrics">
@@ -2724,6 +2724,9 @@
                         <div id="faceScanProgressBar" class="face-scan-progress-fill"></div>
                     </div>
                     <p id="faceScanProgressText" class="muted small">Ready to start a 120-second scan.</p>
+                    <p id="blinkDetectionStatus" class="muted small" role="status" aria-live="polite">
+                        Blink tracking calibrates to your open-eye shape before counting. Keep both eyes visible and look at the camera.
+                    </p>
 
                     <div class="face-pulse-chart-wrap">
                         <div class="card-header">
@@ -3172,9 +3175,10 @@
                     </div>
                     <div class="breath-controls">
                         <button id="saveEmergencyContactBtn" class="secondary-btn" type="button">Save contact</button>
-                        <button id="testWhatsAppBtn" class="secondary-btn" type="button">Send test message</button>
+                        <button id="testWhatsAppBtn" class="secondary-btn" type="button" disabled>Send test message</button>
                     </div>
-                    <p id="whatsappStatusText" class="muted small" role="status" aria-live="polite">WhatsApp alerts are not configured.</p>
+                    <p id="whatsappStatusText" class="muted small" role="status" aria-live="polite">WhatsApp delivery requires Twilio credentials on the server.</p>
+                    <a id="whatsappSetupLink" class="small" href="https://dashboard.render.com/web/srv-dbo4uarrjlhs73ae4p8g/env" target="_blank" rel="noopener noreferrer">Open Render environment settings</a>
                     <div class="notice" style="margin-top:12px">Automatic alerts require three elevated model readings within 30 minutes and use a six-hour cooldown. This is not an emergency service or medical diagnosis.</div>
                 </article>
 
@@ -3954,6 +3958,34 @@ function applyDashboardData(overview, history, settings, recovery) {
     drawAllCharts();
 }
 
+function updateWhatsAppReadiness(contact) {
+    const configured = Boolean(contact?.whatsapp_configured);
+    const enabled = Boolean(contact?.enabled);
+    const phoneSaved = Boolean(contact?.phone);
+    const testButton = $("testWhatsAppBtn");
+    const setupLink = $("whatsappSetupLink");
+
+    if (testButton) testButton.disabled = !configured || !enabled || !phoneSaved;
+    if (setupLink) setupLink.hidden = configured;
+
+    if (!configured) {
+        setText(
+            "whatsappStatusText",
+            "WhatsApp sending is not active. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM in Render Environment, then redeploy."
+        );
+    } else if (!phoneSaved || !enabled) {
+        setText(
+            "whatsappStatusText",
+            "Twilio is configured. Save an international-format contact and enable WhatsApp alerts before testing."
+        );
+    } else {
+        setText(
+            "whatsappStatusText",
+            "Twilio is configured and your contact is enabled. Send a test message to verify delivery."
+        );
+    }
+}
+
 async function refreshExtendedFeatures() {
     const results = await Promise.allSettled([
         apiRequest("/api/personalization/profile"),
@@ -3976,9 +4008,7 @@ async function refreshExtendedFeatures() {
         const contact = results[2].value;
         $("emergencyPhoneInput").value = contact.phone || "";
         $("whatsappAlertToggle").checked = Boolean(contact.enabled);
-        setText("whatsappStatusText", contact.whatsapp_configured
-            ? (contact.enabled ? "WhatsApp contact saved and enabled." : "WhatsApp is configured; contact alerts are disabled.")
-            : "Contact can be saved. Twilio WhatsApp credentials are required on the backend before delivery.");
+        updateWhatsAppReadiness(contact);
     }
 }
 
@@ -5421,22 +5451,190 @@ function eyeAspectRatio(landmarks, ids) {
     if (horizontal <= 0) return null;
     return (landmarkDistance(points[1], points[5]) + landmarkDistance(points[2], points[4])) / (2 * horizontal);
 }
+const FACE_BLINK_CALIBRATION_MS = 1500;
+const FACE_BLINK_MIN_CALIBRATION_SAMPLES = 18;
+const FACE_BLINK_MIN_CLOSED_MS = 45;
+const FACE_BLINK_MAX_CLOSED_MS = 450;
+const FACE_BLINK_MIN_INTERVAL_MS = 120;
+const FACE_BLINK_MAX_FRAME_GAP_MS = 250;
+
 let faceBlinkCount = 0;
-let faceEyeClosed = false;
+let faceBlinkCalibrationStartedAt = 0;
+let faceBlinkLeftSamples = [];
+let faceBlinkRightSamples = [];
+let faceBlinkCalibration = null;
+let faceBlinkState = "open";
+let faceBlinkClosedAt = 0;
 let faceLastBlinkAt = 0;
+let faceBlinkLastTrackedFrameAt = 0;
+let faceBlinkTrackedDurationMs = 0;
+let faceBlinkValidFrames = 0;
+let faceBlinkLastStatusAt = 0;
+
+function facePercentile(values, percentile) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const position = Math.max(0, Math.min(sorted.length - 1,
+        Math.round((sorted.length - 1) * percentile)));
+    return sorted[position];
+}
+
+function clampNumber(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(maximum, value));
+}
+
+function resetBlinkFrameContinuity() {
+    faceBlinkLastTrackedFrameAt = 0;
+    faceBlinkState = "open";
+    faceBlinkClosedAt = 0;
+}
+
+function setBlinkDetectionStatus(message) {
+    const element = $("blinkDetectionStatus");
+    if (element) element.textContent = message;
+}
+
+function resetBlinkCalibration() {
+    faceBlinkCalibrationStartedAt = performance.now();
+    faceBlinkLeftSamples = [];
+    faceBlinkRightSamples = [];
+    faceBlinkCalibration = null;
+    faceBlinkState = "open";
+    faceBlinkClosedAt = 0;
+    faceLastBlinkAt = 0;
+    faceBlinkLastTrackedFrameAt = 0;
+    faceBlinkTrackedDurationMs = 0;
+    faceBlinkValidFrames = 0;
+    faceBlinkLastStatusAt = 0;
+    setBlinkDetectionStatus(
+        "Calibrating open eyes… keep both eyes open, face the camera and avoid moving your head."
+    );
+}
+
+function calibrateBlinkThresholds(left, right, now) {
+    faceBlinkLeftSamples.push(left);
+    faceBlinkRightSamples.push(right);
+
+    const elapsed = now - faceBlinkCalibrationStartedAt;
+    if (
+        elapsed < FACE_BLINK_CALIBRATION_MS ||
+        faceBlinkLeftSamples.length < FACE_BLINK_MIN_CALIBRATION_SAMPLES
+    ) {
+        return false;
+    }
+
+    // The upper quartile approximates a naturally open eye while reducing
+    // the influence of occasional blinks during the calibration window.
+    const leftBaseline = facePercentile(faceBlinkLeftSamples, 0.75);
+    const rightBaseline = facePercentile(faceBlinkRightSamples, 0.75);
+
+    // Implausible values usually indicate occlusion, glare or poor tracking.
+    if (
+        leftBaseline < 0.14 || rightBaseline < 0.14 ||
+        leftBaseline > 0.48 || rightBaseline > 0.48
+    ) {
+        faceBlinkLeftSamples = [];
+        faceBlinkRightSamples = [];
+        faceBlinkCalibrationStartedAt = now;
+        setBlinkDetectionStatus(
+            "Could not calibrate both eyes reliably. Face the camera, open both eyes naturally and reduce glasses glare."
+        );
+        return false;
+    }
+
+    faceBlinkCalibration = {
+        leftOpen: leftBaseline,
+        rightOpen: rightBaseline,
+        leftClose: clampNumber(leftBaseline * 0.70, 0.11, 0.22),
+        rightClose: clampNumber(rightBaseline * 0.70, 0.11, 0.22),
+        leftReopen: clampNumber(leftBaseline * 0.84, 0.13, 0.35),
+        rightReopen: clampNumber(rightBaseline * 0.84, 0.13, 0.35)
+    };
+
+    setBlinkDetectionStatus(
+        "Eyes calibrated. Blink count now uses your own left/right eye baselines and blink-duration filtering."
+    );
+    return true;
+}
+
 function updateBlinkCounter(landmarks, now) {
     const left = eyeAspectRatio(landmarks, [33, 160, 158, 133, 153, 144]);
     const right = eyeAspectRatio(landmarks, [362, 385, 387, 263, 373, 380]);
-    if (left === null || right === null) return;
-    const ear = (left + right) / 2;
-    if (ear < 0.19 && !faceEyeClosed) {
-        faceEyeClosed = true;
-        if (now - faceLastBlinkAt > 180) {
-            faceBlinkCount += 1;
-            faceLastBlinkAt = now;
-            setText("blinkCountValue", String(faceBlinkCount));
+
+    if (
+        left === null || right === null ||
+        !Number.isFinite(left) || !Number.isFinite(right)
+    ) {
+        resetBlinkFrameContinuity();
+        return;
+    }
+
+    // Count only time between consecutive valid face/eye frames.
+    // Long gaps are not treated as observed time and cannot create a blink.
+    if (faceBlinkLastTrackedFrameAt > 0) {
+        const frameGap = now - faceBlinkLastTrackedFrameAt;
+        if (frameGap > 0 && frameGap <= FACE_BLINK_MAX_FRAME_GAP_MS) {
+            faceBlinkTrackedDurationMs += frameGap;
+        } else if (frameGap > FACE_BLINK_MAX_FRAME_GAP_MS) {
+            resetBlinkFrameContinuity();
         }
-    } else if (ear > 0.23) faceEyeClosed = false;
+    }
+    faceBlinkLastTrackedFrameAt = now;
+    faceBlinkValidFrames += 1;
+
+    if (!faceBlinkCalibration) {
+        calibrateBlinkThresholds(left, right, now);
+        if (!faceBlinkCalibration) return;
+    }
+
+    const calibration = faceBlinkCalibration;
+    const bothClosed =
+        left < calibration.leftClose &&
+        right < calibration.rightClose;
+    const bothOpen =
+        left > calibration.leftReopen &&
+        right > calibration.rightReopen;
+
+    if (faceBlinkState === "open" && bothClosed) {
+        faceBlinkState = "closing";
+        faceBlinkClosedAt = now;
+    } else if (faceBlinkState === "closing") {
+        const closedDuration = now - faceBlinkClosedAt;
+
+        if (bothOpen) {
+            if (
+                closedDuration >= FACE_BLINK_MIN_CLOSED_MS &&
+                closedDuration <= FACE_BLINK_MAX_CLOSED_MS &&
+                now - faceLastBlinkAt >= FACE_BLINK_MIN_INTERVAL_MS
+            ) {
+                faceBlinkCount += 1;
+                faceLastBlinkAt = now;
+                setText("blinkCountValue", String(faceBlinkCount));
+            }
+            faceBlinkState = "open";
+            faceBlinkClosedAt = 0;
+        } else if (closedDuration > FACE_BLINK_MAX_CLOSED_MS) {
+            // A long eye closure is not counted as a normal blink.
+            faceBlinkState = "held";
+            faceBlinkClosedAt = 0;
+        }
+    } else if (faceBlinkState === "held" && bothOpen) {
+        faceBlinkState = "open";
+        faceBlinkClosedAt = 0;
+    }
+
+    // Refresh diagnostic text twice per second, not on every video frame.
+    if (now - faceBlinkLastStatusAt >= 500) {
+        faceBlinkLastStatusAt = now;
+        const trackingSeconds = faceBlinkTrackedDurationMs / 1000;
+        const elapsedSeconds = Math.max(1, (now - faceOnlyScanStartedAt) / 1000);
+        const observedFps = faceBlinkValidFrames / elapsedSeconds;
+        setBlinkDetectionStatus(
+            "Calibrated · " + trackingSeconds.toFixed(1) +
+            " sec of valid eye tracking · " + observedFps.toFixed(0) +
+            " detected frames/sec · " + faceBlinkCount + " blinks"
+        );
+    }
 }
 async function saveBlinkSummary(durationSeconds) {
     if (!hasPrivateApiAccess() || durationSeconds < 10) return;
@@ -5465,7 +5663,7 @@ function runFaceDetectionLoop() {
         faceLandmarker &&
         video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
         video.currentTime !== faceLastVideoTime &&
-        now - faceLastInferenceAt >= 66
+        now - faceLastInferenceAt >= 33
     ) {
 
         faceLastVideoTime = video.currentTime;
@@ -5521,6 +5719,7 @@ function runFaceDetectionLoop() {
             } else {
 
                 clearFaceOverlay();
+                if (faceOnlyScanActive) resetBlinkFrameContinuity();
 
                 setFaceScanState(
                     "not-found",
@@ -5533,6 +5732,7 @@ function runFaceDetectionLoop() {
 
             console.error("Face landmark detection failed:", error);
             faceProcessingActive = false;
+            if (faceOnlyScanActive) resetBlinkFrameContinuity();
             clearFaceOverlay();
 
             setFaceScanState(
@@ -5929,8 +6129,11 @@ function updateFaceOnlyProgress() {
         Math.floor(elapsed) + " / " + FACE_RPPG_DURATION_SECONDS + " sec";
     $("faceScanProgressText").textContent =
         "Recording facial pulse signal · " + Math.floor(percentage) + "% complete";
-    const rate = elapsed > 0 ? faceBlinkCount * 60 / elapsed : 0;
-    $("blinkRateValue").innerHTML = rate.toFixed(1) + ' <small>/ min</small>';
+    const trackedSeconds = faceBlinkTrackedDurationMs / 1000;
+    const rate = trackedSeconds > 0 ? faceBlinkCount * 60 / trackedSeconds : 0;
+    $("blinkRateValue").innerHTML = trackedSeconds >= 10
+        ? rate.toFixed(1) + ' <small>/ tracked min</small>'
+        : '-- <small>/ min</small>';
 }
 
 function displayFacePulseEstimate(result) {
@@ -5959,10 +6162,12 @@ function beginFaceOnlyScan() {
     faceRppgSamples = [];
     faceRppgEstimates = [];
     faceBlinkCount = 0;
-    faceEyeClosed = false;
-    faceLastBlinkAt = 0;
+    resetBlinkCalibration();
     setText("blinkCountValue", "0");
     setText("blinkRateValue", "0 / min");
+    setBlinkDetectionStatus(
+        "Calibration begins now. Keep both eyes naturally open for the first moments of the scan."
+    );
     faceOnlyScanActive = true;
     faceOnlyScanStartedAt = performance.now();
     faceLastRppgEstimateAt = 0;
@@ -6021,9 +6226,34 @@ function finishFaceOnlyScan() {
         FACE_RPPG_DURATION_SECONDS,
         (performance.now() - faceOnlyScanStartedAt) / 1000
     );
-    const blinkRate = elapsedSeconds > 0 ? faceBlinkCount * 60 / elapsedSeconds : 0;
-    $("blinkRateValue").innerHTML = blinkRate.toFixed(1) + ' <small>/ min</small>';
-    saveBlinkSummary(elapsedSeconds);
+    const trackedSeconds = faceBlinkTrackedDurationMs / 1000;
+    const blinkRate = trackedSeconds > 0
+        ? faceBlinkCount * 60 / trackedSeconds
+        : 0;
+    $("blinkRateValue").innerHTML = trackedSeconds >= 10
+        ? blinkRate.toFixed(1) + ' <small>/ tracked min</small>'
+        : '-- <small>/ min</small>';
+
+    const trackingCoverage = elapsedSeconds > 0
+        ? trackedSeconds / elapsedSeconds
+        : 0;
+    const trackingQuality = trackingCoverage >= 0.80 ? "Good" :
+        trackingCoverage >= 0.55 ? "Moderate" : "Low";
+    if (trackedSeconds >= 30 && faceBlinkCalibration) {
+        setBlinkDetectionStatus(
+            "Blink estimate: " + faceBlinkCount + " blinks · " +
+            blinkRate.toFixed(1) + " per tracked minute · " +
+            trackingQuality + " eye-tracking coverage (" +
+            Math.round(trackingCoverage * 100) + "%)."
+        );
+        saveBlinkSummary(trackedSeconds);
+    } else {
+        setBlinkDetectionStatus(
+            "Blink result not saved: only " + trackedSeconds.toFixed(0) +
+            " seconds of calibrated eye tracking were captured. Repeat with both eyes clearly visible."
+        );
+        $("blinkRateValue").innerHTML = '-- <small>insufficient tracking</small>';
+    }
     if (!result.valid) {
         $("faceRppgMessage").textContent =
             "Scan completed, but a reliable pulse estimate could not be extracted. Improve lighting and repeat the scan.";
@@ -7025,9 +7255,7 @@ $("saveEmergencyContactBtn").addEventListener("click", async () => {
         const result = await apiRequest("/api/emergency-contact", {
             method: "PUT", body: JSON.stringify({ phone, enabled })
         });
-        setText("whatsappStatusText", result.whatsapp_configured
-            ? (enabled ? "Emergency contact saved and WhatsApp alerts enabled." : "Emergency contact saved; alerts are disabled.")
-            : "Contact saved. Twilio WhatsApp credentials are required on the backend before delivery.");
+        updateWhatsAppReadiness({ ...result, phone, enabled });
         showToast("Emergency contact saved to your account.");
     } catch (error) { showToast("Could not save emergency contact: " + error.message); }
 });
@@ -7037,8 +7265,15 @@ $("testWhatsAppBtn").addEventListener("click", async () => {
         setText("whatsappStatusText", "WhatsApp test message sent.");
         showToast("WhatsApp test message sent.");
     } catch (error) {
-        setText("whatsappStatusText", error.message);
-        showToast("WhatsApp test failed: " + error.message);
+        const message = error.message || "Unknown WhatsApp delivery error.";
+        setText("whatsappStatusText", message);
+        if (message.toLowerCase().includes("not configured")) {
+            const button = $("testWhatsAppBtn");
+            if (button) button.disabled = true;
+            const link = $("whatsappSetupLink");
+            if (link) link.hidden = false;
+        }
+        showToast("WhatsApp test failed: " + message);
     }
 });
 
