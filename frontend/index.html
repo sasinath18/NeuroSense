@@ -2929,6 +2929,7 @@ let musicQueueIndex = 0;
 let activeMusicUrl = null;
 let warningSoundEnabled = false;
 let browserNotificationsEnabled = false;
+let warningAudioContext = null;
 let lastStressNotificationReadingId = "";
 
 function hapticPendingStorageKey() {
@@ -6282,12 +6283,20 @@ async function saveRecoveryPreferences() {
         })
     });
 }
-function playWarningTone() {
-    if (!warningSoundEnabled) return;
+function unlockWarningAudio() {
     try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         if (!AudioContextClass) return;
-        const context = new AudioContextClass();
+        if (!warningAudioContext) warningAudioContext = new AudioContextClass();
+        if (warningAudioContext.state === "suspended") warningAudioContext.resume().catch(() => {});
+    } catch (error) { console.warn("Warning audio could not be initialized:", error); }
+}
+function playWarningTone() {
+    if (!warningSoundEnabled) return;
+    try {
+        unlockWarningAudio();
+        const context = warningAudioContext;
+        if (!context || context.state !== "running") return;
         const oscillator = context.createOscillator();
         const gain = context.createGain();
         oscillator.type = "sine";
@@ -6299,7 +6308,6 @@ function playWarningTone() {
         gain.connect(context.destination);
         oscillator.start();
         oscillator.stop(context.currentTime + 0.24);
-        oscillator.onended = () => context.close();
     } catch (error) { console.warn("Warning tone unavailable:", error); }
 }
 function dispatchStressNotification(stress, reading) {
@@ -6321,6 +6329,7 @@ function dispatchStressNotification(stress, reading) {
 $("warningSoundToggle").addEventListener("change", async event => {
     const previous = warningSoundEnabled;
     warningSoundEnabled = event.target.checked;
+    if (warningSoundEnabled) unlockWarningAudio();
     try { await saveRecoveryPreferences(); showToast("Warning sound preference saved."); }
     catch (error) {
         warningSoundEnabled = previous;

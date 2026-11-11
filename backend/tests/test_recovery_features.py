@@ -124,22 +124,26 @@ def test_blink_summaries_are_saved_per_google_uid(client):
 
 def test_personalization_profile_uses_distinct_days_and_is_preliminary(client):
     now = datetime.now(timezone.utc)
-    for day_offset in (1, 2):
-        for index in range(5):
-            timestamp = now - timedelta(days=day_offset, minutes=index)
-            response = client.post(
-                "/api/sensors",
-                json={
-                    "timestamp": timestamp.isoformat(),
-                    "heart_rate_bpm": 70 + index,
-                    "hrv_ms": 40 + index,
-                    "gsr_raw": 1700 + index,
-                    "signal_quality": "good",
-                    "source": "wearable",
-                },
-                headers=auth("learning-user"),
-            )
-            assert response.status_code == 201
+    # Insert historical rows directly: the public sensor-ingest API correctly
+    # rejects device packets older than 24 hours.
+    with api.db_connection() as db:
+        for day_offset in (1, 2):
+            for index in range(5):
+                timestamp = (now - timedelta(days=day_offset, minutes=index)).isoformat()
+                db.execute(
+                    """
+                    INSERT INTO sensor_readings (
+                        id, user_id, device_id, timestamp, received_at,
+                        heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                        signal_quality, source, ibi_ms_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'good', 'wearable', NULL)
+                    """,
+                    (
+                        f"learning-{day_offset}-{index}", "learning-user",
+                        "test-device", timestamp, now.isoformat(),
+                        70 + index, 40 + index, 1700 + index, 33.0,
+                    ),
+                )
 
     profile = client.get(
         "/api/personalization/profile",
