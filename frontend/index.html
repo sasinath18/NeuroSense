@@ -1553,6 +1553,39 @@
             }
         }
 
+        /* Song picker: visible, accessible and consistent with the active theme. */
+        #musicFileInput {
+            display: block;
+            width: 100%;
+            min-height: 48px;
+            padding: 7px 9px;
+            color: var(--text);
+            background: var(--input);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            cursor: pointer;
+        }
+        #musicFileInput::file-selector-button {
+            min-height: 32px;
+            margin-right: 11px;
+            padding: 7px 13px;
+            color: #fff;
+            background: var(--accent);
+            border: 0;
+            border-radius: 7px;
+            font: inherit;
+            font-weight: 650;
+            cursor: pointer;
+            transition: background .18s ease;
+        }
+        #musicFileInput::file-selector-button:hover {
+            background: var(--accent-hover);
+        }
+        #musicFileInput:disabled {
+            opacity: .65;
+            cursor: not-allowed;
+        }
+
         /* =================================================
            INDIVIDUAL MONITORING DASHBOARD
         ================================================= */
@@ -2020,16 +2053,6 @@
                 </button>
 
             </div>
-
-            <article class="card dashboard-identity-strip">
-                <div class="identity-strip-mark">◉</div>
-                <div class="identity-strip-copy">
-                    <div class="eyebrow">Private monitoring space</div>
-                    <strong id="dashboardAccountName">Your Google account</strong>
-                    <p id="dashboardAccountIdentity">Sign in with Google to load your individual monitoring records.</p>
-                </div>
-                <button class="secondary-btn" type="button" data-go="monitoring">View details</button>
-            </article>
 
             <!-- MAIN METRIC CARDS -->
 
@@ -2863,7 +2886,7 @@
                                 </select>
                             </div>
                             <label class="field">
-                                <span class="muted small">Upload songs from local storage (up to 20 MB each)</span>
+                                <span class="muted small">Upload songs from local storage (up to 20 MB each). You can add songs anytime; playback unlocks after breathing.</span>
                                 <input id="musicFileInput" class="form-control" type="file"
                                        accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac,.webm" multiple>
                             </label>
@@ -4020,10 +4043,6 @@ function updateMonitoringIdentity(overview = dashboardOverview) {
         : "Sign in required";
     const email = account?.email || "Private records are unavailable in preview mode.";
     const uid = account?.uid || "Not authenticated";
-    setText("dashboardAccountName", name);
-    setText("dashboardAccountIdentity", account
-        ? email + " · UID " + account.uid
-        : "Sign in with Google to load your individual monitoring records.");
     setText("monitorAccountName", name);
     setText("monitorAccountEmail", email);
     setText("monitorAccountUid", uid);
@@ -6516,7 +6535,9 @@ function renderRecoverySequence() {
 
     const musicInput = $("musicFileInput");
     const audio = $("relaxationAudio");
-    if (musicInput) musicInput.disabled = !recoverySequence.breathing || recoverySequence.music;
+    // Library uploads are independent of the recovery sequence. Only playback
+    // controls remain locked until the breathing step has been completed.
+    if (musicInput) musicInput.disabled = false;
     if (audio) audio.controls = recoverySequence.breathing && !recoverySequence.music;
     updateMusicModeUI();
 
@@ -6825,8 +6846,8 @@ function updateMusicModeUI() {
     if ($("musicModeSelect")) $("musicModeSelect").value = musicMode;
     const automatic = musicMode === "automatic";
     setText("musicModeStatus", automatic
-        ? "Automatic mode: the saved default song is attempted after breathing. Browser autoplay may require one tap."
-        : "Manual mode: choose one song or select multiple songs for a playlist, then press Play.");
+        ? "Automatic mode: the saved default song is attempted after breathing. You can upload songs to the library at any time. Browser autoplay may require one tap."
+        : "Manual mode: upload songs to your library at any time. Complete breathing to unlock playback, then choose one song or a playlist.");
     if ($("musicTrackSelect")) $("musicTrackSelect").disabled = automatic || !recoverySequence.breathing;
     if ($("musicPlaylistSelect")) $("musicPlaylistSelect").disabled = automatic || !recoverySequence.breathing;
     if ($("playSelectedMusicBtn")) $("playSelectedMusicBtn").disabled = automatic || !recoverySequence.breathing || musicTracks.length === 0;
