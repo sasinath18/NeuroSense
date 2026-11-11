@@ -179,3 +179,45 @@ def test_emergency_contact_rejects_non_e164_phone(client):
         headers=auth("invalid-contact-user"),
     )
     assert response.status_code == 422
+
+
+
+def test_blink_history_restores_firestore_summaries_for_signed_in_user(client, monkeypatch):
+    saved = client.post(
+        "/api/face/blink-summary",
+        json={"blink_count": 24, "duration_seconds": 60},
+        headers=auth("cloud-blink-user"),
+    )
+    assert saved.status_code == 201
+
+    cloud_item = {
+        "summary_id": "cloud-only-blink",
+        "blink_count": 30,
+        "duration_seconds": 60,
+        "blinks_per_minute": 30.0,
+        "recorded_at": "2026-11-10T10:00:00+00:00",
+    }
+
+    def fake_firestore_read_collection(path, limit=100, order_by=None):
+        if path == ("users", "cloud-blink-user", "blink_summaries"):
+            return [cloud_item]
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+
+    own_history = client.get(
+        "/api/face/blink-history?limit=100",
+        headers=auth("cloud-blink-user"),
+    )
+    other_history = client.get(
+        "/api/face/blink-history?limit=100",
+        headers=auth("another-cloud-user"),
+    )
+
+    assert own_history.status_code == 200
+    assert own_history.json()["total"] == 2
+    assert {item["summary_id"] for item in own_history.json()["summaries"]} == {
+        saved.json()["summary"]["summary_id"],
+        "cloud-only-blink",
+    }
+    assert other_history.json()["total"] == 0

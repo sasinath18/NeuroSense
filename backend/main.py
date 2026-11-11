@@ -3929,7 +3929,30 @@ def blink_history(
             """,
             (user_id, limit),
         ).fetchall()
-    return {"total": len(rows), "summaries": [dict(row) for row in rows]}
+
+    # Merge cloud-backed summaries so per-user face history survives an
+    # ephemeral hosted filesystem restart, just like sensor and recovery data.
+    merged = {
+        str(item["summary_id"]): dict(item)
+        for item in rows
+    }
+    cloud_summaries = firestore_read_collection(
+        ("users", user_id, "blink_summaries"),
+        limit=limit,
+        order_by="recorded_at",
+    )
+    for item in cloud_summaries:
+        summary_id = str(item.get("summary_id") or item.get("document_id") or "")
+        if summary_id:
+            item.setdefault("summary_id", summary_id)
+            merged.setdefault(summary_id, item)
+
+    summaries = sorted(
+        merged.values(),
+        key=lambda item: str(item.get("recorded_at") or ""),
+        reverse=True,
+    )[:limit]
+    return {"total": len(summaries), "summaries": summaries}
 
 
 @app.get("/api/emergency-contact")

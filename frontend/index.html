@@ -1552,6 +1552,203 @@
                 animation-duration: .01ms !important;
             }
         }
+
+        /* =================================================
+           INDIVIDUAL MONITORING DASHBOARD
+        ================================================= */
+        .dashboard-identity-strip {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin: 0 0 18px;
+            padding: 14px 17px;
+        }
+        .identity-strip-mark,
+        .monitoring-account-mark {
+            display: grid;
+            place-items: center;
+            flex: 0 0 auto;
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            color: var(--accent-hover);
+            background: var(--accent-soft);
+            font-size: 19px;
+            font-weight: 800;
+        }
+        .identity-strip-copy { min-width: 0; flex: 1; }
+        .identity-strip-copy strong { display: block; margin-top: 3px; }
+        .identity-strip-copy p {
+            color: var(--muted);
+            font-size: 11px;
+            margin-top: 4px;
+            overflow-wrap: anywhere;
+        }
+        .monitoring-account-card {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .monitoring-account-mark { width: 54px; height: 54px; font-size: 22px; }
+        .monitoring-account-details { min-width: 0; flex: 1; }
+        .monitoring-account-details h2 { font-size: 17px; margin-top: 4px; }
+        .monitoring-account-details p { margin-top: 4px; overflow-wrap: anywhere; }
+        .monitoring-uid-line {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .monitoring-uid-line code {
+            color: var(--accent-hover);
+            font-size: 11px;
+            overflow-wrap: anywhere;
+        }
+        .monitoring-account-actions {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 10px;
+        }
+        .monitoring-toolbar {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin: 18px 0 13px;
+        }
+        .monitoring-toolbar strong { font-size: 14px; }
+        .monitoring-toolbar p { margin-top: 4px; }
+        .monitoring-range-control { display: grid; gap: 5px; width: min(190px, 100%); }
+        .monitoring-metrics {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0,1fr));
+            gap: 14px;
+            margin-bottom: 17px;
+        }
+        .monitoring-metric-card { min-height: 112px; }
+        .monitoring-metric-value {
+            display: block;
+            margin-top: 9px;
+            font-size: 27px;
+            font-weight: 800;
+            letter-spacing: -.5px;
+        }
+        .monitoring-metric-card p { margin-top: 4px; }
+        .monitoring-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0,1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .monitoring-grid > .card { min-width: 0; }
+        .monitoring-secondary-grid { align-items: stretch; }
+        .monitoring-learning-stat {
+            display: flex;
+            align-items: baseline;
+            gap: 9px;
+            margin: 5px 0 9px;
+        }
+        .monitoring-learning-stat strong { font-size: 26px; }
+        .monitoring-progress-track {
+            height: 8px;
+            margin: 13px 0;
+            overflow: hidden;
+            border-radius: 20px;
+            background: var(--surface-2);
+        }
+        .monitoring-progress-track span {
+            display: block;
+            width: 0;
+            height: 100%;
+            border-radius: inherit;
+            background: var(--accent);
+            transition: width .25s ease;
+        }
+        .monitoring-list { display: grid; gap: 10px; }
+        .monitoring-device-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .monitoring-device-row:last-child { border-bottom: 0; }
+        .monitoring-device-row strong { display: block; font-size: 12px; }
+        .monitoring-device-row small {
+            display: block;
+            margin-top: 4px;
+            color: var(--muted);
+            overflow-wrap: anywhere;
+        }
+        .monitoring-table-wrap { overflow-x: auto; }
+        .monitoring-table { width: 100%; border-collapse: collapse; min-width: 460px; }
+        .monitoring-table th,
+        .monitoring-table td {
+            padding: 11px 9px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            font-size: 11px;
+        }
+        .monitoring-table th {
+            color: var(--muted);
+            font-weight: 700;
+            background: var(--surface-2);
+        }
+        .monitoring-table td { color: var(--text); }
+        .monitoring-table .empty-state { text-align: center; color: var(--muted); padding: 23px 10px; }
+        .monitoring-timeline { display: grid; gap: 0; }
+        .monitoring-timeline-item {
+            display: grid;
+            grid-template-columns: 11px minmax(0,1fr);
+            gap: 11px;
+            padding: 11px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .monitoring-timeline-item:last-child { border-bottom: 0; }
+        .monitoring-timeline-dot {
+            width: 9px;
+            height: 9px;
+            margin-top: 4px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 0 4px var(--accent-soft);
+        }
+        .monitoring-timeline-item strong { display: block; font-size: 12px; }
+        .monitoring-timeline-item p { margin-top: 4px; line-height: 1.5; }
+        .monitoring-disclaimer {
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.6;
+            margin: 6px 0 4px;
+        }
+        @media (max-width: 950px) {
+            .monitoring-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+        }
+        @media (max-width: 700px) {
+            .monitoring-grid { grid-template-columns: 1fr; }
+            .monitoring-account-card { align-items: flex-start; flex-wrap: wrap; }
+            .monitoring-account-actions {
+                width: 100%;
+                flex-direction: row;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .dashboard-identity-strip { flex-wrap: wrap; }
+            .dashboard-identity-strip > button { margin-left: 56px; }
+        }
+        @media (max-width: 420px) {
+            .monitoring-metrics { gap: 9px; }
+            .monitoring-metric-card { padding: 12px; }
+            .monitoring-metric-value { font-size: 23px; }
+            .monitoring-account-actions { align-items: flex-start; flex-direction: column; }
+        }
+
     </style>
 </head>
 
@@ -1669,6 +1866,10 @@
                 <span>⌂</span> Dashboard
             </button>
 
+            <button class="nav-btn" data-page="monitoring">
+                <span>◉</span> My Monitoring
+            </button>
+
             <button class="nav-btn" data-page="analytics">
                 <span>▥</span> Analytics
             </button>
@@ -1700,11 +1901,11 @@
             <div class="sidebar-device">
                 <strong>Wearable device</strong>
                 <p>
-                    <span class="dot red"></span>
-                    ESP32 not connected
+                    <span id="sidebarDeviceDot" class="dot red"></span>
+                    <span id="sidebarDeviceStatus">ESP32 not connected</span>
                 </p>
                 <p style="margin-top:5px">
-                    Device integration is pending.
+                    <span id="sidebarDeviceSubtitle">Device integration is pending.</span>
                 </p>
             </div>
 
@@ -1810,16 +2011,25 @@
                         Welcome back, <span id="welcomeName">Sasinath</span>
                     </h1>
                     <p class="section-subtitle">
-                        Backend health and authenticated wearable readings in one place.
+                        Your personal physiological signals, recovery activity and device status.
                     </p>
                 </div>
 
-                <button class="secondary-btn" data-go="analytics">
-                    View analytics →
+                <button class="secondary-btn" data-go="monitoring">
+                    Open My Monitoring →
                 </button>
 
             </div>
 
+            <article class="card dashboard-identity-strip">
+                <div class="identity-strip-mark">◉</div>
+                <div class="identity-strip-copy">
+                    <div class="eyebrow">Private monitoring space</div>
+                    <strong id="dashboardAccountName">Your Google account</strong>
+                    <p id="dashboardAccountIdentity">Sign in with Google to load your individual monitoring records.</p>
+                </div>
+                <button class="secondary-btn" type="button" data-go="monitoring">View details</button>
+            </article>
 
             <!-- MAIN METRIC CARDS -->
 
@@ -2104,6 +2314,168 @@
 
             </div>
 
+        </section>
+
+
+
+        <!-- ==============================================
+             PAGE: INDIVIDUAL MONITORING
+        =============================================== -->
+
+        <section id="page-monitoring" class="page">
+            <div class="page-heading">
+                <div class="eyebrow">Private account workspace</div>
+                <h1 class="section-title">My Monitoring</h1>
+                <p class="section-subtitle">
+                    Your Google account's wearable readings, stress events, face-scan summaries and recovery activity.
+                </p>
+            </div>
+
+            <article class="card monitoring-account-card">
+                <div class="monitoring-account-mark">N</div>
+                <div class="monitoring-account-details">
+                    <div class="eyebrow">Authenticated user</div>
+                    <h2 id="monitorAccountName">Sign in required</h2>
+                    <p id="monitorAccountEmail" class="muted small">Private records are available after Google Sign-In.</p>
+                    <div class="monitoring-uid-line">
+                        <span class="muted small">Google UID</span>
+                        <code id="monitorAccountUid">Not authenticated</code>
+                    </div>
+                </div>
+                <div class="monitoring-account-actions">
+                    <span class="badge" id="monitorAccountStatus">Waiting for sign-in</span>
+                    <button class="secondary-btn" id="monitorRefreshBtn" type="button">Refresh records</button>
+                </div>
+            </article>
+
+            <div class="monitoring-toolbar">
+                <div>
+                    <strong>Monitoring overview</strong>
+                    <p class="muted small">All records are scoped to the signed-in Google UID.</p>
+                </div>
+                <label class="monitoring-range-control">
+                    <span class="muted small">Time range</span>
+                    <select id="monitorRangeSelect" class="form-control">
+                        <option value="1">Last 24 hours</option>
+                        <option value="7" selected>Last 7 days</option>
+                        <option value="30">Last 30 days</option>
+                    </select>
+                </label>
+            </div>
+
+            <div class="monitoring-metrics">
+                <article class="card monitoring-metric-card">
+                    <div class="muted small">Wearable readings</div>
+                    <strong id="monitorReadingCount" class="monitoring-metric-value">0</strong>
+                    <p id="monitorReadingFoot" class="muted small">No readings in this period</p>
+                </article>
+                <article class="card monitoring-metric-card">
+                    <div class="muted small">Elevated stress events</div>
+                    <strong id="monitorStressCount" class="monitoring-metric-value">0</strong>
+                    <p class="muted small">Experimental model events</p>
+                </article>
+                <article class="card monitoring-metric-card">
+                    <div class="muted small">Recovery sessions</div>
+                    <strong id="monitorRecoveryCount" class="monitoring-metric-value">0</strong>
+                    <p class="muted small">Completed and recorded sessions</p>
+                </article>
+                <article class="card monitoring-metric-card">
+                    <div class="muted small">Face-scan summaries</div>
+                    <strong id="monitorBlinkCount" class="monitoring-metric-value">0</strong>
+                    <p class="muted small">Saved blink summaries</p>
+                </article>
+            </div>
+
+            <div class="monitoring-grid">
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>Heart Rate Trend</h3><p>Account-specific wearable BPM</p></div>
+                        <span class="badge" id="monitorHeartBadge">No data</span>
+                    </div>
+                    <div class="chart-wrap"><canvas id="monitorHeartChart" role="img" aria-label="My heart rate history"></canvas></div>
+                </article>
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>HRV Trend</h3><p>Heart-rate variability in milliseconds</p></div>
+                        <span class="badge" id="monitorHrvBadge">No data</span>
+                    </div>
+                    <div class="chart-wrap"><canvas id="monitorHrvChart" role="img" aria-label="My HRV history"></canvas></div>
+                </article>
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>GSR Trend</h3><p>Raw galvanic skin response readings</p></div>
+                        <span class="badge" id="monitorGsrBadge">No data</span>
+                    </div>
+                    <div class="chart-wrap"><canvas id="monitorGsrChart" role="img" aria-label="My GSR history"></canvas></div>
+                </article>
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>Blink Rate Trend</h3><p>Browser-computed face-scan summaries</p></div>
+                        <span class="badge" id="monitorBlinkBadge">No data</span>
+                    </div>
+                    <div class="chart-wrap"><canvas id="monitorBlinkChart" role="img" aria-label="My blink rate history"></canvas></div>
+                </article>
+            </div>
+
+            <div class="monitoring-grid monitoring-secondary-grid">
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>Wearable Devices</h3><p>Devices paired to this Google account</p></div>
+                        <span class="badge" id="monitorDeviceBadge">0 devices</span>
+                    </div>
+                    <div id="monitorDeviceList" class="monitoring-list">
+                        <p class="muted small">Sign in to load your paired devices.</p>
+                    </div>
+                </article>
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>Personal Stress Reference</h3><p>Recent baseline-learning progress</p></div>
+                        <span class="badge" id="monitorLearningBadge">Collecting</span>
+                    </div>
+                    <div class="monitoring-learning-stat">
+                        <strong id="monitorLearningDays">0 / 3</strong>
+                        <span class="muted small">distinct days observed</span>
+                    </div>
+                    <p id="monitorLearningText" class="muted small">
+                        Reliable wearable readings from multiple days are needed before a personal reference is available.
+                    </p>
+                    <div class="monitoring-progress-track"><span id="monitorLearningProgress"></span></div>
+                    <p id="monitorLearningNotice" class="muted small">
+                        Preliminary analysis is a personal reference, not a diagnosis or a newly trained ML model.
+                    </p>
+                </article>
+            </div>
+
+            <div class="monitoring-grid monitoring-bottom-grid">
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>Recent Physiological Readings</h3><p>Latest account-specific wearable measurements</p></div>
+                        <span class="badge" id="monitorLatestBadge">0 records</span>
+                    </div>
+                    <div class="table-wrap monitoring-table-wrap">
+                        <table class="monitoring-table">
+                            <thead><tr><th>Time</th><th>HR</th><th>HRV</th><th>GSR</th><th>Quality</th></tr></thead>
+                            <tbody id="monitorReadingsBody">
+                                <tr><td colspan="5" class="empty-state">No wearable readings available.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </article>
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>Activity Timeline</h3><p>Stress events, recovery sessions and face scans</p></div>
+                        <span class="badge" id="monitorTimelineBadge">0 activities</span>
+                    </div>
+                    <div id="monitorTimeline" class="monitoring-timeline">
+                        <p class="muted small">Your recorded activity will appear here.</p>
+                    </div>
+                </article>
+            </div>
+
+            <p class="monitoring-disclaimer">
+                NeuroSense is an experimental wellness prototype. Stress estimates and physiological trends are not medical diagnoses.
+                Empty sections mean no corresponding records have been saved for this account and time range.
+            </p>
         </section>
 
 
@@ -2931,6 +3303,11 @@ let warningSoundEnabled = false;
 let browserNotificationsEnabled = false;
 let warningAudioContext = null;
 let lastStressNotificationReadingId = "";
+let monitoringDevices = [];
+let monitoringEvents = [];
+let monitoringBlinkSummaries = [];
+let personalMonitoringProfile = null;
+let monitoringRangeDays = 7;
 
 function hapticPendingStorageKey() {
     const owner = firebaseCurrentUser?.uid ||
@@ -3548,6 +3925,7 @@ function applyDashboardData(overview, history, settings, recovery) {
         updateHapticUI();
     }
     dispatchStressNotification(overview?.stress, latest);
+    updateMonitoringIdentity(overview);
 
     if (Array.isArray(recovery?.sessions)) {
         hasRemoteRecoveryHistory = true;
@@ -3586,7 +3964,9 @@ async function refreshExtendedFeatures() {
         const item = results[0].value;
         setText("personalLearningBadge", item.recommended_profile_ready ? "3-day profile" : item.ready_for_preliminary_profile ? "Preliminary" : "Collecting");
         setText("personalLearningStatus", item.days_observed + " distinct day(s) · " + item.reading_count + " reliable wearable readings in the last 72 hours.");
+        personalMonitoringProfile = item;
         setText("personalLearningDetails", item.notice);
+        updateMonitoringLearning();
     }
     if (results[1].status === "fulfilled") {
         musicTracks = results[1].value.tracks || [];
@@ -3600,6 +3980,248 @@ async function refreshExtendedFeatures() {
             ? (contact.enabled ? "WhatsApp contact saved and enabled." : "WhatsApp is configured; contact alerts are disabled.")
             : "Contact can be saved. Twilio WhatsApp credentials are required on the backend before delivery.");
     }
+}
+
+
+function updateMonitoringIdentity(overview = dashboardOverview) {
+    const account = firebaseCurrentUser;
+    const name = account
+        ? (account.displayName || (account.email ? account.email.split("@")[0] : "Google user"))
+        : "Sign in required";
+    const email = account?.email || "Private records are unavailable in preview mode.";
+    const uid = account?.uid || "Not authenticated";
+    setText("dashboardAccountName", name);
+    setText("dashboardAccountIdentity", account
+        ? email + " · UID " + account.uid
+        : "Sign in with Google to load your individual monitoring records.");
+    setText("monitorAccountName", name);
+    setText("monitorAccountEmail", email);
+    setText("monitorAccountUid", uid);
+    setText("monitorAccountStatus", account ? "Private account" : "Waiting for sign-in");
+    const connected = Boolean(overview && overview.device_connected);
+    setText("sidebarDeviceStatus", connected ? "Connected" : "Offline");
+    setText("sidebarDeviceSubtitle", connected ? "Recent ESP32 activity" : "No recent device activity");
+    const deviceDot = $("sidebarDeviceDot");
+    if (deviceDot) {
+        deviceDot.classList.toggle("green", connected);
+        deviceDot.classList.toggle("red", !connected);
+    }
+}
+
+function updateMonitoringLearning() {
+    const profile = personalMonitoringProfile;
+    if (!profile) return;
+    const observed = Number(profile.days_observed || 0);
+    const percent = Math.max(0, Math.min(100, observed / 3 * 100));
+    setText("monitorLearningDays", Math.min(observed, 3) + " / 3");
+    setText("monitorLearningBadge",
+        profile.recommended_profile_ready ? "3-day reference" :
+        profile.ready_for_preliminary_profile ? "Preliminary" : "Collecting");
+    setText("monitorLearningText",
+        observed + " distinct day(s) · " + (profile.reading_count || 0) +
+        " reliable wearable readings in the latest 72 hours.");
+    setText("monitorLearningNotice", profile.notice || "Three days are recommended for a more stable personal reference.");
+    const progress = $("monitorLearningProgress");
+    if (progress) progress.style.width = percent + "%";
+}
+
+function getMonitoringReadings() {
+    const cutoff = Date.now() - monitoringRangeDays * 24 * 60 * 60 * 1000;
+    return sensorHistory.filter(item =>
+        item && item.timestamp && new Date(item.timestamp).getTime() >= cutoff
+    );
+}
+
+function monitoringCountSince(items, dateField) {
+    const cutoff = Date.now() - monitoringRangeDays * 24 * 60 * 60 * 1000;
+    return items.filter(item => {
+        const value = item && item[dateField];
+        return value && new Date(value).getTime() >= cutoff;
+    }).length;
+}
+
+function renderMonitoringReadingsTable(readings) {
+    const body = $("monitorReadingsBody");
+    if (!body) return;
+    body.replaceChildren();
+    const recent = [...readings].sort((a,b) =>
+        new Date(b.timestamp) - new Date(a.timestamp)
+    ).slice(0, 10);
+    setText("monitorLatestBadge", recent.length + " records");
+    if (!recent.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 5;
+        cell.className = "empty-state";
+        cell.textContent = "No wearable readings in this period.";
+        row.appendChild(cell);
+        body.appendChild(row);
+        return;
+    }
+    recent.forEach(item => {
+        const row = document.createElement("tr");
+        const values = [
+            formatReadingTime(item.timestamp),
+            displayValue(item.heart_rate_bpm),
+            displayValue(item.hrv_ms, 1),
+            displayValue(item.gsr_raw),
+            item.signal_quality || "Unknown"
+        ];
+        values.forEach(value => {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.appendChild(cell);
+        });
+        body.appendChild(row);
+    });
+}
+
+function renderMonitoringDevices() {
+    const list = $("monitorDeviceList");
+    if (!list) return;
+    list.replaceChildren();
+    const devices = monitoringDevices.filter(device => device.active !== false);
+    setText("monitorDeviceBadge", devices.length + " active");
+    if (!devices.length) {
+        const empty = document.createElement("p");
+        empty.className = "muted small";
+        empty.textContent = "No active ESP32 is paired to this Google account.";
+        list.appendChild(empty);
+        return;
+    }
+    devices.forEach(device => {
+        const row = document.createElement("div");
+        row.className = "monitoring-device-row";
+        const copy = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = device.device_name || device.device_id || "NeuroSense device";
+        const id = document.createElement("small");
+        id.textContent = (device.device_id || "Device ID unavailable") +
+            " · Last seen " + formatReadingTime(device.last_seen);
+        copy.append(name, id);
+        const status = document.createElement("span");
+        status.className = "badge";
+        const connected = Boolean(
+            device.last_seen &&
+            (Date.now() - new Date(device.last_seen).getTime()) <= 60000
+        );
+        status.textContent = connected ? "Connected" : "Offline";
+        row.append(copy, status);
+        list.appendChild(row);
+    });
+}
+
+function renderMonitoringTimeline() {
+    const container = $("monitorTimeline");
+    if (!container) return;
+    container.replaceChildren();
+    const cutoff = Date.now() - monitoringRangeDays * 24 * 60 * 60 * 1000;
+    const entries = [];
+    monitoringEvents.forEach(item => entries.push({
+        type: "Elevated stress event",
+        detail: "Experimental model event · score " +
+            displayValue(Number(item.stress_probability) * 100, 1) + "%",
+        date: item.occurred_at,
+        kind: "stress"
+    }));
+    apiRecoveryHistory.forEach(item => entries.push({
+        type: "Recovery session · " + (item.activity || "Activity"),
+        detail: (item.status || "Recorded") + " · " +
+            formatDuration(item.durationSeconds || 0),
+        date: item.completedAt,
+        kind: "recovery"
+    }));
+    monitoringBlinkSummaries.forEach(item => entries.push({
+        type: "Face-scan blink summary",
+        detail: displayValue(item.blinks_per_minute, 1) +
+            " blinks/min · " + (item.blink_count || 0) + " blinks",
+        date: item.recorded_at,
+        kind: "face"
+    }));
+    const visible = entries
+        .filter(item => item.date && new Date(item.date).getTime() >= cutoff)
+        .sort((a,b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 12);
+    setText("monitorTimelineBadge", visible.length + " activities");
+    if (!visible.length) {
+        const empty = document.createElement("p");
+        empty.className = "muted small";
+        empty.textContent = "No stress events, completed recovery sessions or saved face scans in this period.";
+        container.appendChild(empty);
+        return;
+    }
+    visible.forEach(item => {
+        const row = document.createElement("div");
+        row.className = "monitoring-timeline-item";
+        const dot = document.createElement("span");
+        dot.className = "monitoring-timeline-dot";
+        if (item.kind === "stress") dot.style.background = "var(--yellow)";
+        if (item.kind === "face") dot.style.background = "var(--green)";
+        const copy = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = item.type;
+        const detail = document.createElement("p");
+        detail.className = "muted small";
+        detail.textContent = item.detail + " · " + formatReadingTime(item.date);
+        copy.append(title, detail);
+        row.append(dot, copy);
+        container.appendChild(row);
+    });
+}
+
+function drawIndividualMonitoringCharts() {
+    const readings = getMonitoringReadings()
+        .sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const labels = readings.map(item => formatReadingTime(item.timestamp));
+    const chartFields = [
+        ["heart_rate_bpm", "monitorHeartChart", "monitorHeartBadge", 0],
+        ["hrv_ms", "monitorHrvChart", "monitorHrvBadge", 1],
+        ["gsr_raw", "monitorGsrChart", "monitorGsrBadge", 0]
+    ];
+    chartFields.forEach(([field, canvasId, badgeId, decimals]) => {
+        const pairs = readings.filter(item =>
+            item[field] !== null && item[field] !== undefined && Number.isFinite(Number(item[field]))
+        );
+        const pairLabels = pairs.map(item => formatReadingTime(item.timestamp));
+        drawLineChart(canvasId, [{ data: pairs.map(item => Number(item[field])) }], {
+            labels: pairLabels,
+            decimals
+        });
+        setText(badgeId, pairs.length ? pairs.length + " readings" : "No data");
+    });
+    const cutoff = Date.now() - monitoringRangeDays * 24 * 60 * 60 * 1000;
+    const blinkItems = monitoringBlinkSummaries.filter(item =>
+        item.recorded_at && new Date(item.recorded_at).getTime() >= cutoff &&
+        Number.isFinite(Number(item.blinks_per_minute))
+    ).sort((a,b) => new Date(a.recorded_at) - new Date(b.recorded_at));
+    drawLineChart("monitorBlinkChart", [{
+        data: blinkItems.map(item => Number(item.blinks_per_minute))
+    }], {
+        labels: blinkItems.map(item => formatReadingTime(item.recorded_at)),
+        decimals: 1
+    });
+    setText("monitorBlinkBadge", blinkItems.length ? blinkItems.length + " scans" : "No data");
+}
+
+function renderIndividualMonitoring() {
+    if (!$("page-monitoring")) return;
+    updateMonitoringIdentity();
+    const readings = getMonitoringReadings();
+    const stressCount = monitoringCountSince(monitoringEvents, "occurred_at");
+    const recoveryCount = monitoringCountSince(apiRecoveryHistory, "completedAt");
+    const blinkCount = monitoringCountSince(monitoringBlinkSummaries, "recorded_at");
+    setText("monitorReadingCount", String(readings.length));
+    setText("monitorReadingFoot", readings.length
+        ? "Wearable readings in the selected period"
+        : "No wearable readings in this period");
+    setText("monitorStressCount", String(stressCount));
+    setText("monitorRecoveryCount", String(recoveryCount));
+    setText("monitorBlinkCount", String(blinkCount));
+    renderMonitoringDevices();
+    renderMonitoringReadingsTable(readings);
+    renderMonitoringTimeline();
+    updateMonitoringLearning();
+    drawIndividualMonitoringCharts();
 }
 
 function renderDeviceManagement(payload) {
@@ -3711,7 +4333,8 @@ async function refreshBackendData() {
             apiRequest("/api/devices"),
             apiRequest("/api/baseline"),
             apiRequest("/api/summaries?limit=20"),
-            apiRequest("/api/events/high-stress?limit=20")
+            apiRequest("/api/events/high-stress?limit=20"),
+            apiRequest("/api/face/blink-history?limit=100")
         ]);
 
         const failed = results.find(result => result.status === "rejected");
@@ -3729,13 +4352,17 @@ async function refreshBackendData() {
             throw error;
         }
 
-        const [overview, history, settings, recovery, devices, baseline, summaries, events] =
+        const [overview, history, settings, recovery, devices, baseline, summaries, events, blinkHistory] =
             results.map(result => result.value);
 
         applyDashboardData(overview, history, settings, recovery);
         renderDeviceManagement(devices);
         renderBaselineStatus(baseline);
         renderAnalyticsRecords(summaries, events);
+        monitoringDevices = Array.isArray(devices?.devices) ? devices.devices : [];
+        monitoringEvents = Array.isArray(events?.events) ? events.events : [];
+        monitoringBlinkSummaries = Array.isArray(blinkHistory?.summaries) ? blinkHistory.summaries : [];
+        renderIndividualMonitoring();
         refreshExtendedFeatures();
 
         setApiBanner(
@@ -3900,6 +4527,7 @@ $("logoutBtn").addEventListener("click", async () => {
 
 const pageTitles = {
     dashboard: "Dashboard",
+    monitoring: "My Monitoring",
     analytics: "Analytics",
     face: "Face Scan",
     recovery: "Recovery Centre",
@@ -3953,8 +4581,13 @@ function setActivePage(pageName) {
     if (pageName === "analytics") {
         updateAnalyticsCount();
     }
+    if (pageName === "monitoring") {
+        drawIndividualMonitoringCharts();
+        renderIndividualMonitoring();
+    }
 
     setTimeout(drawAllCharts, 70);
+    if (pageName === "monitoring") setTimeout(drawIndividualMonitoringCharts, 90);
     if (cameraStream) {
         setTimeout(() => {
             if (!cameraStream) return;
@@ -4001,6 +4634,24 @@ $("menuBtn").addEventListener("click", () => {
 });
 
 $("sidebarBackdrop").addEventListener("click", () => setSidebarOpen(false));
+
+$("monitorRangeSelect").addEventListener("change", event => {
+    monitoringRangeDays = Number(event.target.value) || 7;
+    renderIndividualMonitoring();
+});
+
+$("monitorRefreshBtn").addEventListener("click", async () => {
+    const button = $("monitorRefreshBtn");
+    button.disabled = true;
+    button.textContent = "Refreshing...";
+    try {
+        await refreshBackendData();
+        showToast("Your monitoring records have been refreshed.");
+    } finally {
+        button.disabled = false;
+        button.textContent = "Refresh records";
+    }
+});
 
 document.addEventListener("keydown", event => {
     if (event.key === "Escape") setSidebarOpen(false);
