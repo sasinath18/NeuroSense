@@ -591,6 +591,30 @@ def firestore_read_document(
         return None
 
 
+def firestore_delete_document(
+    collection_path: tuple[str, ...],
+    document_id: str,
+) -> str:
+    """Delete a document from an authenticated user's Firestore subcollection."""
+    if FIRESTORE_CLIENT is None:
+        return "not_configured"
+    if not collection_path or len(collection_path) % 2 == 0:
+        logger.error("Invalid Firestore collection path: %s", collection_path)
+        return "failed"
+    try:
+        reference = FIRESTORE_CLIENT.collection(collection_path[0])
+        for index, segment in enumerate(collection_path[1:], start=1):
+            if index % 2 == 1:
+                reference = reference.document(segment)
+            else:
+                reference = reference.collection(segment)
+        reference.document(document_id).delete()
+        return "synced"
+    except Exception:
+        logger.exception("Firestore document delete failed for %s", document_id)
+        return "failed"
+
+
 def firestore_read_collection(
     collection_path: tuple[str, ...],
     limit: int = 100,
@@ -3789,6 +3813,72 @@ def set_default_music_track(
         ("users", user_id, "music_tracks"), track_id, selected_doc
     )
     return {"success": True, "default_track_id": track_id}
+
+
+@app.delete("/api/music/{track_id}")
+def delete_music_track(
+    track_id: str,
+    user_id: str = Depends(current_user_id),
+):
+    """Delete a song only from the authenticated user's own music library."""
+    with db_connection() as db:
+        row = db.execute(
+            "SELECT * FROM music_tracks WHERE track_id = ? AND user_id = ?",
+            (track_id, user_id),
+        ).fetchone()
+
+    track = dict(row) if row else firestore_read_document(
+        ("users", user_id, "music_tracks"), track_id
+    )
+    if not track:
+        raise HTTPException(status_code=404, detail="Music track not found.")
+
+    # Remove metadata from cloud storage before deleting local metadata, so a
+    # failed cloud operation leaves the track visible and retryable.
+    cloud_delete = firestore_delete_document(
+        ("users", user_id, "music_tracks"), track_id
+    )
+    if cloud_delete == "failed":
+        raise HTTPException(
+            status_code=503,
+            detail="Could not remove the song from your cloud library. Please retry.",
+        )
+
+    storage_backend = track.get("storage_backend", "local")
+    storage_path = str(track.get("storage_path") or "")
+    try:
+        if storage_backend == "firebase_storage":
+            bucket = configured_music_bucket()
+            if bucket is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Firebase Storage is not configured; the audio file could not be removed.",
+                )
+            blob = bucket.blob(storage_path)
+            if blob.exists():
+                blob.delete()
+        elif storage_path:
+            Path(storage_path).unlink(missing_ok=True)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Music file deletion failed for track %s", track_id)
+        raise HTTPException(
+            status_code=503,
+            detail="The audio file could not be removed. Please retry.",
+        )
+
+    with db_connection() as db:
+        db.execute(
+            "DELETE FROM music_tracks WHERE track_id = ? AND user_id = ?",
+            (track_id, user_id),
+        )
+
+    return {
+        "success": True,
+        "deleted_track_id": track_id,
+        "cloud_sync": cloud_delete,
+    }
 
 
 @app.get("/api/music/{track_id}/audio")

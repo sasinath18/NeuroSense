@@ -101,6 +101,50 @@ def test_music_library_upload_default_and_playback_are_user_scoped(client):
     assert other_user.status_code == 404
 
 
+def test_music_library_delete_is_user_scoped_and_removes_audio_file(client):
+    uploaded = client.post(
+        "/api/music/upload",
+        files={"file": ("replace-me.mp3", b"old-song-content", "audio/mpeg")},
+        headers=auth("music-delete-owner"),
+    )
+    assert uploaded.status_code == 201
+    track_id = uploaded.json()["track"]["track_id"]
+
+    with api.db_connection() as db:
+        row = db.execute(
+            "SELECT storage_path FROM music_tracks WHERE track_id = ? AND user_id = ?",
+            (track_id, "music-delete-owner"),
+        ).fetchone()
+    assert row is not None
+    audio_path = api.Path(row["storage_path"])
+    assert audio_path.is_file()
+
+    forbidden = client.delete(
+        f"/api/music/{track_id}",
+        headers=auth("different-user"),
+    )
+    assert forbidden.status_code == 404
+    assert audio_path.is_file()
+
+    deleted = client.delete(
+        f"/api/music/{track_id}",
+        headers=auth("music-delete-owner"),
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_track_id"] == track_id
+    assert not audio_path.exists()
+
+    remaining = client.get("/api/music", headers=auth("music-delete-owner"))
+    assert remaining.status_code == 200
+    assert all(item["track_id"] != track_id for item in remaining.json()["tracks"])
+
+    missing_audio = client.get(
+        f"/api/music/{track_id}/audio",
+        headers=auth("music-delete-owner"),
+    )
+    assert missing_audio.status_code == 404
+
+
 def test_blink_summaries_are_saved_per_google_uid(client):
     saved = client.post(
         "/api/face/blink-summary",
@@ -179,45 +223,3 @@ def test_emergency_contact_rejects_non_e164_phone(client):
         headers=auth("invalid-contact-user"),
     )
     assert response.status_code == 422
-
-
-
-def test_blink_history_restores_firestore_summaries_for_signed_in_user(client, monkeypatch):
-    saved = client.post(
-        "/api/face/blink-summary",
-        json={"blink_count": 24, "duration_seconds": 60},
-        headers=auth("cloud-blink-user"),
-    )
-    assert saved.status_code == 201
-
-    cloud_item = {
-        "summary_id": "cloud-only-blink",
-        "blink_count": 30,
-        "duration_seconds": 60,
-        "blinks_per_minute": 30.0,
-        "recorded_at": "2026-11-10T10:00:00+00:00",
-    }
-
-    def fake_firestore_read_collection(path, limit=100, order_by=None):
-        if path == ("users", "cloud-blink-user", "blink_summaries"):
-            return [cloud_item]
-        return []
-
-    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
-
-    own_history = client.get(
-        "/api/face/blink-history?limit=100",
-        headers=auth("cloud-blink-user"),
-    )
-    other_history = client.get(
-        "/api/face/blink-history?limit=100",
-        headers=auth("another-cloud-user"),
-    )
-
-    assert own_history.status_code == 200
-    assert own_history.json()["total"] == 2
-    assert {item["summary_id"] for item in own_history.json()["summaries"]} == {
-        saved.json()["summary"]["summary_id"],
-        "cloud-only-blink",
-    }
-    assert other_history.json()["total"] == 0

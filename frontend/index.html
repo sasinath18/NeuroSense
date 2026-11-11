@@ -1586,6 +1586,78 @@
             cursor: not-allowed;
         }
 
+        .music-library-manager {
+            display: grid;
+            gap: 11px;
+            padding: 13px;
+            margin: 12px 0;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--surface-2);
+        }
+        .music-library-manager-heading {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .music-library-manager-heading h4 {
+            font-size: 13px;
+            font-weight: 750;
+        }
+        .music-library-manager-heading p {
+            margin-top: 4px;
+            line-height: 1.5;
+        }
+        .music-library-manage-list {
+            display: grid;
+            gap: 7px;
+            max-height: 230px;
+            overflow-y: auto;
+        }
+        .music-library-song-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            padding: 9px 10px;
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            background: var(--surface);
+            cursor: pointer;
+        }
+        .music-library-song-row input {
+            width: 17px;
+            height: 17px;
+            flex: 0 0 auto;
+            accent-color: var(--accent);
+        }
+        .music-library-song-copy {
+            min-width: 0;
+            flex: 1;
+        }
+        .music-library-song-copy strong {
+            display: block;
+            overflow-wrap: anywhere;
+            font-size: 12px;
+            font-weight: 650;
+        }
+        .music-library-song-copy small {
+            display: block;
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 10px;
+        }
+        .music-library-manager-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .music-library-manager-actions button:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+        }
+
         /* =================================================
            INDIVIDUAL MONITORING DASHBOARD
         ================================================= */
@@ -2896,9 +2968,26 @@
                                 <select id="musicTrackSelect" class="form-control"></select>
                             </div>
                             <div class="field">
-                                <label for="musicPlaylistSelect">Playlist · select multiple songs</label>
+                                <label for="musicPlaylistSelect">Playlist · select one or more songs</label>
                                 <select id="musicPlaylistSelect" class="form-control" multiple size="4"></select>
                             </div>
+                            <section class="music-library-manager" aria-labelledby="musicLibraryManagerTitle">
+                                <div class="music-library-manager-heading">
+                                    <div>
+                                        <h4 id="musicLibraryManagerTitle">Manage uploaded songs</h4>
+                                        <p class="muted small">Select old songs and remove them from your library before adding replacements.</p>
+                                    </div>
+                                    <span id="musicManageCount" class="badge">0 songs</span>
+                                </div>
+                                <div id="musicLibraryManageList" class="music-library-manage-list">
+                                    <p class="muted small">Your uploaded songs will appear here.</p>
+                                </div>
+                                <div class="music-library-manager-actions">
+                                    <button id="selectAllMusicBtn" class="secondary-btn" type="button" disabled>Select all</button>
+                                    <button id="removeSelectedMusicBtn" class="danger-btn" type="button" disabled>Remove selected</button>
+                                </div>
+                                <p id="musicLibraryManageStatus" class="muted small" role="status" aria-live="polite">You can remove songs and upload new ones at any time.</p>
+                            </section>
                             <div class="breath-controls">
                                 <button id="playSelectedMusicBtn" class="primary-btn" type="button" disabled>Play selected song</button>
                                 <button id="saveDefaultMusicBtn" class="secondary-btn" type="button" disabled>Save as automatic song</button>
@@ -2909,7 +2998,7 @@
                             <p id="driveImportStatus" class="muted small" role="status" aria-live="polite">
                                 Google Drive import requires Google Picker API configuration.
                             </p>
-                            <audio id="relaxationAudio" controls preload="none"></audio>
+                            <audio id="relaxationAudio" controls preload="auto"></audio>
                         </div>
                         <div class="notice" style="margin-top:13px">
                             Music mode controls song playback only. Haptic vibration, warning sound and notifications have separate controls.
@@ -6535,10 +6624,13 @@ function renderRecoverySequence() {
 
     const musicInput = $("musicFileInput");
     const audio = $("relaxationAudio");
-    // Library uploads are independent of the recovery sequence. Only playback
-    // controls remain locked until the breathing step has been completed.
+    // Uploading and listening to music are independent of the breathing/haptic
+    // recovery sequence. Keep the native player visible for browser-play fallback.
     if (musicInput) musicInput.disabled = false;
-    if (audio) audio.controls = recoverySequence.breathing && !recoverySequence.music;
+    if (audio) {
+        audio.controls = true;
+        audio.preload = "auto";
+    }
     updateMusicModeUI();
 
     const hapticButton = $("sendHapticTestBtn");
@@ -6846,11 +6938,11 @@ function updateMusicModeUI() {
     if ($("musicModeSelect")) $("musicModeSelect").value = musicMode;
     const automatic = musicMode === "automatic";
     setText("musicModeStatus", automatic
-        ? "Automatic mode: the saved default song is attempted after breathing. You can upload songs to the library at any time. Browser autoplay may require one tap."
-        : "Manual mode: upload songs to your library at any time. Complete breathing to unlock playback, then choose one song or a playlist.");
-    if ($("musicTrackSelect")) $("musicTrackSelect").disabled = automatic || !recoverySequence.breathing;
-    if ($("musicPlaylistSelect")) $("musicPlaylistSelect").disabled = automatic || !recoverySequence.breathing;
-    if ($("playSelectedMusicBtn")) $("playSelectedMusicBtn").disabled = automatic || !recoverySequence.breathing || musicTracks.length === 0;
+        ? "Automatic mode: the saved default song plays when the guided breathing step completes. You can upload and manage songs at any time."
+        : "Manual mode: choose one song or multiple playlist songs and press Play. Playback is available independently of guided breathing.");
+    if ($("musicTrackSelect")) $("musicTrackSelect").disabled = automatic || musicTracks.length === 0;
+    if ($("musicPlaylistSelect")) $("musicPlaylistSelect").disabled = automatic || musicTracks.length === 0;
+    if ($("playSelectedMusicBtn")) $("playSelectedMusicBtn").disabled = automatic || musicTracks.length === 0;
     if ($("saveDefaultMusicBtn")) $("saveDefaultMusicBtn").disabled = musicTracks.length === 0;
 }
 
@@ -6878,8 +6970,153 @@ function renderMusicLibrary() {
         }
     }
     setText("musicFileName", musicTracks.length + " song(s) in your account library.");
+    renderMusicLibraryManager();
     updateMusicModeUI();
 }
+
+function renderMusicLibraryManager() {
+    const list = $("musicLibraryManageList");
+    if (!list) return;
+    list.replaceChildren();
+    setText("musicManageCount", musicTracks.length + " song" + (musicTracks.length === 1 ? "" : "s"));
+
+    const hasTracks = musicTracks.length > 0;
+    const selectAllButton = $("selectAllMusicBtn");
+    const removeButton = $("removeSelectedMusicBtn");
+    if (selectAllButton) selectAllButton.disabled = !hasTracks;
+    if (removeButton) removeButton.disabled = true;
+
+    if (!hasTracks) {
+        const empty = document.createElement("p");
+        empty.className = "muted small";
+        empty.textContent = "No songs in your library. Upload new songs above.";
+        list.appendChild(empty);
+        return;
+    }
+
+    musicTracks.forEach(track => {
+        const label = document.createElement("label");
+        label.className = "music-library-song-row";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "music-library-song-checkbox";
+        checkbox.value = track.track_id;
+        checkbox.setAttribute("aria-label", "Select " + track.file_name);
+
+        const copy = document.createElement("span");
+        copy.className = "music-library-song-copy";
+
+        const name = document.createElement("strong");
+        name.textContent = track.file_name || "Untitled audio";
+
+        const details = document.createElement("small");
+        const sizeMb = Number(track.size_bytes || 0) / (1024 * 1024);
+        details.textContent =
+            (track.is_default ? "Automatic default · " : "") +
+            (sizeMb > 0 ? sizeMb.toFixed(2) + " MB" : "Audio track");
+
+        copy.append(name, details);
+        label.append(checkbox, copy);
+        list.appendChild(label);
+    });
+}
+
+function updateMusicRemovalSelection() {
+    const checked = $("musicLibraryManageList")
+        ? $("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox:checked").length
+        : 0;
+    const button = $("removeSelectedMusicBtn");
+    if (button) {
+        button.disabled = checked === 0;
+        button.textContent = checked > 0
+            ? "Remove selected (" + checked + ")"
+            : "Remove selected";
+    }
+    const selectAll = $("selectAllMusicBtn");
+    if (selectAll) {
+        selectAll.textContent = checked === musicTracks.length && musicTracks.length
+            ? "Clear selection"
+            : "Select all";
+    }
+}
+
+async function removeSelectedMusicTracks() {
+    const selectedIds = Array.from(
+        $("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox:checked")
+    ).map(input => input.value);
+    if (!selectedIds.length) {
+        showToast("Select at least one song to remove.");
+        return;
+    }
+
+    const selectedTracks = musicTracks.filter(track => selectedIds.includes(track.track_id));
+    const message = "Remove " + selectedTracks.length +
+        " selected song(s) from your NeuroSense music library?";
+    if (!window.confirm(message)) return;
+
+    const audio = $("relaxationAudio");
+    const playingTrack = musicQueue[musicQueueIndex];
+    const removePlayingTrack = Boolean(playingTrack && selectedIds.includes(playingTrack.track_id));
+
+    if (removePlayingTrack) {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+        if (activeMusicUrl) URL.revokeObjectURL(activeMusicUrl);
+        activeMusicUrl = null;
+        musicQueue = [];
+        musicQueueIndex = 0;
+    }
+
+    let removed = 0;
+    const removedIds = new Set();
+    const failures = [];
+    for (const track of selectedTracks) {
+        try {
+            if (track.localUrl) {
+                URL.revokeObjectURL(track.localUrl);
+            } else {
+                if (!hasPrivateApiAccess()) {
+                    throw new Error("Sign in to remove songs from your account library.");
+                }
+                await apiRequest("/api/music/" + encodeURIComponent(track.track_id), {
+                    method: "DELETE"
+                });
+            }
+            removed += 1;
+            removedIds.add(track.track_id);
+        } catch (error) {
+            failures.push(track.file_name + ": " + error.message);
+        }
+    }
+
+    if (removed) {
+        musicTracks = musicTracks.filter(track => !removedIds.has(track.track_id));
+        musicQueue = musicQueue.filter(track => !removedIds.has(track.track_id));
+        renderMusicLibrary();
+        await loadMusicLibrary();
+    }
+
+    if (failures.length) {
+        setText("musicLibraryManageStatus", failures.join(" · "));
+        showToast(removed + " song(s) removed; " + failures.length + " could not be removed.");
+    } else {
+        setText("musicLibraryManageStatus", removed + " song(s) removed. You can upload replacements above.");
+        showToast(removed + " song(s) removed from your library.");
+    }
+}
+
+$("musicLibraryManageList").addEventListener("change", updateMusicRemovalSelection);
+$("selectAllMusicBtn").addEventListener("click", () => {
+    const checkboxes = Array.from(
+        $("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox")
+    );
+    const allSelected = checkboxes.length > 0 && checkboxes.every(input => input.checked);
+    checkboxes.forEach(input => { input.checked = !allSelected; });
+    updateMusicRemovalSelection();
+});
+$("removeSelectedMusicBtn").addEventListener("click", removeSelectedMusicTracks);
 
 async function loadMusicLibrary() {
     if (!hasPrivateApiAccess()) {
@@ -6901,7 +7138,11 @@ async function loadMusicTrack(track) {
     if (track.localUrl) {
         if (activeMusicUrl && activeMusicUrl !== track.localUrl) URL.revokeObjectURL(activeMusicUrl);
         activeMusicUrl = track.localUrl;
-        $("relaxationAudio").src = activeMusicUrl;
+        const audio = $("relaxationAudio");
+        audio.controls = true;
+        audio.preload = "auto";
+        audio.src = activeMusicUrl;
+        audio.load();
         return;
     }
     if (firebaseCurrentUser) apiIdToken = await firebaseCurrentUser.getIdToken();
@@ -6916,14 +7157,14 @@ async function loadMusicTrack(track) {
     const blob = await response.blob();
     if (activeMusicUrl) URL.revokeObjectURL(activeMusicUrl);
     activeMusicUrl = URL.createObjectURL(blob);
-    $("relaxationAudio").src = activeMusicUrl;
+    const audio = $("relaxationAudio");
+    audio.controls = true;
+    audio.preload = "auto";
+    audio.src = activeMusicUrl;
+    audio.load();
 }
 
 async function playMusicQueue(tracks) {
-    if (!recoverySequence.breathing) {
-        showToast("Complete guided breathing before starting music.");
-        return;
-    }
     if (!tracks.length) {
         showToast("Select a song or playlist first.");
         return;
@@ -6938,13 +7179,22 @@ async function playCurrentMusicTrack() {
     if (!track) return;
     try {
         await loadMusicTrack(track);
-        setText("musicModeStatus", "Playing " + track.file_name +
-            (musicQueue.length > 1 ? " · " + (musicQueueIndex + 1) + "/" + musicQueue.length : ""));
+        const audio = $("relaxationAudio");
+        audio.controls = true;
+        setText("musicModeStatus", "Ready: " + track.file_name +
+            (musicQueue.length > 1 ? " · " + (musicQueueIndex + 1) + "/" + musicQueue.length : "") +
+            ". Starting playback...");
         try {
-            await $("relaxationAudio").play();
+            await audio.play();
+            setText("musicModeStatus", "Playing: " + track.file_name +
+                (musicQueue.length > 1 ? " · " + (musicQueueIndex + 1) + "/" + musicQueue.length : ""));
         } catch (error) {
-            setText("musicModeStatus", "Browser blocked automatic playback. Press Play on the audio player to continue.");
-            showToast("Browser blocked autoplay. Tap Play on the music player.");
+            if (error.name === "NotAllowedError") {
+                setText("musicModeStatus", "Song loaded. Your browser blocked scripted playback; press Play in the audio player below.");
+                showToast("Song loaded. Press Play in the audio player below.");
+            } else {
+                throw error;
+            }
         }
     } catch (error) {
         showToast("Could not load music: " + error.message);
@@ -6970,6 +7220,8 @@ $("musicFileInput").addEventListener("change", async event => {
     const accepted = files.filter(file => file.type.startsWith("audio/") || extensionPattern.test(file.name));
     if (accepted.length !== files.length) showToast("Some files were skipped because they are not supported audio.");
     if (hasPrivateApiAccess()) {
+        let uploaded = 0;
+        const failures = [];
         for (const file of accepted) {
             if (file.size > 20 * 1024 * 1024) {
                 showToast(file.name + " exceeds the 20 MB upload limit.");
@@ -6987,12 +7239,18 @@ $("musicFileInput").addEventListener("change", async event => {
                 });
                 const payload = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(payload.detail || "Upload failed (" + response.status + ").");
+                uploaded += 1;
             } catch (error) {
+                failures.push(file.name + ": " + error.message);
                 showToast("Upload failed for " + file.name + ": " + error.message);
             }
         }
         await loadMusicLibrary();
-        showToast("Music upload process completed. Check your library.");
+        setText("musicLibraryManageStatus",
+            uploaded + " song(s) uploaded. " +
+            (failures.length ? failures.length + " failed." : "Your library is ready."));
+        showToast(uploaded + " song(s) uploaded" +
+            (failures.length ? "; " + failures.length + " failed." : "."));
     } else {
         accepted.forEach(file => {
             const url = URL.createObjectURL(file);
@@ -7042,7 +7300,7 @@ $("playSelectedMusicBtn").addEventListener("click", async () => {
     if (musicMode !== "manual") return;
     const playlistIds = Array.from($("musicPlaylistSelect").selectedOptions)
         .map(option => option.value).filter(Boolean);
-    const selected = playlistIds.length > 1
+    const selected = playlistIds.length > 0
         ? playlistIds.map(id => musicTracks.find(track => track.track_id === id)).filter(Boolean)
         : [musicTracks.find(track => track.track_id === $("musicTrackSelect").value)].filter(Boolean);
     await playMusicQueue(selected);
@@ -7070,21 +7328,36 @@ $("saveDefaultMusicBtn").addEventListener("click", async () => {
 
 $("relaxationAudio").addEventListener("ended", async () => {
     const audio = $("relaxationAudio");
-    if (!recoverySequence.breathing) return;
     if (musicQueueIndex < musicQueue.length - 1) {
         musicQueueIndex += 1;
         await playCurrentMusicTrack();
         return;
     }
     const duration = Number.isFinite(audio.duration) ? Math.max(1, Math.round(audio.duration)) : 1;
-    recordRecoverySession("Music", duration);
-    completeRecoveryStep("music");
-    setText("musicModeStatus", "Music recovery step completed.");
+    await recordRecoverySession("Music", duration);
+    if (recoverySequence.breathing) {
+        completeRecoveryStep("music");
+        setText("musicModeStatus", "Music completed. Recovery music step recorded.");
+    } else {
+        setText("musicModeStatus", "Music playback completed.");
+    }
+    musicQueue = [];
+    musicQueueIndex = 0;
     showToast("Music completed. Haptic feedback remains independently controlled.");
 });
 
 $("relaxationAudio").addEventListener("error", () => {
-    if (activeMusicUrl) showToast("The selected audio file could not be played.");
+    const audio = $("relaxationAudio");
+    const code = audio.error?.code || 0;
+    const reasons = {
+        1: "Playback was aborted.",
+        2: "Audio could not be downloaded. Check the connection or the uploaded file.",
+        3: "The audio file could not be decoded. Try another MP3 or WAV file.",
+        4: "This audio format is not supported by the browser."
+    };
+    const reason = reasons[code] || "The audio file could not be played.";
+    setText("musicModeStatus", reason);
+    showToast(reason);
 });
 
 
