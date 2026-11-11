@@ -54,6 +54,12 @@ The application code supports Firebase Google Sign-In, but Firebase must be conf
 | `FIREBASE_WEB_APP_ID` | Web app `appId` |
 | `FIREBASE_WEB_MESSAGING_SENDER_ID` | Web app `messagingSenderId` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Complete service-account JSON, pasted as compact JSON; mark as secret |
+| `FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket name for persistent per-user music uploads; mark as non-public configuration |
+| `TWILIO_ACCOUNT_SID` | Twilio account SID; mark as secret |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token; mark as secret |
+| `TWILIO_WHATSAPP_FROM` | Approved WhatsApp sender in `whatsapp:+...` format |
+| `GOOGLE_DRIVE_API_KEY` | Google Picker API key; restrict it to your dashboard domains |
+| `GOOGLE_DRIVE_APP_ID` | Google Cloud project number used by Google Picker |
 
 The web configuration is browser-visible by design. The service-account JSON is a private Admin credential and must remain only in Render's secret environment. Never commit it to GitHub or paste it into chat.
 
@@ -110,3 +116,32 @@ The firmware fails closed when verified TLS cannot be initialized. Do not use `C
 ## Safety and privacy
 
 Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi credentials, private firmware secrets, CA bundles, personal data, or raw datasets. Keep secrets in the hosting provider's environment-variable/secret settings.
+
+
+## NeuroSense recovery and personalization updates
+
+- The existing Google Sign-In Firebase UID remains the sole account key. Sensor readings, baselines, recovery history, blink summaries, music metadata and emergency-contact settings are isolated by that UID; the app does not create a second profile.
+- ESP32 pairing remains Wi-Fi based, using the existing one-time device token and verified HTTPS firmware path.
+- Wearable summaries continue on the existing three-hour interval. The personal reference endpoint evaluates the most recent 72 hours: two distinct days and at least ten reliable readings allow a preliminary reference; three days and at least twenty readings are recommended. This is not a new ML model or a clinical validation.
+- Face Scan counts blinks locally using eye-landmark geometry. Only the derived count, scan duration and blink rate can be saved; camera frames remain in the browser.
+- Haptic vibration remains independently enabled/disabled. Manual/Automatic mode applies only to music: Manual lets the user select a single track or playlist; Automatic attempts the one saved default track after breathing.
+- Music files can be uploaded from local storage (20 MB maximum per file). For durable hosted playback, configure `FIREBASE_STORAGE_BUCKET`; without it, the server uses local fallback storage, which may be lost on Render restarts/redeploys. Google Drive is currently a link/import destination only; direct Drive file picker playback needs separate Google Drive OAuth/API setup.
+- Warning sound and browser notifications are separate preferences. Browser notifications require browser permission.
+- WhatsApp check-in alerts require an opted-in emergency contact plus Twilio WhatsApp credentials. The backend sends only after three elevated model readings within 30 minutes and applies a six-hour cooldown. The model remains experimental; this is not an emergency service.
+
+### WhatsApp setup
+
+Configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and an approved `TWILIO_WHATSAPP_FROM` sender in the hosting provider's secret environment. The user must save and explicitly enable an E.164-format emergency contact in Settings. Use the in-app test message before relying on alerts. Never commit Twilio credentials.
+
+
+### Google Drive music import
+
+To enable the **Import audio from Google Drive** button:
+
+1. In the same Google Cloud project used by Firebase, enable **Google Drive API** and **Google Picker API**.
+2. Create a browser API key and restrict it to the dashboard's allowed web origins and the Picker/Drive APIs.
+3. Find the numeric Google Cloud project number and use it as `GOOGLE_DRIVE_APP_ID`.
+4. Add `GOOGLE_DRIVE_API_KEY` and `GOOGLE_DRIVE_APP_ID` to Render's environment.
+5. Sign in to NeuroSense, select **Import audio from Google Drive**, and grant the optional read-only Drive permission when Google prompts.
+
+Drive files are copied into the user's NeuroSense music library; playback then uses NeuroSense storage. The app does not stream directly from the Drive website. A durable music library requires Firebase Storage to be configured.

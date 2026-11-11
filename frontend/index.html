@@ -2052,6 +2052,11 @@
                         <p id="baselineCalibratedAt" class="muted small">No calibration recorded.</p>
                         <button id="calibrateBaselineBtn" class="secondary-btn" type="button">Calibrate baseline · last 10 minutes</button>
                     </article>
+                    <article class="card" style="margin-top:17px">
+                        <div class="card-header"><div><h3>Personal Stress Learning</h3><p>Build a reference from your own readings</p></div><span class="badge" id="personalLearningBadge">Collecting</span></div>
+                        <p id="personalLearningStatus" class="muted small">Collect reliable wearable readings across at least two different days.</p>
+                        <p id="personalLearningDetails" class="muted small">Three days are recommended before considering the personal reference stable.</p>
+                    </article>
 
                     <article class="card" style="margin-top:17px">
 
@@ -2333,6 +2338,14 @@
                             <span class="muted small">Recording</span>
                             <strong id="faceScanElapsed">0 / 120 sec</strong>
                         </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Blink count</span>
+                            <strong id="blinkCountValue">0</strong>
+                        </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Blink rate</span>
+                            <strong id="blinkRateValue">0 <small>/ min</small></strong>
+                        </div>
                     </div>
 
                     <div class="face-scan-progress" aria-label="Face scan progress">
@@ -2467,29 +2480,45 @@
                         </div>
 
                         <div class="music-player">
-
-                            <label class="field">
-                                <span class="muted small">Select an audio file</span>
-                                <input id="musicFileInput"
-                                       class="form-control"
-                                       type="file"
-                                       accept="audio/*">
-                            </label>
-
-                            <div id="musicFileName"
-                                 class="muted small">
-                                No audio file selected.
+                            <div class="field">
+                                <label for="musicModeSelect">Music recovery mode</label>
+                                <select id="musicModeSelect" class="form-control">
+                                    <option value="manual">Manual · choose song or playlist</option>
+                                    <option value="automatic">Automatic · play saved default song</option>
+                                </select>
                             </div>
-
-                            <audio id="relaxationAudio"
-                                   controls
-                                   preload="none"></audio>
-
+                            <label class="field">
+                                <span class="muted small">Upload songs from local storage (up to 20 MB each)</span>
+                                <input id="musicFileInput" class="form-control" type="file"
+                                       accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac,.webm" multiple>
+                            </label>
+                            <p id="musicFileName" class="muted small" aria-live="polite">No songs uploaded yet.</p>
+                            <div class="field">
+                                <label for="musicTrackSelect">Single song</label>
+                                <select id="musicTrackSelect" class="form-control"></select>
+                            </div>
+                            <div class="field">
+                                <label for="musicPlaylistSelect">Playlist · select multiple songs</label>
+                                <select id="musicPlaylistSelect" class="form-control" multiple size="4"></select>
+                            </div>
+                            <div class="breath-controls">
+                                <button id="playSelectedMusicBtn" class="primary-btn" type="button" disabled>Play selected song</button>
+                                <button id="saveDefaultMusicBtn" class="secondary-btn" type="button" disabled>Save as automatic song</button>
+                            </div>
+                            <p id="musicModeStatus" class="muted small" role="status" aria-live="polite">
+                                Manual mode: choose one song or a playlist after breathing.
+                            </p>
+                            <p id="driveImportStatus" class="muted small" role="status" aria-live="polite">
+                                Google Drive import requires Google Picker API configuration.
+                            </p>
+                            <audio id="relaxationAudio" controls preload="none"></audio>
                         </div>
-
                         <div class="notice" style="margin-top:13px">
-                            Audio plays locally in your browser.
-                            No music is supplied by this preview.
+                            Music mode controls song playback only. Haptic vibration, warning sound and notifications have separate controls.
+                            <br><br>
+                            Google Drive import requires separate Drive API authorization.
+                            <button id="importDriveMusicBtn" class="secondary-btn" type="button" disabled>Import audio from Google Drive</button>
+                            <a href="https://drive.google.com/drive/my-drive" target="_blank" rel="noopener noreferrer">Open Google Drive</a>.
                         </div>
 
                     </article>
@@ -2688,10 +2717,14 @@
                         Save local profile
                     </button>
 
-                    <div class="notice" style="margin-top:15px">
-                        Local preview profile only. Real individual
-                        Google accounts will be connected using Firebase.
-                    </div>
+                    <p id="accountUidText" class="muted small" style="margin-top:12px;word-break:break-all">
+                    Google account ID: Sign in to view your account identity.
+                </p>
+                <div class="notice" style="margin-top:15px">
+                    NeuroSense uses your existing Google Sign-In UID as the account key.
+                    Sensor readings, baselines, music and recovery history are stored under that UID;
+                    no duplicate profile is created.
+                </div>
 
                 </article>
 
@@ -2726,32 +2759,51 @@
 
 
                 <article class="card">
-
                     <div class="card-header">
-                        <div>
-                            <h3>Haptic Preference</h3>
-                            <p>Control wearable vibration preference</p>
-                        </div>
+                        <div><h3>Haptic Preference</h3><p>Control wearable vibration independently</p></div>
                     </div>
-
                     <div class="toggle-row">
                         <div class="toggle-copy">
                             <strong>Haptic feedback</strong>
-                            <p>Enable or disable optional vibration.</p>
+                            <p>Enable or disable optional vibration. Music mode does not control this setting.</p>
                         </div>
-
                         <label class="switch">
-                            <input type="checkbox"
-                                   id="settingsHapticToggle">
+                            <input type="checkbox" id="settingsHapticToggle">
                             <span class="switch-track"></span>
                         </label>
                     </div>
+                    <p class="muted small" style="margin-top:13px">Haptic feedback has its own preference and ESP32 command path.</p>
+                </article>
 
-                    <p class="muted small" style="margin-top:13px">
-                        The physical motor will respond after ESP32
-                        integration. This setting currently saves locally.
-                    </p>
+                <article class="card">
+                    <div class="card-header"><div><h3>Warning Sound & Browser Notifications</h3><p>Independent wellness reminders</p></div></div>
+                    <div class="toggle-row">
+                        <div class="toggle-copy"><strong>Warning sound</strong><p>Play a short local tone for a new elevated reading.</p></div>
+                        <label class="switch"><input type="checkbox" id="warningSoundToggle"><span class="switch-track"></span></label>
+                    </div>
+                    <div class="toggle-row" style="margin-top:13px">
+                        <div class="toggle-copy"><strong>Browser notifications</strong><p>Show a notification while the browser permits it.</p></div>
+                        <label class="switch"><input type="checkbox" id="browserNotificationToggle"><span class="switch-track"></span></label>
+                    </div>
+                    <p id="notificationPermissionStatus" class="muted small" style="margin-top:12px">Notifications are off.</p>
+                </article>
 
+                <article class="card">
+                    <div class="card-header"><div><h3>WhatsApp Emergency Contact</h3><p>Optional check-in alert after repeated elevated readings</p></div></div>
+                    <div class="field">
+                        <label for="emergencyPhoneInput">Contact phone · international format</label>
+                        <input id="emergencyPhoneInput" class="form-control" type="tel" placeholder="+919876543210" maxlength="16">
+                    </div>
+                    <div class="toggle-row">
+                        <div class="toggle-copy"><strong>Enable WhatsApp alerts</strong><p>Requires your consent and server-side Twilio configuration.</p></div>
+                        <label class="switch"><input type="checkbox" id="whatsappAlertToggle"><span class="switch-track"></span></label>
+                    </div>
+                    <div class="breath-controls">
+                        <button id="saveEmergencyContactBtn" class="secondary-btn" type="button">Save contact</button>
+                        <button id="testWhatsAppBtn" class="secondary-btn" type="button">Send test message</button>
+                    </div>
+                    <p id="whatsappStatusText" class="muted small" role="status" aria-live="polite">WhatsApp alerts are not configured.</p>
+                    <div class="notice" style="margin-top:12px">Automatic alerts require three elevated model readings within 30 minutes and use a six-hour cooldown. This is not an emergency service or medical diagnosis.</div>
                 </article>
 
 
@@ -2868,6 +2920,16 @@ let hasRemoteRecoveryHistory = false;
 let dashboardOverview = null;
 let backendRefreshTimer = null;
 let apiRefreshInProgress = false;
+let musicMode = "manual";
+let musicTracks = [];
+let googleDrivePickerConfig = null;
+let driveAccessToken = null;
+let musicQueue = [];
+let musicQueueIndex = 0;
+let activeMusicUrl = null;
+let warningSoundEnabled = false;
+let browserNotificationsEnabled = false;
+let lastStressNotificationReadingId = "";
 
 function hapticPendingStorageKey() {
     const owner = firebaseCurrentUser?.uid ||
@@ -2963,6 +3025,10 @@ async function configureFirebaseAuthentication() {
     try {
 
         const configResponse = await apiRequest("/api/public-config");
+        googleDrivePickerConfig = configResponse.google_drive_picker_configured
+            ? { apiKey: configResponse.google_drive_api_key, appId: configResponse.google_drive_app_id }
+            : null;
+        updateDriveImportAvailability();
 
         if (!configResponse.firebase_sign_in_ready) {
 
@@ -3035,6 +3101,9 @@ async function configureFirebaseAuthentication() {
                     sensorHistory = [];
                     apiRecoveryHistory = [];
                     hasRemoteRecoveryHistory = false;
+                    driveAccessToken = null;
+                    updateProfileUI();
+                    updateDriveImportAvailability();
                     clearLiveSensorDisplay(
                         "Sign in to load your private wearable readings."
                     );
@@ -3049,6 +3118,7 @@ async function configureFirebaseAuthentication() {
             firebaseCurrentUser = user;
             pendingHapticCommandId = readLocal(hapticPendingStorageKey(), "");
             firebaseHadAuthenticated = true;
+            updateDriveImportAvailability();
 
             try {
 
@@ -3417,6 +3487,16 @@ function renderRecoveryComparison(comparison) {
 
 function applyDashboardData(overview, history, settings, recovery) {
     dashboardOverview = overview || null;
+    if (settings) {
+        musicMode = settings.music_mode === "automatic" ? "automatic" : "manual";
+        warningSoundEnabled = Boolean(settings.warning_sound_enabled);
+        browserNotificationsEnabled = Boolean(settings.notifications_enabled);
+        if ($("musicModeSelect")) $("musicModeSelect").value = musicMode;
+        if ($("warningSoundToggle")) $("warningSoundToggle").checked = warningSoundEnabled;
+        if ($("browserNotificationToggle")) $("browserNotificationToggle").checked = browserNotificationsEnabled;
+        updateNotificationPermissionStatus();
+        updateMusicModeUI();
+    }
 
     const allReadings = Array.isArray(history?.readings)
         ? history.readings
@@ -3466,6 +3546,7 @@ function applyDashboardData(overview, history, settings, recovery) {
         writeLocal("neurosense_haptic_enabled", hapticEnabled);
         updateHapticUI();
     }
+    dispatchStressNotification(overview?.stress, latest);
 
     if (Array.isArray(recovery?.sessions)) {
         hasRemoteRecoveryHistory = true;
@@ -3492,6 +3573,32 @@ function applyDashboardData(overview, history, settings, recovery) {
 
     updateAnalyticsSummaries();
     drawAllCharts();
+}
+
+async function refreshExtendedFeatures() {
+    const results = await Promise.allSettled([
+        apiRequest("/api/personalization/profile"),
+        apiRequest("/api/music"),
+        apiRequest("/api/emergency-contact")
+    ]);
+    if (results[0].status === "fulfilled") {
+        const item = results[0].value;
+        setText("personalLearningBadge", item.recommended_profile_ready ? "3-day profile" : item.ready_for_preliminary_profile ? "Preliminary" : "Collecting");
+        setText("personalLearningStatus", item.days_observed + " distinct day(s) · " + item.reading_count + " reliable wearable readings in the last 72 hours.");
+        setText("personalLearningDetails", item.notice);
+    }
+    if (results[1].status === "fulfilled") {
+        musicTracks = results[1].value.tracks || [];
+        renderMusicLibrary();
+    }
+    if (results[2].status === "fulfilled") {
+        const contact = results[2].value;
+        $("emergencyPhoneInput").value = contact.phone || "";
+        $("whatsappAlertToggle").checked = Boolean(contact.enabled);
+        setText("whatsappStatusText", contact.whatsapp_configured
+            ? (contact.enabled ? "WhatsApp contact saved and enabled." : "WhatsApp is configured; contact alerts are disabled.")
+            : "Contact can be saved. Twilio WhatsApp credentials are required on the backend before delivery.");
+    }
 }
 
 function renderDeviceManagement(payload) {
@@ -3628,6 +3735,7 @@ async function refreshBackendData() {
         renderDeviceManagement(devices);
         renderBaselineStatus(baseline);
         renderAnalyticsRecords(summaries, events);
+        refreshExtendedFeatures();
 
         setApiBanner(
             "LIVE BACKEND DATA",
@@ -3914,23 +4022,32 @@ let profile = readLocal("neurosense_profile", {
 
 
 function updateProfileUI() {
-
-    const name = profile.name || "User";
+    const account = firebaseCurrentUser;
+    const name = account
+        ? (account.displayName || (account.email ? account.email.split("@")[0] : "User"))
+        : (profile.name || "Preview User");
+    const email = account?.email || profile.email || "";
     const initial = name.trim().charAt(0).toUpperCase() || "U";
-
     $("topProfileName").textContent = name;
     $("welcomeName").textContent = name;
-
     $("avatarInitial").textContent = initial;
     $("settingsAvatar").textContent = initial;
-
     $("profileName").value = name;
-    $("profileEmail").value = profile.email || "";
+    $("profileEmail").value = email;
+    $("profileName").readOnly = Boolean(account);
+    $("profileEmail").readOnly = Boolean(account);
+    $("saveProfileBtn").disabled = Boolean(account);
+    setText("accountUidText", account
+        ? "Google account UID: " + account.uid
+        : "Google account ID: Sign in to load your private account profile.");
 }
 
 
 $("saveProfileBtn").addEventListener("click", () => {
-
+    if (firebaseCurrentUser) {
+        showToast("Your Google account profile is managed by Google Sign-In.");
+        return;
+    }
     const name = $("profileName").value.trim();
     const email = $("profileEmail").value.trim();
 
@@ -4644,6 +4761,45 @@ function resetFaceLightingCheck() {
 }
 
 
+function landmarkDistance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function eyeAspectRatio(landmarks, ids) {
+    const points = ids.map(index => landmarks[index]);
+    if (points.some(point => !point)) return null;
+    const horizontal = landmarkDistance(points[0], points[3]);
+    if (horizontal <= 0) return null;
+    return (landmarkDistance(points[1], points[5]) + landmarkDistance(points[2], points[4])) / (2 * horizontal);
+}
+let faceBlinkCount = 0;
+let faceEyeClosed = false;
+let faceLastBlinkAt = 0;
+function updateBlinkCounter(landmarks, now) {
+    const left = eyeAspectRatio(landmarks, [33, 160, 158, 133, 153, 144]);
+    const right = eyeAspectRatio(landmarks, [362, 385, 387, 263, 373, 380]);
+    if (left === null || right === null) return;
+    const ear = (left + right) / 2;
+    if (ear < 0.19 && !faceEyeClosed) {
+        faceEyeClosed = true;
+        if (now - faceLastBlinkAt > 180) {
+            faceBlinkCount += 1;
+            faceLastBlinkAt = now;
+            setText("blinkCountValue", String(faceBlinkCount));
+        }
+    } else if (ear > 0.23) faceEyeClosed = false;
+}
+async function saveBlinkSummary(durationSeconds) {
+    if (!hasPrivateApiAccess() || durationSeconds < 10) return;
+    try {
+        const result = await apiRequest("/api/face/blink-summary", {
+            method: "POST",
+            body: JSON.stringify({ blink_count: faceBlinkCount, duration_seconds: Math.max(10, Math.round(durationSeconds)) })
+        });
+        showToast("Blink summary saved: " + result.summary.blink_count + " blinks.");
+    } catch (error) {
+        console.warn("Blink summary was not saved:", error);
+        showToast("Blink count was measured locally but could not be saved to your account.");
+    }
+}
+
 function runFaceDetectionLoop() {
 
     if (!faceProcessingActive) return;
@@ -4683,6 +4839,7 @@ function runFaceDetectionLoop() {
 
                 const landmarks = faces[0];
                 drawFaceLandmarks(landmarks);
+                if (faceOnlyScanActive) updateBlinkCounter(landmarks, now);
 
                 if (faceOnlyScanActive) {
                     const rppgSample = collectFaceRppgSample(video, landmarks, now);
@@ -5097,6 +5254,8 @@ function drawFacePulseWaveform(signal) {
 function resetFaceOnlyScanUI() {
     $("facePulseValue").innerHTML = '-- <small>BPM</small>';
     $("faceSignalQuality").textContent = "Not measured";
+    $("blinkCountValue").textContent = "0";
+    $("blinkRateValue").innerHTML = '0 <small>/ min</small>';
     $("faceScanElapsed").textContent = "0 / 120 sec";
     $("faceScanProgressBar").style.width = "0%";
     $("faceScanProgressText").textContent = "Ready to start a 120-second scan.";
@@ -5118,6 +5277,8 @@ function updateFaceOnlyProgress() {
         Math.floor(elapsed) + " / " + FACE_RPPG_DURATION_SECONDS + " sec";
     $("faceScanProgressText").textContent =
         "Recording facial pulse signal · " + Math.floor(percentage) + "% complete";
+    const rate = elapsed > 0 ? faceBlinkCount * 60 / elapsed : 0;
+    $("blinkRateValue").innerHTML = rate.toFixed(1) + ' <small>/ min</small>';
 }
 
 function displayFacePulseEstimate(result) {
@@ -5145,6 +5306,11 @@ function beginFaceOnlyScan() {
 
     faceRppgSamples = [];
     faceRppgEstimates = [];
+    faceBlinkCount = 0;
+    faceEyeClosed = false;
+    faceLastBlinkAt = 0;
+    setText("blinkCountValue", "0");
+    setText("blinkRateValue", "0 / min");
     faceOnlyScanActive = true;
     faceOnlyScanStartedAt = performance.now();
     faceLastRppgEstimateAt = 0;
@@ -5199,6 +5365,13 @@ function finishFaceOnlyScan() {
 
     const result = estimateFacePulse(faceRppgSamples);
     displayFacePulseEstimate(result);
+    const elapsedSeconds = Math.min(
+        FACE_RPPG_DURATION_SECONDS,
+        (performance.now() - faceOnlyScanStartedAt) / 1000
+    );
+    const blinkRate = elapsedSeconds > 0 ? faceBlinkCount * 60 / elapsedSeconds : 0;
+    $("blinkRateValue").innerHTML = blinkRate.toFixed(1) + ' <small>/ min</small>';
+    saveBlinkSummary(elapsedSeconds);
     if (!result.valid) {
         $("faceRppgMessage").textContent =
             "Scan completed, but a reliable pulse estimate could not be extracted. Improve lighting and repeat the scan.";
@@ -5463,6 +5636,7 @@ function renderRecoverySequence() {
     const audio = $("relaxationAudio");
     if (musicInput) musicInput.disabled = !recoverySequence.breathing || recoverySequence.music;
     if (audio) audio.controls = recoverySequence.breathing && !recoverySequence.music;
+    updateMusicModeUI();
 
     const hapticButton = $("sendHapticTestBtn");
     if (hapticButton) {
@@ -5489,6 +5663,7 @@ function completeRecoveryStep(step) {
         recoverySequence.haptic = true;
     }
     persistRecoverySequence();
+    if (step === "breathing" && musicMode === "automatic") startAutomaticMusic();
 }
 
 
@@ -5657,56 +5832,356 @@ $("stopBreathingBtn").addEventListener("click", () => {
 
 
 /* =========================================================
-   J. RELAXATION MUSIC - LOCAL FILE ONLY
+   J. RELAXATION MUSIC
+   Manual/Automatic applies to music playback only.
 ========================================================= */
 
-let activeMusicUrl = null;
 
+function updateDriveImportAvailability() {
+    const button = $("importDriveMusicBtn");
+    if (!button) return;
+    button.disabled = !(googleDrivePickerConfig && firebaseCurrentUser);
+    setText("driveImportStatus", button.disabled
+        ? "Drive import requires sign-in and Google Picker API configuration."
+        : "Select audio files from your Google Drive to copy them into your NeuroSense library.");
+}
 
-$("musicFileInput").addEventListener("change", event => {
+function loadGooglePickerApi() {
+    return new Promise((resolve, reject) => {
+        if (window.gapi && window.gapi.load) {
+            window.gapi.load("picker", { callback: resolve });
+            return;
+        }
+        const script = document.createElement("script");
+        script.src = "https://apis.google.com/js/api.js";
+        script.async = true;
+        script.onload = () => window.gapi.load("picker", { callback: resolve });
+        script.onerror = () => reject(new Error("Google Picker API could not be loaded."));
+        document.head.appendChild(script);
+    });
+}
 
-    const file = event.target.files?.[0];
+async function authorizeGoogleDrive() {
+    if (!firebaseAuthReady || !firebaseAuthModule || !firebaseAuth) {
+        throw new Error("Google Sign-In is not ready.");
+    }
+    const provider = new firebaseAuthModule.GoogleAuthProvider();
+    provider.addScope("https://www.googleapis.com/auth/drive.readonly");
+    provider.setCustomParameters({ prompt: "consent select_account" });
+    const result = await firebaseAuthModule.signInWithPopup(firebaseAuth, provider);
+    const credential = firebaseAuthModule.GoogleAuthProvider.credentialFromResult(result);
+    driveAccessToken = credential && credential.accessToken ? credential.accessToken : null;
+    if (!driveAccessToken) throw new Error("Google Drive read permission was not returned.");
+    updateDriveImportAvailability();
+}
 
-    if (!file) return;
+async function importDriveDocument(doc) {
+    if (!driveAccessToken) throw new Error("Authorize Google Drive access first.");
+    const response = await fetch(
+        "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(doc.id) + "?alt=media",
+        { headers: { Authorization: "Bearer " + driveAccessToken } }
+    );
+    if (!response.ok) throw new Error("Google Drive could not download " + (doc.name || "the selected file") + ".");
+    const blob = await response.blob();
+    if (!blob.size || blob.size > 20 * 1024 * 1024) {
+        throw new Error((doc.name || "The selected file") + " is empty or exceeds 20 MB.");
+    }
+    const file = new File([blob], doc.name || "drive-audio", {
+        type: doc.mimeType || blob.type || "audio/mpeg"
+    });
+    const form = new FormData();
+    form.append("file", file, file.name);
+    if (firebaseCurrentUser) apiIdToken = await firebaseCurrentUser.getIdToken();
+    const upload = await fetch(API_BASE_URL + "/api/music/upload", {
+        method: "POST", headers: apiHeaders(), body: form, cache: "no-store"
+    });
+    const payload = await upload.json().catch(() => ({}));
+    if (!upload.ok) throw new Error(payload.detail || "NeuroSense music upload failed.");
+    return payload.track;
+}
 
-    if (!file.type.startsWith("audio/")) {
-        showToast("Please select a supported audio file.");
-        event.target.value = "";
+async function openDriveMusicPicker() {
+    if (!googleDrivePickerConfig) {
+        showToast("Google Picker API key and project number must be configured on the backend.");
         return;
     }
-
-    if (activeMusicUrl) {
-        URL.revokeObjectURL(activeMusicUrl);
+    try {
+        if (!driveAccessToken) await authorizeGoogleDrive();
+        await loadGooglePickerApi();
+        const view = new window.google.picker.DocsView(window.google.picker.ViewId.DOCS);
+        view.setMimeTypes("audio/mpeg,audio/wav,audio/mp4,audio/ogg,audio/aac,audio/flac,audio/x-wav");
+        view.setIncludeFolders(false);
+        const picker = new window.google.picker.PickerBuilder()
+            .addView(view)
+            .setOAuthToken(driveAccessToken)
+            .setDeveloperKey(googleDrivePickerConfig.apiKey)
+            .setAppId(googleDrivePickerConfig.appId)
+            .setSelectMultiple(true)
+            .setCallback(async data => {
+                if (data.action !== window.google.picker.Action.PICKED) return;
+                let imported = 0;
+                for (const doc of (data.docs || [])) {
+                    try {
+                        await importDriveDocument(doc);
+                        imported += 1;
+                    } catch (error) { showToast(error.message); }
+                }
+                await loadMusicLibrary();
+                showToast(imported + " Google Drive audio file(s) imported.");
+            })
+            .build();
+        picker.setVisible(true);
+    } catch (error) {
+        showToast("Google Drive import failed: " + error.message);
     }
+}
 
-    activeMusicUrl = URL.createObjectURL(file);
+$("importDriveMusicBtn").addEventListener("click", openDriveMusicPicker);
 
+
+function updateMusicModeUI() {
+    if ($("musicModeSelect")) $("musicModeSelect").value = musicMode;
+    const automatic = musicMode === "automatic";
+    setText("musicModeStatus", automatic
+        ? "Automatic mode: the saved default song is attempted after breathing. Browser autoplay may require one tap."
+        : "Manual mode: choose one song or select multiple songs for a playlist, then press Play.");
+    if ($("musicTrackSelect")) $("musicTrackSelect").disabled = automatic || !recoverySequence.breathing;
+    if ($("musicPlaylistSelect")) $("musicPlaylistSelect").disabled = automatic || !recoverySequence.breathing;
+    if ($("playSelectedMusicBtn")) $("playSelectedMusicBtn").disabled = automatic || !recoverySequence.breathing || musicTracks.length === 0;
+    if ($("saveDefaultMusicBtn")) $("saveDefaultMusicBtn").disabled = musicTracks.length === 0;
+}
+
+function renderMusicLibrary() {
+    const single = $("musicTrackSelect");
+    const playlist = $("musicPlaylistSelect");
+    if (!single || !playlist) return;
+    const previousSingle = single.value;
+    single.innerHTML = "";
+    playlist.innerHTML = "";
+    if (!musicTracks.length) {
+        single.add(new Option("No songs uploaded yet", ""));
+        playlist.add(new Option("Upload songs to create a playlist", ""));
+    } else {
+        musicTracks.forEach(track => {
+            const label = track.file_name + (track.is_default ? " · Default" : "");
+            single.add(new Option(label, track.track_id));
+            playlist.add(new Option(track.file_name, track.track_id));
+        });
+        if (musicTracks.some(track => track.track_id === previousSingle)) {
+            single.value = previousSingle;
+        } else {
+            const defaultTrack = musicTracks.find(track => track.is_default);
+            single.value = (defaultTrack || musicTracks[0]).track_id;
+        }
+    }
+    setText("musicFileName", musicTracks.length + " song(s) in your account library.");
+    updateMusicModeUI();
+}
+
+async function loadMusicLibrary() {
+    if (!hasPrivateApiAccess()) {
+        renderMusicLibrary();
+        return;
+    }
+    try {
+        const result = await apiRequest("/api/music");
+        musicTracks = result.tracks || [];
+        renderMusicLibrary();
+    } catch (error) {
+        console.warn("Music library could not be loaded:", error);
+        setText("musicFileName", "Music library unavailable: " + error.message);
+    }
+}
+
+async function loadMusicTrack(track) {
+    if (!track) throw new Error("Choose a song first.");
+    if (track.localUrl) {
+        if (activeMusicUrl && activeMusicUrl !== track.localUrl) URL.revokeObjectURL(activeMusicUrl);
+        activeMusicUrl = track.localUrl;
+        $("relaxationAudio").src = activeMusicUrl;
+        return;
+    }
+    if (firebaseCurrentUser) apiIdToken = await firebaseCurrentUser.getIdToken();
+    const response = await fetch(
+        API_BASE_URL + "/api/music/" + encodeURIComponent(track.track_id) + "/audio",
+        { headers: apiHeaders(), cache: "no-store" }
+    );
+    if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail || "Music request failed (" + response.status + ").");
+    }
+    const blob = await response.blob();
+    if (activeMusicUrl) URL.revokeObjectURL(activeMusicUrl);
+    activeMusicUrl = URL.createObjectURL(blob);
     $("relaxationAudio").src = activeMusicUrl;
-    $("musicFileName").textContent =
-        "Selected: " + file.name;
+}
 
-    showToast("Audio loaded locally. Press play to listen.");
+async function playMusicQueue(tracks) {
+    if (!recoverySequence.breathing) {
+        showToast("Complete guided breathing before starting music.");
+        return;
+    }
+    if (!tracks.length) {
+        showToast("Select a song or playlist first.");
+        return;
+    }
+    musicQueue = tracks;
+    musicQueueIndex = 0;
+    await playCurrentMusicTrack();
+}
 
+async function playCurrentMusicTrack() {
+    const track = musicQueue[musicQueueIndex];
+    if (!track) return;
+    try {
+        await loadMusicTrack(track);
+        setText("musicModeStatus", "Playing " + track.file_name +
+            (musicQueue.length > 1 ? " · " + (musicQueueIndex + 1) + "/" + musicQueue.length : ""));
+        try {
+            await $("relaxationAudio").play();
+        } catch (error) {
+            setText("musicModeStatus", "Browser blocked automatic playback. Press Play on the audio player to continue.");
+            showToast("Browser blocked autoplay. Tap Play on the music player.");
+        }
+    } catch (error) {
+        showToast("Could not load music: " + error.message);
+        setText("musicModeStatus", error.message);
+    }
+}
+
+async function startAutomaticMusic() {
+    const defaultTrack = musicTracks.find(track => track.is_default);
+    if (!defaultTrack) {
+        showToast("Choose a default song in Manual mode before using Automatic mode.");
+        return;
+    }
+    musicQueue = [defaultTrack];
+    musicQueueIndex = 0;
+    await playCurrentMusicTrack();
+}
+
+$("musicFileInput").addEventListener("change", async event => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    const extensionPattern = new RegExp("\\.(mp3|wav|ogg|m4a|aac|flac|webm)$", "i");
+    const accepted = files.filter(file => file.type.startsWith("audio/") || extensionPattern.test(file.name));
+    if (accepted.length !== files.length) showToast("Some files were skipped because they are not supported audio.");
+    if (hasPrivateApiAccess()) {
+        for (const file of accepted) {
+            if (file.size > 20 * 1024 * 1024) {
+                showToast(file.name + " exceeds the 20 MB upload limit.");
+                continue;
+            }
+            const form = new FormData();
+            form.append("file", file, file.name);
+            try {
+                if (firebaseCurrentUser) apiIdToken = await firebaseCurrentUser.getIdToken();
+                const response = await fetch(API_BASE_URL + "/api/music/upload", {
+                    method: "POST",
+                    headers: apiHeaders(),
+                    body: form,
+                    cache: "no-store"
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.detail || "Upload failed (" + response.status + ").");
+            } catch (error) {
+                showToast("Upload failed for " + file.name + ": " + error.message);
+            }
+        }
+        await loadMusicLibrary();
+        showToast("Music upload process completed. Check your library.");
+    } else {
+        accepted.forEach(file => {
+            const url = URL.createObjectURL(file);
+            musicTracks.push({
+                track_id: "local-" + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random()),
+                file_name: file.name,
+                content_type: file.type || "audio/mpeg",
+                is_default: false,
+                localUrl: url
+            });
+        });
+        renderMusicLibrary();
+        showToast("Songs are available in this browser preview only. Sign in to upload to your account.");
+    }
+    event.target.value = "";
 });
 
+$("musicModeSelect").addEventListener("change", async event => {
+    const nextMode = event.target.value === "automatic" ? "automatic" : "manual";
+    const previous = musicMode;
+    musicMode = nextMode;
+    updateMusicModeUI();
+    if (hasPrivateApiAccess()) {
+        try {
+            const result = await apiRequest("/api/settings/recovery", {
+                method: "PUT",
+                body: JSON.stringify({
+                    music_mode: musicMode,
+                    warning_sound_enabled: warningSoundEnabled,
+                    notifications_enabled: browserNotificationsEnabled
+                })
+            });
+            musicMode = result.music_mode;
+            showToast("Music playback mode saved to your account.");
+        } catch (error) {
+            musicMode = previous;
+            event.target.value = previous;
+            showToast("Music mode could not be saved: " + error.message);
+        }
+    } else {
+        writeLocal("neurosense_music_mode", musicMode);
+    }
+    updateMusicModeUI();
+});
 
-$("relaxationAudio").addEventListener("ended", () => {
+$("playSelectedMusicBtn").addEventListener("click", async () => {
+    if (musicMode !== "manual") return;
+    const playlistIds = Array.from($("musicPlaylistSelect").selectedOptions)
+        .map(option => option.value).filter(Boolean);
+    const selected = playlistIds.length > 1
+        ? playlistIds.map(id => musicTracks.find(track => track.track_id === id)).filter(Boolean)
+        : [musicTracks.find(track => track.track_id === $("musicTrackSelect").value)].filter(Boolean);
+    await playMusicQueue(selected);
+});
+
+$("saveDefaultMusicBtn").addEventListener("click", async () => {
+    const trackId = $("musicTrackSelect").value;
+    const track = musicTracks.find(item => item.track_id === trackId);
+    if (!track) return showToast("Select one song to save as the default.");
+    if (track.localUrl) {
+        musicTracks = musicTracks.map(item => ({ ...item, is_default: item.track_id === trackId }));
+        renderMusicLibrary();
+        showToast("Default song saved for this preview session only.");
+        return;
+    }
+    try {
+        await apiRequest("/api/music/" + encodeURIComponent(trackId) + "/default", { method: "PUT" });
+        musicTracks = musicTracks.map(item => ({ ...item, is_default: item.track_id === trackId }));
+        renderMusicLibrary();
+        showToast("Automatic recovery song saved to your account.");
+    } catch (error) {
+        showToast("Could not save default song: " + error.message);
+    }
+});
+
+$("relaxationAudio").addEventListener("ended", async () => {
     const audio = $("relaxationAudio");
-    if (!recoverySequence.breathing) {
-        showToast("Complete breathing first to follow the recovery sequence.");
+    if (!recoverySequence.breathing) return;
+    if (musicQueueIndex < musicQueue.length - 1) {
+        musicQueueIndex += 1;
+        await playCurrentMusicTrack();
         return;
     }
     const duration = Number.isFinite(audio.duration) ? Math.max(1, Math.round(audio.duration)) : 1;
     recordRecoverySession("Music", duration);
     completeRecoveryStep("music");
-    showToast("Music session completed. Haptic is now the final step.");
+    setText("musicModeStatus", "Music recovery step completed.");
+    showToast("Music completed. Haptic feedback remains independently controlled.");
 });
 
-
 $("relaxationAudio").addEventListener("error", () => {
-    if (activeMusicUrl) {
-        showToast("The selected audio file could not be played.");
-    }
+    if (activeMusicUrl) showToast("The selected audio file could not be played.");
 });
 
 
@@ -5780,6 +6255,131 @@ $("hapticToggle").addEventListener("change", event => {
 
 $("settingsHapticToggle").addEventListener("change", event => {
     setHapticPreference(event.target.checked);
+});
+
+
+
+function updateNotificationPermissionStatus() {
+    const permission = ("Notification" in window) ? Notification.permission : "unsupported";
+    setText("notificationPermissionStatus", browserNotificationsEnabled
+        ? "Browser notifications enabled · permission: " + permission
+        : "Notifications off · browser permission: " + permission);
+}
+async function saveRecoveryPreferences() {
+    if (!hasPrivateApiAccess()) {
+        writeLocal("neurosense_alert_preferences", {
+            warning_sound_enabled: warningSoundEnabled,
+            notifications_enabled: browserNotificationsEnabled
+        });
+        return;
+    }
+    await apiRequest("/api/settings/recovery", {
+        method: "PUT",
+        body: JSON.stringify({
+            music_mode: musicMode,
+            warning_sound_enabled: warningSoundEnabled,
+            notifications_enabled: browserNotificationsEnabled
+        })
+    });
+}
+function playWarningTone() {
+    if (!warningSoundEnabled) return;
+    try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        const context = new AudioContextClass();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = 660;
+        gain.gain.setValueAtTime(0.0001, context.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.22);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        oscillator.stop(context.currentTime + 0.24);
+        oscillator.onended = () => context.close();
+    } catch (error) { console.warn("Warning tone unavailable:", error); }
+}
+function dispatchStressNotification(stress, reading) {
+    const score = Number(stress && stress.stress_score);
+    if (!stress || stress.status !== "prediction_available" || !Number.isFinite(score) || score < 67) return;
+    const readingId = (reading && (reading.id || reading.timestamp)) || "";
+    if (!readingId || readingId === lastStressNotificationReadingId) return;
+    lastStressNotificationReadingId = readingId;
+    playWarningTone();
+    if (browserNotificationsEnabled && "Notification" in window && Notification.permission === "granted") {
+        try {
+            new Notification("NeuroSense wellness check-in", {
+                body: "Recent readings show elevated stress-related signals. Consider a short break or guided breathing.",
+                tag: "neurosense-elevated-reading"
+            });
+        } catch (error) { console.warn("Browser notification could not be shown:", error); }
+    }
+}
+$("warningSoundToggle").addEventListener("change", async event => {
+    const previous = warningSoundEnabled;
+    warningSoundEnabled = event.target.checked;
+    try { await saveRecoveryPreferences(); showToast("Warning sound preference saved."); }
+    catch (error) {
+        warningSoundEnabled = previous;
+        event.target.checked = previous;
+        showToast("Could not save warning sound preference: " + error.message);
+    }
+});
+$("browserNotificationToggle").addEventListener("change", async event => {
+    const previous = browserNotificationsEnabled;
+    if (event.target.checked) {
+        if (!("Notification" in window)) {
+            event.target.checked = false;
+            showToast("This browser does not support notifications.");
+            return;
+        }
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+            event.target.checked = false;
+            browserNotificationsEnabled = false;
+            updateNotificationPermissionStatus();
+            showToast("Browser notification permission was not granted.");
+            return;
+        }
+    }
+    browserNotificationsEnabled = event.target.checked;
+    try { await saveRecoveryPreferences(); updateNotificationPermissionStatus(); showToast("Browser notification preference saved."); }
+    catch (error) {
+        browserNotificationsEnabled = previous;
+        event.target.checked = previous;
+        updateNotificationPermissionStatus();
+        showToast("Could not save notification preference: " + error.message);
+    }
+});
+$("saveEmergencyContactBtn").addEventListener("click", async () => {
+    const phone = $("emergencyPhoneInput").value.trim();
+    const enabled = $("whatsappAlertToggle").checked;
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+        showToast("Enter the phone number in international format, for example +919876543210.");
+        return;
+    }
+    try {
+        const result = await apiRequest("/api/emergency-contact", {
+            method: "PUT", body: JSON.stringify({ phone, enabled })
+        });
+        setText("whatsappStatusText", result.whatsapp_configured
+            ? (enabled ? "Emergency contact saved and WhatsApp alerts enabled." : "Emergency contact saved; alerts are disabled.")
+            : "Contact saved. Twilio WhatsApp credentials are required on the backend before delivery.");
+        showToast("Emergency contact saved to your account.");
+    } catch (error) { showToast("Could not save emergency contact: " + error.message); }
+});
+$("testWhatsAppBtn").addEventListener("click", async () => {
+    try {
+        await apiRequest("/api/emergency-contact/test", { method: "POST" });
+        setText("whatsappStatusText", "WhatsApp test message sent.");
+        showToast("WhatsApp test message sent.");
+    } catch (error) {
+        setText("whatsappStatusText", error.message);
+        showToast("WhatsApp test failed: " + error.message);
+    }
 });
 
 
@@ -6035,6 +6635,9 @@ function initializeApp() {
 
     updateProfileUI();
     updateHapticUI();
+    updateMusicModeUI();
+    renderMusicLibrary();
+    updateNotificationPermissionStatus();
     renderRecoverySequence();
     renderHistory();
     updateAnalyticsCount();

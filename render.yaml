@@ -27,3 +27,17 @@ services:
         sync: false
       - key: FIREBASE_WEB_MESSAGING_SENDER_ID
         sync: false
+      - key: FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+      - key: NEUROSENSE_MUSIC_DIR
+        value: /tmp/neurosense-music
+      - key: GOOGLE_DRIVE_API_KEY
+        sync: false
+      - key: GOOGLE_DRIVE_APP_ID
+        sync: false

@@ -7,3 +7,4 @@ python-dotenv
 pydantic>=2,<3
 firebase-admin
 joblib
+requests

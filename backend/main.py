@@ -24,6 +24,8 @@ import os
 import secrets
 import sqlite3
 import uuid
+import re
+import requests
 
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -37,7 +39,8 @@ from dotenv import load_dotenv
 from fastapi import (
     Depends, FastAPI, Header, HTTPException, Query, status
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from fastapi import UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from pydantic import (
@@ -48,7 +51,7 @@ from scipy.signal import butter, find_peaks, sosfiltfilt
 
 import firebase_admin
 from firebase_admin import auth as firebase_auth
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage as firebase_storage
 
 
 # ============================================================
@@ -78,6 +81,19 @@ FIREBASE_SERVICE_ACCOUNT_PATH = os.getenv(
 FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv(
     "FIREBASE_SERVICE_ACCOUNT_JSON", ""
 ).strip()
+
+FIREBASE_STORAGE_BUCKET = os.getenv("FIREBASE_STORAGE_BUCKET", "").strip()
+MUSIC_STORAGE_DIR = Path(os.getenv(
+    "NEUROSENSE_MUSIC_DIR", str(BASE_DIR / "data" / "music")
+))
+MAX_MUSIC_FILE_BYTES = 20 * 1024 * 1024
+ALLOWED_MUSIC_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".webm"}
+
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "").strip()
+GOOGLE_DRIVE_API_KEY = os.getenv("GOOGLE_DRIVE_API_KEY", "").strip()
+GOOGLE_DRIVE_APP_ID = os.getenv("GOOGLE_DRIVE_APP_ID", "").strip()
 
 FIREBASE_WEB_CONFIG = {
     "apiKey": os.getenv("FIREBASE_WEB_API_KEY", "").strip(),
@@ -253,6 +269,42 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS user_settings (
             user_id TEXT PRIMARY KEY,
             haptic_enabled INTEGER NOT NULL DEFAULT 0,
+            music_mode TEXT NOT NULL DEFAULT 'manual',
+            warning_sound_enabled INTEGER NOT NULL DEFAULT 0,
+            notifications_enabled INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS music_tracks (
+            track_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            storage_backend TEXT NOT NULL,
+            storage_path TEXT NOT NULL,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_music_tracks_user
+        ON music_tracks(user_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS blink_summaries (
+            summary_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            blink_count INTEGER NOT NULL,
+            duration_seconds INTEGER NOT NULL,
+            blinks_per_minute REAL NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_blink_user_time
+        ON blink_summaries(user_id, recorded_at);
+
+        CREATE TABLE IF NOT EXISTS emergency_contacts (
+            user_id TEXT PRIMARY KEY,
+            phone TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            last_alert_at TEXT,
             updated_at TEXT NOT NULL
         );
 
@@ -314,6 +366,23 @@ def initialize_database() -> None:
         );
 
         """)
+
+        # SQLite CREATE TABLE IF NOT EXISTS does not add columns to an
+        # existing database. Apply additive migrations for user preferences.
+        existing_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(user_settings)").fetchall()
+        }
+        migrations = {
+            "music_mode": "TEXT NOT NULL DEFAULT 'manual'",
+            "warning_sound_enabled": "INTEGER NOT NULL DEFAULT 0",
+            "notifications_enabled": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for column, definition in migrations.items():
+            if column not in existing_columns:
+                db.execute(
+                    f"ALTER TABLE user_settings ADD COLUMN {column} {definition}"
+                )
 
 
 # ============================================================
@@ -577,6 +646,93 @@ def firestore_read_collection(
         return []
 
 
+
+
+# ============================================================
+# 7A. OPTIONAL CLOUD MUSIC AND WHATSAPP HELPERS
+# ============================================================
+
+def configured_music_bucket():
+    if FIREBASE_APP is None or not FIREBASE_STORAGE_BUCKET:
+        return None
+    try:
+        return firebase_storage.bucket(
+            name=FIREBASE_STORAGE_BUCKET,
+            app=FIREBASE_APP
+        )
+    except Exception:
+        logger.exception("Firebase Storage bucket is unavailable.")
+        return None
+
+
+def send_whatsapp_message(phone: str, message: str) -> str:
+    if not all((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM)):
+        return "not_configured"
+    try:
+        response = requests.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json",
+            data={
+                "From": TWILIO_WHATSAPP_FROM,
+                "To": f"whatsapp:{phone}",
+                "Body": message,
+            },
+            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+            timeout=12,
+        )
+        response.raise_for_status()
+        return "sent"
+    except requests.RequestException:
+        logger.exception("WhatsApp message delivery failed.")
+        return "failed"
+
+
+def maybe_send_whatsapp_alert(user_id: str, probability: float) -> str:
+    """Send only after repeated elevated estimates, with consent and cooldown."""
+    if probability < HIGH_STRESS_THRESHOLD:
+        return "not_triggered"
+
+    with db_connection() as db:
+        contact = db.execute(
+            "SELECT * FROM emergency_contacts WHERE user_id = ? AND enabled = 1",
+            (user_id,),
+        ).fetchone()
+        if contact is None:
+            return "not_enabled"
+
+        recent = db.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM high_stress_events
+            WHERE user_id = ? AND occurred_at >= ?
+            """,
+            (user_id, iso(utc_now() - timedelta(minutes=30))),
+        ).fetchone()["total"]
+
+        if int(recent) < 3:
+            return "awaiting_repeated_readings"
+
+        if contact["last_alert_at"]:
+            last_sent = parse_iso(contact["last_alert_at"])
+            if utc_now() - last_sent < timedelta(hours=6):
+                return "cooldown"
+
+        phone = contact["phone"]
+
+    delivery = send_whatsapp_message(
+        phone,
+        "NeuroSense check-in: your account has recorded repeated elevated stress-related readings. "
+        "If you are available, please check in with the user. This is an experimental wellness alert, "
+        "not a medical diagnosis or emergency service.",
+    )
+    if delivery == "sent":
+        with db_connection() as db:
+            db.execute(
+                "UPDATE emergency_contacts SET last_alert_at = ?, updated_at = ? WHERE user_id = ?",
+                (iso(), iso(), user_id),
+            )
+    return delivery
+
+
 # ============================================================
 # 7. REQUEST VALIDATION MODELS
 # ============================================================
@@ -691,6 +847,22 @@ class DevicePairIn(StrictModel):
 class HapticSettingIn(StrictModel):
 
     haptic_enabled: bool
+
+
+class RecoveryPreferencesIn(StrictModel):
+    music_mode: Literal["manual", "automatic"] = "manual"
+    warning_sound_enabled: bool = False
+    notifications_enabled: bool = False
+
+
+class BlinkSummaryIn(StrictModel):
+    blink_count: int = Field(ge=0, le=2000)
+    duration_seconds: int = Field(ge=10, le=3600)
+
+
+class EmergencyContactIn(StrictModel):
+    phone: str = Field(pattern=r"^\+[1-9]\d{7,14}$")
+    enabled: bool = False
 
 
 class HapticCommandIn(StrictModel):
@@ -1526,6 +1698,10 @@ def predict_stress(
                     }
                 )
 
+                result["whatsapp_alert"] = maybe_send_whatsapp_alert(
+                    user_id, probability
+                )
+
             return result
 
         label = STRESS_MODEL.predict(matrix)[0]
@@ -1996,7 +2172,12 @@ def public_config():
             dict(FIREBASE_WEB_CONFIG)
             if web_ready and admin_ready
             else None
-        )
+        ),
+        "google_drive_picker_configured": bool(
+            GOOGLE_DRIVE_API_KEY and GOOGLE_DRIVE_APP_ID
+        ),
+        "google_drive_api_key": GOOGLE_DRIVE_API_KEY or None,
+        "google_drive_app_id": GOOGLE_DRIVE_APP_ID or None,
     }
 
 
@@ -2601,42 +2782,30 @@ def dashboard_overview(
 def get_settings(
     user_id: str = Depends(current_user_id)
 ):
-
     with db_connection() as db:
-
         row = db.execute(
-            """
-            SELECT *
-            FROM user_settings
-            WHERE user_id = ?
-            """,
+            "SELECT * FROM user_settings WHERE user_id = ?",
             (user_id,)
         ).fetchone()
 
     if row is None:
-        cloud_settings = firestore_read_document(
-            ("users", user_id, "settings"),
-            "preferences"
-        )
-        if cloud_settings is not None:
-            return {
-                "haptic_enabled": bool(
-                    cloud_settings.get("haptic_enabled", False)
-                ),
-                "updated_at": cloud_settings.get("updated_at")
-            }
-
+        values = firestore_read_document(
+            ("users", user_id, "settings"), "preferences"
+        ) or {}
         return {
-            "haptic_enabled": False,
-            "updated_at": None
+            "haptic_enabled": bool(values.get("haptic_enabled", False)),
+            "music_mode": values.get("music_mode", "manual"),
+            "warning_sound_enabled": bool(values.get("warning_sound_enabled", False)),
+            "notifications_enabled": bool(values.get("notifications_enabled", False)),
+            "updated_at": values.get("updated_at"),
         }
 
     return {
-        "haptic_enabled": bool(
-            row["haptic_enabled"]
-        ),
-
-        "updated_at": row["updated_at"]
+        "haptic_enabled": bool(row["haptic_enabled"]),
+        "music_mode": row["music_mode"],
+        "warning_sound_enabled": bool(row["warning_sound_enabled"]),
+        "notifications_enabled": bool(row["notifications_enabled"]),
+        "updated_at": row["updated_at"],
     }
 
 
@@ -2669,11 +2838,15 @@ def set_haptic_setting(
             )
         )
 
+    current_preferences = get_settings(user_id)
     cloud_sync = firestore_write(
         ("users", user_id, "settings"),
         "preferences",
         {
             "haptic_enabled": payload.haptic_enabled,
+            "music_mode": current_preferences.get("music_mode", "manual"),
+            "warning_sound_enabled": current_preferences.get("warning_sound_enabled", False),
+            "notifications_enabled": current_preferences.get("notifications_enabled", False),
             "updated_at": iso()
         }
     )
@@ -3394,6 +3567,464 @@ def high_stress_events(
     }
 
 
+
+
+@app.put("/api/settings/recovery")
+def set_recovery_preferences(
+    payload: RecoveryPreferencesIn,
+    user_id: str = Depends(current_user_id)
+):
+    updated_at = iso()
+    with db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO user_settings (
+                user_id, haptic_enabled, music_mode,
+                warning_sound_enabled, notifications_enabled, updated_at
+            )
+            VALUES (?, 0, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                music_mode=excluded.music_mode,
+                warning_sound_enabled=excluded.warning_sound_enabled,
+                notifications_enabled=excluded.notifications_enabled,
+                updated_at=excluded.updated_at
+            """,
+            (
+                user_id, payload.music_mode,
+                int(payload.warning_sound_enabled),
+                int(payload.notifications_enabled), updated_at,
+            ),
+        )
+    cloud_sync = firestore_write(
+        ("users", user_id, "settings"), "preferences",
+        {
+            "haptic_enabled": get_settings(user_id)["haptic_enabled"],
+            "music_mode": payload.music_mode,
+            "warning_sound_enabled": payload.warning_sound_enabled,
+            "notifications_enabled": payload.notifications_enabled,
+            "updated_at": updated_at,
+        },
+    )
+    return {
+        "success": True,
+        "music_mode": payload.music_mode,
+        "warning_sound_enabled": payload.warning_sound_enabled,
+        "notifications_enabled": payload.notifications_enabled,
+        "cloud_sync": cloud_sync,
+    }
+
+
+@app.get("/api/music")
+def list_music_tracks(user_id: str = Depends(current_user_id)):
+    with db_connection() as db:
+        rows = db.execute(
+            "SELECT * FROM music_tracks WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    tracks = {str(row["track_id"]): dict(row) for row in rows}
+    cloud_tracks = firestore_read_collection(
+        ("users", user_id, "music_tracks"), limit=200, order_by="created_at"
+    )
+    for item in cloud_tracks:
+        track_id = str(item.get("track_id") or item.get("document_id") or "")
+        if track_id:
+            tracks.setdefault(track_id, item)
+            if track_id not in {str(row["track_id"]) for row in rows}:
+                try:
+                    with db_connection() as db:
+                        db.execute(
+                            """
+                            INSERT OR IGNORE INTO music_tracks (
+                                track_id, user_id, file_name, content_type, size_bytes,
+                                storage_backend, storage_path, is_default, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                track_id, user_id, item.get("file_name", "audio"),
+                                item.get("content_type", "audio/mpeg"),
+                                int(item.get("size_bytes", 0)),
+                                item.get("storage_backend", "firebase_storage"),
+                                item.get("storage_path", ""),
+                                int(bool(item.get("is_default", False))),
+                                item.get("created_at", iso()),
+                            ),
+                        )
+                except Exception:
+                    logger.exception("Could not restore cloud music metadata for %s", track_id)
+    ordered = sorted(
+        tracks.values(), key=lambda item: str(item.get("created_at") or ""), reverse=True
+    )
+    return {
+        "tracks": [
+            {
+                "track_id": item["track_id"],
+                "file_name": item["file_name"],
+                "content_type": item["content_type"],
+                "size_bytes": item["size_bytes"],
+                "is_default": bool(item.get("is_default", False)),
+                "created_at": item.get("created_at"),
+                "storage_backend": item.get("storage_backend", "firebase_storage"),
+            }
+            for item in ordered
+        ],
+        "storage_configured": configured_music_bucket() is not None,
+        "note": "Cloud music survives service restarts when Firebase Storage is configured; local fallback files may be ephemeral on hosted services.",
+    }
+
+
+@app.post("/api/music/upload", status_code=status.HTTP_201_CREATED)
+async def upload_music_track(
+    file: UploadFile = File(...),
+    user_id: str = Depends(current_user_id),
+):
+    original_name = Path(file.filename or "track").name
+    extension = Path(original_name).suffix.lower()
+    if extension not in ALLOWED_MUSIC_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Unsupported audio format.")
+    content = await file.read(MAX_MUSIC_FILE_BYTES + 1)
+    if not content or len(content) > MAX_MUSIC_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Audio file must be between 1 byte and 20 MB.")
+    content_type = file.content_type or "application/octet-stream"
+    if not content_type.startswith("audio/") and content_type != "application/octet-stream":
+        raise HTTPException(status_code=415, detail="Uploaded file is not recognized as audio.")
+
+    track_id = str(uuid.uuid4())
+    safe_user = re.sub(r"[^A-Za-z0-9_.-]", "_", user_id)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", original_name)[:120]
+    storage_path = f"users/{safe_user}/music/{track_id}/{safe_name}"
+    bucket = configured_music_bucket()
+
+    if bucket is not None:
+        try:
+            bucket.blob(storage_path).upload_from_string(
+                content, content_type=content_type
+            )
+            storage_backend = "firebase_storage"
+        except Exception:
+            logger.exception("Firebase Storage upload failed.")
+            raise HTTPException(status_code=503, detail="Cloud music storage upload failed.")
+    else:
+        user_dir = MUSIC_STORAGE_DIR / hashlib.sha256(user_id.encode()).hexdigest()
+        user_dir.mkdir(parents=True, exist_ok=True)
+        local_path = user_dir / f"{track_id}{extension}"
+        local_path.write_bytes(content)
+        storage_path = str(local_path)
+        storage_backend = "local_ephemeral" if APP_ENV == "production" else "local"
+
+    track = {
+        "track_id": track_id,
+        "user_id": user_id,
+        "file_name": safe_name,
+        "content_type": content_type,
+        "size_bytes": len(content),
+        "storage_backend": storage_backend,
+        "storage_path": storage_path,
+        "is_default": False,
+        "created_at": iso(),
+    }
+    with db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO music_tracks (
+                track_id, user_id, file_name, content_type, size_bytes,
+                storage_backend, storage_path, is_default, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (
+                track_id, user_id, safe_name, content_type, len(content),
+                storage_backend, storage_path, track["created_at"],
+            ),
+        )
+    cloud_sync = firestore_write(
+        ("users", user_id, "music_tracks"), track_id, track
+    )
+    return {
+        "success": True,
+        "track": {
+            "track_id": track_id,
+            "file_name": safe_name,
+            "content_type": content_type,
+            "size_bytes": len(content),
+            "is_default": False,
+            "created_at": track["created_at"],
+            "storage_backend": storage_backend,
+        },
+        "cloud_sync": cloud_sync,
+    }
+
+
+@app.put("/api/music/{track_id}/default")
+def set_default_music_track(
+    track_id: str,
+    user_id: str = Depends(current_user_id),
+):
+    with db_connection() as db:
+        selected = db.execute(
+            "SELECT * FROM music_tracks WHERE track_id = ? AND user_id = ?",
+            (track_id, user_id),
+        ).fetchone()
+        if selected is None:
+            raise HTTPException(status_code=404, detail="Music track not found.")
+        db.execute(
+            "UPDATE music_tracks SET is_default = 0 WHERE user_id = ?",
+            (user_id,),
+        )
+        db.execute(
+            "UPDATE music_tracks SET is_default = 1 WHERE track_id = ? AND user_id = ?",
+            (track_id, user_id),
+        )
+    cloud_tracks = firestore_read_collection(
+        ("users", user_id, "music_tracks"), limit=200
+    )
+    for item in cloud_tracks:
+        cloud_id = str(item.get("track_id") or item.get("document_id") or "")
+        item["is_default"] = cloud_id == track_id
+        if cloud_id:
+            firestore_write(
+                ("users", user_id, "music_tracks"), cloud_id, item
+            )
+    selected_doc = dict(selected)
+    selected_doc["is_default"] = True
+    firestore_write(
+        ("users", user_id, "music_tracks"), track_id, selected_doc
+    )
+    return {"success": True, "default_track_id": track_id}
+
+
+@app.get("/api/music/{track_id}/audio")
+def stream_music_track(
+    track_id: str,
+    user_id: str = Depends(current_user_id),
+):
+    with db_connection() as db:
+        row = db.execute(
+            "SELECT * FROM music_tracks WHERE track_id = ? AND user_id = ?",
+            (track_id, user_id),
+        ).fetchone()
+    track = dict(row) if row else firestore_read_document(
+        ("users", user_id, "music_tracks"), track_id
+    )
+    if not track:
+        raise HTTPException(status_code=404, detail="Music track not found.")
+    try:
+        if track.get("storage_backend") == "firebase_storage":
+            bucket = configured_music_bucket()
+            if bucket is None:
+                raise HTTPException(status_code=503, detail="Firebase Storage is not configured.")
+            audio_bytes = bucket.blob(track["storage_path"]).download_as_bytes()
+        else:
+            audio_path = Path(track["storage_path"])
+            if not audio_path.is_file():
+                raise HTTPException(
+                    status_code=404,
+                    detail="Local audio is unavailable after a server restart. Upload it again or configure Firebase Storage.",
+                )
+            audio_bytes = audio_path.read_bytes()
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Music playback retrieval failed.")
+        raise HTTPException(status_code=503, detail="Music file could not be retrieved.")
+    return Response(
+        content=audio_bytes,
+        media_type=track.get("content_type") or "audio/mpeg",
+        headers={
+            "Content-Disposition": f'inline; filename="{Path(track["file_name"]).name}"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@app.get("/api/personalization/profile")
+def personalization_profile(
+    user_id: str = Depends(current_user_id),
+):
+    since = iso(utc_now() - timedelta(days=3))
+    with db_connection() as db:
+        rows = db.execute(
+            """
+            SELECT timestamp, heart_rate_bpm, hrv_ms, gsr_raw
+            FROM sensor_readings
+            WHERE user_id = ? AND source = 'wearable'
+              AND signal_quality IN ('good', 'moderate')
+              AND timestamp >= ?
+            ORDER BY timestamp ASC
+            """,
+            (user_id, since),
+        ).fetchall()
+    day_keys = {str(row["timestamp"])[:10] for row in rows}
+    def med(field):
+        return median_or_none([
+            float(row[field]) for row in rows if row[field] is not None
+        ])
+    days = len(day_keys)
+    return {
+        "days_observed": days,
+        "reading_count": len(rows),
+        "minimum_days": 2,
+        "recommended_days": 3,
+        "ready_for_preliminary_profile": days >= 2 and len(rows) >= 10,
+        "recommended_profile_ready": days >= 3 and len(rows) >= 20,
+        "status": (
+            "preliminary_profile_available" if days >= 2 and len(rows) >= 10
+            else "collecting_personal_data"
+        ),
+        "personal_reference": {
+            "heart_rate_bpm": med("heart_rate_bpm"),
+            "hrv_ms": med("hrv_ms"),
+            "gsr_raw": med("gsr_raw"),
+        },
+        "notice": "Two distinct days allow a preliminary personal reference; three or more days are recommended. This is baseline analysis, not a newly trained or clinically validated model.",
+    }
+
+
+@app.post("/api/face/blink-summary", status_code=status.HTTP_201_CREATED)
+def save_blink_summary(
+    payload: BlinkSummaryIn,
+    user_id: str = Depends(current_user_id),
+):
+    summary_id = str(uuid.uuid4())
+    recorded_at = iso()
+    rate = round(payload.blink_count * 60.0 / payload.duration_seconds, 2)
+    summary = {
+        "summary_id": summary_id,
+        "user_id": user_id,
+        "blink_count": payload.blink_count,
+        "duration_seconds": payload.duration_seconds,
+        "blinks_per_minute": rate,
+        "recorded_at": recorded_at,
+    }
+    with db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO blink_summaries (
+                summary_id, user_id, blink_count,
+                duration_seconds, blinks_per_minute, recorded_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                summary_id, user_id, payload.blink_count,
+                payload.duration_seconds, rate, recorded_at,
+            ),
+        )
+    cloud_sync = firestore_write(
+        ("users", user_id, "blink_summaries"), summary_id, summary
+    )
+    return {"success": True, "summary": summary, "cloud_sync": cloud_sync}
+
+
+@app.get("/api/face/blink-history")
+def blink_history(
+    limit: int = Query(default=30, ge=1, le=200),
+    user_id: str = Depends(current_user_id),
+):
+    with db_connection() as db:
+        rows = db.execute(
+            """
+            SELECT summary_id, blink_count, duration_seconds,
+                   blinks_per_minute, recorded_at
+            FROM blink_summaries
+            WHERE user_id = ?
+            ORDER BY recorded_at DESC LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+    return {"total": len(rows), "summaries": [dict(row) for row in rows]}
+
+
+@app.get("/api/emergency-contact")
+def get_emergency_contact(
+    user_id: str = Depends(current_user_id),
+):
+    with db_connection() as db:
+        row = db.execute(
+            "SELECT phone, enabled, updated_at, last_alert_at FROM emergency_contacts WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if row:
+        return {
+            "phone": row["phone"], "enabled": bool(row["enabled"]),
+            "updated_at": row["updated_at"], "last_alert_at": row["last_alert_at"],
+            "whatsapp_configured": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM),
+        }
+    cloud = firestore_read_document(
+        ("users", user_id, "emergency_contact"), "primary"
+    ) or {}
+    if cloud.get("phone"):
+        with db_connection() as db:
+            db.execute(
+                """
+                INSERT OR IGNORE INTO emergency_contacts (
+                    user_id, phone, enabled, last_alert_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id, cloud["phone"], int(bool(cloud.get("enabled", False))),
+                    cloud.get("last_alert_at"), cloud.get("updated_at") or iso(),
+                ),
+            )
+    return {
+        "phone": cloud.get("phone", ""),
+        "enabled": bool(cloud.get("enabled", False)),
+        "updated_at": cloud.get("updated_at"),
+        "last_alert_at": cloud.get("last_alert_at"),
+        "whatsapp_configured": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM),
+    }
+
+
+@app.put("/api/emergency-contact")
+def save_emergency_contact(
+    payload: EmergencyContactIn,
+    user_id: str = Depends(current_user_id),
+):
+    updated_at = iso()
+    with db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO emergency_contacts (user_id, phone, enabled, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                phone=excluded.phone, enabled=excluded.enabled,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, payload.phone, int(payload.enabled), updated_at),
+        )
+    cloud_sync = firestore_write(
+        ("users", user_id, "emergency_contact"), "primary",
+        {"phone": payload.phone, "enabled": payload.enabled, "updated_at": updated_at},
+    )
+    return {
+        "success": True, "phone": payload.phone, "enabled": payload.enabled,
+        "whatsapp_configured": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM),
+        "cloud_sync": cloud_sync,
+    }
+
+
+@app.post("/api/emergency-contact/test")
+def test_emergency_contact(
+    user_id: str = Depends(current_user_id),
+):
+    with db_connection() as db:
+        row = db.execute(
+            "SELECT phone, enabled FROM emergency_contacts WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if row is None or not row["enabled"]:
+        raise HTTPException(status_code=409, detail="Save and enable an emergency contact first.")
+    result = send_whatsapp_message(
+        row["phone"],
+        "NeuroSense test message: WhatsApp emergency-contact integration is configured. This is a test, not an emergency alert.",
+    )
+    if result == "not_configured":
+        raise HTTPException(
+            status_code=503,
+            detail="Twilio WhatsApp credentials are not configured on the server.",
+        )
+    if result != "sent":
+        raise HTTPException(status_code=502, detail="WhatsApp test message could not be delivered.")
+    return {"success": True, "status": "sent"}
+
+
 # ============================================================
 # 26. FACE SCAN STATUS AND PRIVACY
 # ============================================================
@@ -3411,6 +4042,8 @@ def face_scan_status():
         ),
         "raw_frames_uploaded": False,
         "image_storage": False,
+        "blink_count_available": True,
+        "derived_blink_metrics_can_be_saved_per_user": True,
         "emotion_inference": False,
         "stress_inference": False,
         "message": (

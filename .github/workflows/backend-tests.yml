@@ -51,4 +51,4 @@ jobs:
 
       - name: Run backend tests
         run: |
-          python -m pytest backend/tests/test_main.py backend/tests/test_face_stress_training.py -v
+          python -m pytest backend/tests/test_main.py backend/tests/test_face_stress_training.py backend/tests/test_recovery_features.py -v
