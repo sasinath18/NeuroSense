@@ -125,7 +125,7 @@ Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi crede
 - Wearable summaries continue on the existing three-hour interval. The personal reference endpoint evaluates the most recent 72 hours: two distinct days and at least ten reliable readings allow a preliminary reference; three days and at least twenty readings are recommended. This is not a new ML model or a clinical validation.
 - Face Scan calibrates separate left/right eye-aspect-ratio baselines at the start of each scan, validates bilateral close/reopen transitions by duration, and calculates blink rate from valid face-visible tracking time rather than total scan time. This improves webcam consistency but remains an estimate, not a clinical measurement. Only derived count, observed tracking duration and blink rate can be saved; camera frames remain in the browser.
 - Haptic vibration remains independently enabled/disabled. Manual/Automatic mode applies only to music: Manual lets the user select a single track or playlist; Automatic attempts the one saved default track after breathing.
-- Music files can be uploaded from local storage or imported from Google Drive with the optional Google Picker integration (20 MB maximum per file). For durable hosted playback, configure `FIREBASE_STORAGE_BUCKET`; without it, the server uses local fallback storage, which may be lost on Render restarts/redeploys. Drive files are copied into the NeuroSense library; the player does not stream from the Drive website.
+- Each Google UID can keep up to 10 saved music tracks in NeuroSense (20 MB maximum per file). The Recovery player supports tap-to-play, a queue, Play next and automatic next-track playback. Additional Google Drive tracks can be browsed and streamed in the current browser session without using the 10 saved slots; select them again after refreshing the page. For durable hosted playback of saved tracks, configure `FIREBASE_STORAGE_BUCKET`; without it, local fallback files may be lost on Render restarts/redeploys.
 - Warning sound and browser notifications are separate preferences. Browser notifications require browser permission.
 - WhatsApp check-in alerts require an opted-in emergency contact plus Twilio WhatsApp credentials. The backend sends only after three elevated model readings within 30 minutes and applies a six-hour cooldown. The model remains experimental; this is not an emergency service.
 
@@ -134,14 +134,14 @@ Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi crede
 Configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and an approved `TWILIO_WHATSAPP_FROM` sender in the hosting provider's secret environment. The user must save and explicitly enable an E.164-format emergency contact in Settings. Use the in-app test message before relying on alerts. Never commit Twilio credentials.
 
 
-### Google Drive music import
+### Google Drive music browsing
 
-To enable the **Import audio from Google Drive** button:
+To enable the **Browse Google Drive · extra songs** button:
 
 1. In the same Google Cloud project used by Firebase, enable **Google Drive API** and **Google Picker API**.
 2. Create a browser API key and restrict it to the dashboard's allowed web origins and the Picker/Drive APIs.
 3. Find the numeric Google Cloud project number and use it as `GOOGLE_DRIVE_APP_ID`.
 4. Add `GOOGLE_DRIVE_API_KEY` and `GOOGLE_DRIVE_APP_ID` to Render's environment.
-5. Sign in to NeuroSense, select **Import audio from Google Drive**, and grant the optional read-only Drive permission when Google prompts.
+5. Sign in to NeuroSense, select **Browse Google Drive · extra songs**, and grant the optional read-only Drive permission when Google prompts.
 
-Drive files are copied into the user's NeuroSense music library; playback then uses NeuroSense storage. The app does not stream directly from the Drive website. A durable music library requires Firebase Storage to be configured.
+Drive-selected tracks are fetched into browser memory for playback and queueing; they do not consume the 10 saved NeuroSense slots and are not copied into the account library. They must be selected again after a page refresh or a new browser session. A durable NeuroSense library requires Firebase Storage to be configured.

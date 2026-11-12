@@ -1152,13 +1152,26 @@
 
         .recovery-grid {
             display: grid;
-            grid-template-columns: minmax(0,1.1fr) minmax(260px,.9fr);
+            grid-template-columns: minmax(0,1.15fr) minmax(300px,.85fr);
             gap: 17px;
+            align-items: start;
         }
-
+        .recovery-stack { display: contents !important; }
+        .music-panel { grid-column: 1; grid-row: 1; min-width: 0; }
         .breathing-panel {
+            grid-column: 2;
+            grid-row: 1;
             text-align: center;
-            padding: 25px 15px;
+            padding: 20px 15px;
+            min-width: 0;
+        }
+        .haptic-panel { grid-column: 1 / -1; }
+        @media (max-width: 850px) {
+            .recovery-grid { grid-template-columns: 1fr; }
+            .music-panel { grid-column: 1; grid-row: 1; }
+            .breathing-panel { grid-column: 1; grid-row: 2; }
+            .haptic-panel { grid-column: 1; grid-row: 3; }
+            .recovery-stack { display: contents !important; }
         }
 
         .breath-orb {
@@ -1656,6 +1669,107 @@
         .music-library-manager-actions button:disabled {
             opacity: .45;
             cursor: not-allowed;
+        }
+
+        .music-queue-panel {
+            display: grid;
+            gap: 10px;
+            margin: 12px 0;
+            padding: 13px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--surface-2);
+        }
+        .music-queue-list {
+            display: grid;
+            gap: 6px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .music-queue-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 9px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface);
+        }
+        .music-queue-row.is-current { border-color: var(--accent); }
+        .music-queue-track {
+            min-width: 0;
+            flex: 1;
+            border: 0;
+            padding: 0;
+            background: transparent;
+            color: var(--text);
+            text-align: left;
+            font: inherit;
+            font-size: 12px;
+            cursor: pointer;
+            overflow-wrap: anywhere;
+        }
+        .music-queue-row small { color: var(--muted); font-size: 10px; }
+        .music-queue-remove {
+            border: 0;
+            background: transparent;
+            color: var(--red);
+            padding: 5px 7px;
+            cursor: pointer;
+        }
+        .music-queue-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+        }
+        .music-auto-next {
+            display: flex;
+            gap: 9px;
+            align-items: flex-start;
+            cursor: pointer;
+        }
+        .music-auto-next input { margin-top: 3px; accent-color: var(--accent); }
+        .music-auto-next span { display: grid; gap: 2px; }
+        .music-auto-next strong { font-size: 12px; }
+        .music-auto-next small { color: var(--muted); font-size: 10px; }
+        .music-library-manager { gap: 9px; }
+        .music-library-manage-list {
+            max-height: none;
+            overflow: visible;
+        }
+        .music-library-song-row {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 7px 9px;
+            min-height: 42px;
+        }
+        .music-library-play-row {
+            min-width: 0;
+            flex: 1;
+            padding: 0;
+            border: 0;
+            background: transparent;
+            color: var(--text);
+            text-align: left;
+            cursor: pointer;
+        }
+        .music-library-play-row strong {
+            display: block;
+            overflow-wrap: anywhere;
+            font-size: 12px;
+        }
+        .music-library-play-row small {
+            display: block;
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 10px;
+        }
+        .music-library-play-row:hover strong { color: var(--accent-hover); }
+        .music-library-song-row input { width: 17px; height: 17px; flex: 0 0 auto; }
+        @media (max-width: 850px) {
+            .music-queue-actions button { flex: 1 1 auto; }
         }
 
         /* =================================================
@@ -2937,9 +3051,9 @@
                 </article>
 
 
-                <div style="display:grid;gap:17px">
+                <div class="recovery-stack" style="display:grid;gap:17px">
 
-                    <article class="card">
+                    <article class="card music-panel">
 
                         <div class="card-header">
                             <div>
@@ -2958,7 +3072,7 @@
                                 </select>
                             </div>
                             <label class="field">
-                                <span class="muted small">Upload songs from local storage (up to 20 MB each). You can add songs anytime; playback unlocks after breathing.</span>
+                                <span class="muted small">Save up to 10 songs here (20 MB each). For more music, browse Google Drive below.</span>
                                 <input id="musicFileInput" class="form-control" type="file"
                                        accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac,.webm" multiple>
                             </label>
@@ -2971,11 +3085,33 @@
                                 <label for="musicPlaylistSelect">Playlist · select one or more songs</label>
                                 <select id="musicPlaylistSelect" class="form-control" multiple size="4"></select>
                             </div>
+                            <section class="music-queue-panel" aria-labelledby="musicQueueTitle">
+                                <div class="music-library-manager-heading">
+                                    <div>
+                                        <h4 id="musicQueueTitle">Playback queue</h4>
+                                        <p class="muted small">Tap a library song to play now, or add selected songs below.</p>
+                                    </div>
+                                    <span id="musicQueueCount" class="badge">0 queued</span>
+                                </div>
+                                <div id="musicQueueList" class="music-queue-list">
+                                    <p class="muted small">Queue is empty.</p>
+                                </div>
+                                <div class="music-queue-actions">
+                                    <button id="addMusicToQueueBtn" class="secondary-btn" type="button">Add to queue</button>
+                                    <button id="playMusicNextBtn" class="secondary-btn" type="button">Play next</button>
+                                    <button id="playMusicQueueBtn" class="primary-btn" type="button">Play queue</button>
+                                    <button id="clearMusicQueueBtn" class="secondary-btn" type="button">Clear queue</button>
+                                </div>
+                                <label class="music-auto-next">
+                                    <input id="musicAutoNextToggle" type="checkbox" checked>
+                                    <span><strong>Automatically play next</strong><small>Continue to the next queued song when the current song ends.</small></span>
+                                </label>
+                            </section>
                             <section class="music-library-manager" aria-labelledby="musicLibraryManagerTitle">
                                 <div class="music-library-manager-heading">
                                     <div>
                                         <h4 id="musicLibraryManagerTitle">Manage uploaded songs</h4>
-                                        <p class="muted small">Select old songs and remove them from your library before adding replacements.</p>
+                                        <p class="muted small">Tap a song name to play it now. Use its checkbox only when you want to remove it.</p>
                                     </div>
                                     <span id="musicManageCount" class="badge">0 songs</span>
                                 </div>
@@ -2989,11 +3125,11 @@
                                 <p id="musicLibraryManageStatus" class="muted small" role="status" aria-live="polite">You can remove songs and upload new ones at any time.</p>
                             </section>
                             <div class="breath-controls">
-                                <button id="playSelectedMusicBtn" class="primary-btn" type="button" disabled>Play selected song</button>
+                                <button id="playSelectedMusicBtn" class="primary-btn" type="button" disabled>Play selected now</button>
                                 <button id="saveDefaultMusicBtn" class="secondary-btn" type="button" disabled>Save as automatic song</button>
                             </div>
                             <p id="musicModeStatus" class="muted small" role="status" aria-live="polite">
-                                Manual mode: choose one song or a playlist after breathing.
+                                Manual mode: tap a song to play immediately, or build a queue.
                             </p>
                             <p id="driveImportStatus" class="muted small" role="status" aria-live="polite">
                                 Google Drive import requires Google Picker API configuration.
@@ -3003,15 +3139,15 @@
                         <div class="notice" style="margin-top:13px">
                             Music mode controls song playback only. Haptic vibration, warning sound and notifications have separate controls.
                             <br><br>
-                            Google Drive import requires separate Drive API authorization.
-                            <button id="importDriveMusicBtn" class="secondary-btn" type="button" disabled>Import audio from Google Drive</button>
+                            Ten songs can be stored in the NeuroSense library. Additional tracks can be played from Google Drive during this browser session after authorization.
+                            <button id="importDriveMusicBtn" class="secondary-btn" type="button" disabled>Browse Google Drive · extra songs</button>
                             <a href="https://drive.google.com/drive/my-drive" target="_blank" rel="noopener noreferrer">Open Google Drive</a>.
                         </div>
 
                     </article>
 
 
-                    <article class="card">
+                    <article class="card haptic-panel">
 
                         <div class="card-header">
                             <div>
@@ -3410,10 +3546,13 @@ let backendRefreshTimer = null;
 let apiRefreshInProgress = false;
 let musicMode = "manual";
 let musicTracks = [];
+let musicLibraryLimit = 10;
+let musicRemainingSlots = 10;
 let googleDrivePickerConfig = null;
 let driveAccessToken = null;
 let musicQueue = [];
 let musicQueueIndex = 0;
+let musicAutoNextEnabled = readLocal("neurosense_music_auto_next", true);
 let activeMusicUrl = null;
 let warningSoundEnabled = false;
 let browserNotificationsEnabled = false;
@@ -6837,8 +6976,8 @@ function updateDriveImportAvailability() {
     if (!button) return;
     button.disabled = !(googleDrivePickerConfig && firebaseCurrentUser);
     setText("driveImportStatus", button.disabled
-        ? "Drive import requires sign-in and Google Picker API configuration."
-        : "Select audio files from your Google Drive to copy them into your NeuroSense library.");
+        ? "Drive browsing needs sign-in plus Google Picker API configuration."
+        : "Browse Google Drive for extra songs. Drive tracks stream for this browser session and do not use your 10 saved slots.");
 }
 
 function loadGooglePickerApi() {
@@ -6876,23 +7015,26 @@ async function importDriveDocument(doc) {
         "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(doc.id) + "?alt=media",
         { headers: { Authorization: "Bearer " + driveAccessToken } }
     );
-    if (!response.ok) throw new Error("Google Drive could not download " + (doc.name || "the selected file") + ".");
+    if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+            driveAccessToken = null;
+            throw new Error("Google Drive permission expired. Browse Drive and authorize again.");
+        }
+        throw new Error("Google Drive could not read " + (doc.name || "the selected file") + ".");
+    }
     const blob = await response.blob();
     if (!blob.size || blob.size > 20 * 1024 * 1024) {
         throw new Error((doc.name || "The selected file") + " is empty or exceeds 20 MB.");
     }
-    const file = new File([blob], doc.name || "drive-audio", {
-        type: doc.mimeType || blob.type || "audio/mpeg"
-    });
-    const form = new FormData();
-    form.append("file", file, file.name);
-    if (firebaseCurrentUser) apiIdToken = await firebaseCurrentUser.getIdToken();
-    const upload = await fetch(API_BASE_URL + "/api/music/upload", {
-        method: "POST", headers: apiHeaders(), body: form, cache: "no-store"
-    });
-    const payload = await upload.json().catch(() => ({}));
-    if (!upload.ok) throw new Error(payload.detail || "NeuroSense music upload failed.");
-    return payload.track;
+    return {
+        track_id: "drive-" + doc.id,
+        file_name: doc.name || "Drive audio",
+        content_type: doc.mimeType || blob.type || "audio/mpeg",
+        size_bytes: blob.size,
+        is_default: false,
+        driveSource: true,
+        localUrl: URL.createObjectURL(blob)
+    };
 }
 
 async function openDriveMusicPicker() {
@@ -6917,12 +7059,18 @@ async function openDriveMusicPicker() {
                 let imported = 0;
                 for (const doc of (data.docs || [])) {
                     try {
-                        await importDriveDocument(doc);
+                        const track = await importDriveDocument(doc);
+                        const existing = musicTracks.find(item => item.track_id === track.track_id);
+                        if (existing?.localUrl) URL.revokeObjectURL(existing.localUrl);
+                        musicTracks = musicTracks.filter(item => item.track_id !== track.track_id);
+                        musicTracks.push(track);
                         imported += 1;
                     } catch (error) { showToast(error.message); }
                 }
-                await loadMusicLibrary();
-                showToast(imported + " Google Drive audio file(s) imported.");
+                renderMusicLibrary();
+                setText("musicLibraryManageStatus",
+                    imported + " Drive song(s) ready for this browser session. Saved library songs were not changed.");
+                showToast(imported + " Google Drive song(s) ready to play.");
             })
             .build();
         picker.setVisible(true);
@@ -6937,13 +7085,31 @@ $("importDriveMusicBtn").addEventListener("click", openDriveMusicPicker);
 function updateMusicModeUI() {
     if ($("musicModeSelect")) $("musicModeSelect").value = musicMode;
     const automatic = musicMode === "automatic";
+    const savedCount = musicTracks.filter(track => !track.driveSource).length;
+    musicRemainingSlots = Math.max(0, musicLibraryLimit - savedCount);
     setText("musicModeStatus", automatic
-        ? "Automatic mode: the saved default song plays when the guided breathing step completes. You can upload and manage songs at any time."
-        : "Manual mode: choose one song or multiple playlist songs and press Play. Playback is available independently of guided breathing.");
+        ? "Automatic mode: the saved default song plays after guided breathing. Switch to Manual for queue controls."
+        : "Manual mode: tap a song to play now, build a queue, or enable automatic next. Music playback is independent of breathing.");
     if ($("musicTrackSelect")) $("musicTrackSelect").disabled = automatic || musicTracks.length === 0;
     if ($("musicPlaylistSelect")) $("musicPlaylistSelect").disabled = automatic || musicTracks.length === 0;
     if ($("playSelectedMusicBtn")) $("playSelectedMusicBtn").disabled = automatic || musicTracks.length === 0;
-    if ($("saveDefaultMusicBtn")) $("saveDefaultMusicBtn").disabled = musicTracks.length === 0;
+    if ($("saveDefaultMusicBtn")) $("saveDefaultMusicBtn").disabled =
+        !musicTracks.some(track => !track.driveSource);
+    if ($("addMusicToQueueBtn")) $("addMusicToQueueBtn").disabled = automatic || !musicTracks.length;
+    if ($("playMusicNextBtn")) $("playMusicNextBtn").disabled = automatic || !musicTracks.length;
+    if ($("playMusicQueueBtn")) $("playMusicQueueBtn").disabled = !musicQueue.length;
+    if ($("clearMusicQueueBtn")) $("clearMusicQueueBtn").disabled = !musicQueue.length;
+    if ($("musicFileInput")) {
+        $("musicFileInput").disabled = musicRemainingSlots <= 0;
+        $("musicFileInput").title = musicRemainingSlots <= 0
+            ? "Your 10 saved-song slots are full. Remove a saved song or browse Google Drive."
+            : musicRemainingSlots + " saved-song slot(s) available.";
+    }
+    if ($("musicAutoNextToggle")) $("musicAutoNextToggle").checked = musicAutoNextEnabled;
+    setText("musicFileName",
+        savedCount + "/" + musicLibraryLimit + " saved song(s) · " +
+        musicTracks.filter(track => track.driveSource).length +
+        " Google Drive session song(s) · " + musicRemainingSlots + " saved slot(s) left.");
 }
 
 function renderMusicLibrary() {
@@ -6969,8 +7135,14 @@ function renderMusicLibrary() {
             single.value = (defaultTrack || musicTracks[0]).track_id;
         }
     }
-    setText("musicFileName", musicTracks.length + " song(s) in your account library.");
+    const savedCount = musicTracks.filter(track => !track.driveSource).length;
+    const driveCount = musicTracks.filter(track => track.driveSource).length;
+    setText("musicFileName",
+        savedCount + "/" + musicLibraryLimit + " saved song(s) · " +
+        driveCount + " Google Drive session song(s) · " +
+        musicRemainingSlots + " saved slot(s) left.");
     renderMusicLibraryManager();
+    renderMusicQueue();
     updateMusicModeUI();
 }
 
@@ -6995,17 +7167,19 @@ function renderMusicLibraryManager() {
     }
 
     musicTracks.forEach(track => {
-        const label = document.createElement("label");
-        label.className = "music-library-song-row";
+        const row = document.createElement("div");
+        row.className = "music-library-song-row";
 
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.className = "music-library-song-checkbox";
         checkbox.value = track.track_id;
-        checkbox.setAttribute("aria-label", "Select " + track.file_name);
+        checkbox.setAttribute("aria-label", "Select " + track.file_name + " for removal");
 
-        const copy = document.createElement("span");
-        copy.className = "music-library-song-copy";
+        const playButton = document.createElement("button");
+        playButton.type = "button";
+        playButton.className = "music-library-play-row";
+        playButton.dataset.playTrack = track.track_id;
 
         const name = document.createElement("strong");
         name.textContent = track.file_name || "Untitled audio";
@@ -7013,13 +7187,87 @@ function renderMusicLibraryManager() {
         const details = document.createElement("small");
         const sizeMb = Number(track.size_bytes || 0) / (1024 * 1024);
         details.textContent =
-            (track.is_default ? "Automatic default · " : "") +
-            (sizeMb > 0 ? sizeMb.toFixed(2) + " MB" : "Audio track");
+            (track.driveSource ? "Google Drive · session only · " :
+                track.is_default ? "Automatic default · " : "") +
+            (sizeMb > 0 ? sizeMb.toFixed(2) + " MB · " : "") +
+            "Tap to play";
 
-        copy.append(name, details);
-        label.append(checkbox, copy);
-        list.appendChild(label);
+        playButton.append(name, details);
+        row.append(checkbox, playButton);
+        list.appendChild(row);
     });
+}
+
+function renderMusicQueue() {
+    const list = $("musicQueueList");
+    if (!list) return;
+    list.replaceChildren();
+    setText("musicQueueCount", musicQueue.length + " queued");
+    if (!musicQueue.length) {
+        const empty = document.createElement("p");
+        empty.className = "muted small";
+        empty.textContent = "Queue is empty. Select songs and choose Add to queue.";
+        list.appendChild(empty);
+        return;
+    }
+    musicQueue.forEach((track, index) => {
+        const row = document.createElement("div");
+        row.className = "music-queue-row" + (index === musicQueueIndex ? " is-current" : "");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "music-queue-track";
+        button.dataset.playQueueIndex = String(index);
+        button.textContent = (index === musicQueueIndex ? "▶ Now · " : (index + 1) + ". ") + track.file_name;
+        const source = document.createElement("small");
+        source.textContent = track.driveSource ? "Drive" : track.is_default ? "Default" : "Library";
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "music-queue-remove";
+        remove.dataset.removeQueueIndex = String(index);
+        remove.textContent = "×";
+        remove.title = "Remove from queue";
+        row.append(button, source, remove);
+        list.appendChild(row);
+    });
+}
+
+function selectedMusicTracks() {
+    const ids = Array.from($("musicPlaylistSelect").selectedOptions)
+        .map(option => option.value).filter(Boolean);
+    return ids.length
+        ? ids.map(id => musicTracks.find(track => track.track_id === id)).filter(Boolean)
+        : [musicTracks.find(track => track.track_id === $("musicTrackSelect").value)].filter(Boolean);
+}
+
+function addSelectedTracksToQueue(playNext = false) {
+    const selected = selectedMusicTracks();
+    if (!selected.length) return showToast("Select one or more songs first.");
+    const existing = new Set(musicQueue.map(track => track.track_id));
+    const additions = selected.filter(track => !existing.has(track.track_id));
+    if (!additions.length) return showToast("Those songs are already in the queue.");
+    if (playNext && musicQueue.length) {
+        musicQueue.splice(musicQueueIndex + 1, 0, ...additions);
+    } else {
+        musicQueue.push(...additions);
+        if (musicQueue.length === additions.length) musicQueueIndex = 0;
+    }
+    renderMusicQueue();
+    updateMusicModeUI();
+    showToast(additions.length + " song(s) " + (playNext ? "added to play next." : "added to queue."));
+    if (playNext && (!$("relaxationAudio").src || $("relaxationAudio").ended)) {
+        musicQueueIndex = 0;
+        playCurrentMusicTrack();
+    }
+}
+
+function playMusicTrackNow(track) {
+    if (!track) return;
+    $("musicTrackSelect").value = track.track_id;
+    Array.from($("musicPlaylistSelect").options).forEach(option => { option.selected = false; });
+    musicQueue = [track];
+    musicQueueIndex = 0;
+    renderMusicQueue();
+    playCurrentMusicTrack();
 }
 
 function updateMusicRemovalSelection() {
@@ -7065,8 +7313,8 @@ async function removeSelectedMusicTracks() {
         audio.load();
         if (activeMusicUrl) URL.revokeObjectURL(activeMusicUrl);
         activeMusicUrl = null;
-        musicQueue = [];
-        musicQueueIndex = 0;
+        musicQueue = musicQueue.filter(track => !selectedIds.includes(track.track_id));
+        musicQueueIndex = Math.max(0, Math.min(musicQueueIndex, musicQueue.length - 1));
     }
 
     let removed = 0;
@@ -7108,6 +7356,12 @@ async function removeSelectedMusicTracks() {
 }
 
 $("musicLibraryManageList").addEventListener("change", updateMusicRemovalSelection);
+$("musicLibraryManageList").addEventListener("click", event => {
+    const button = event.target.closest("[data-play-track]");
+    if (!button) return;
+    const track = musicTracks.find(item => item.track_id === button.dataset.playTrack);
+    playMusicTrackNow(track);
+});
 $("selectAllMusicBtn").addEventListener("click", () => {
     const checkboxes = Array.from(
         $("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox")
@@ -7120,12 +7374,22 @@ $("removeSelectedMusicBtn").addEventListener("click", removeSelectedMusicTracks)
 
 async function loadMusicLibrary() {
     if (!hasPrivateApiAccess()) {
+        musicLibraryLimit = 10;
+        musicRemainingSlots = Math.max(0, 10 - musicTracks.filter(track => !track.driveSource).length);
         renderMusicLibrary();
         return;
     }
     try {
         const result = await apiRequest("/api/music");
-        musicTracks = result.tracks || [];
+        const driveSessionTracks = musicTracks.filter(track => track.driveSource);
+        musicLibraryLimit = Number(result.library_limit) || 10;
+        const savedTracks = result.tracks || [];
+        musicTracks = [...savedTracks, ...driveSessionTracks.filter(
+            driveTrack => !savedTracks.some(saved => saved.track_id === driveTrack.track_id)
+        )];
+        musicRemainingSlots = Number.isFinite(Number(result.remaining_slots))
+            ? Number(result.remaining_slots)
+            : Math.max(0, musicLibraryLimit - savedTracks.length);
         renderMusicLibrary();
     } catch (error) {
         console.warn("Music library could not be loaded:", error);
@@ -7141,6 +7405,7 @@ async function loadMusicTrack(track) {
         const audio = $("relaxationAudio");
         audio.controls = true;
         audio.preload = "auto";
+        audio.dataset.trackId = track.track_id;
         audio.src = activeMusicUrl;
         audio.load();
         return;
@@ -7160,6 +7425,7 @@ async function loadMusicTrack(track) {
     const audio = $("relaxationAudio");
     audio.controls = true;
     audio.preload = "auto";
+    audio.dataset.trackId = track.track_id;
     audio.src = activeMusicUrl;
     audio.load();
 }
@@ -7169,8 +7435,9 @@ async function playMusicQueue(tracks) {
         showToast("Select a song or playlist first.");
         return;
     }
-    musicQueue = tracks;
+    musicQueue = [...tracks];
     musicQueueIndex = 0;
+    renderMusicQueue();
     await playCurrentMusicTrack();
 }
 
@@ -7200,6 +7467,7 @@ async function playCurrentMusicTrack() {
         showToast("Could not load music: " + error.message);
         setText("musicModeStatus", error.message);
     }
+    renderMusicQueue();
 }
 
 async function startAutomaticMusic() {
@@ -7210,6 +7478,7 @@ async function startAutomaticMusic() {
     }
     musicQueue = [defaultTrack];
     musicQueueIndex = 0;
+    renderMusicQueue();
     await playCurrentMusicTrack();
 }
 
@@ -7223,8 +7492,13 @@ $("musicFileInput").addEventListener("change", async event => {
         let uploaded = 0;
         const failures = [];
         for (const file of accepted) {
+            const savedCount = musicTracks.filter(track => !track.driveSource).length;
+            if (savedCount + uploaded >= musicLibraryLimit) {
+                failures.push("Library is full (10/10). Remove a saved song or browse Google Drive.");
+                break;
+            }
             if (file.size > 20 * 1024 * 1024) {
-                showToast(file.name + " exceeds the 20 MB upload limit.");
+                failures.push(file.name + " exceeds the 20 MB upload limit.");
                 continue;
             }
             const form = new FormData();
@@ -7252,16 +7526,25 @@ $("musicFileInput").addEventListener("change", async event => {
         showToast(uploaded + " song(s) uploaded" +
             (failures.length ? "; " + failures.length + " failed." : "."));
     } else {
-        accepted.forEach(file => {
+        for (const file of accepted) {
+            if (musicTracks.filter(track => !track.driveSource).length >= musicLibraryLimit) {
+                showToast("Library is full (10/10). Remove a song before adding another.");
+                break;
+            }
+            if (file.size > 20 * 1024 * 1024) {
+                showToast(file.name + " exceeds the 20 MB upload limit.");
+                continue;
+            }
             const url = URL.createObjectURL(file);
             musicTracks.push({
                 track_id: "local-" + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random()),
                 file_name: file.name,
                 content_type: file.type || "audio/mpeg",
+                size_bytes: file.size,
                 is_default: false,
                 localUrl: url
             });
-        });
+        }
         renderMusicLibrary();
         showToast("Songs are available in this browser preview only. Sign in to upload to your account.");
     }
@@ -7297,19 +7580,124 @@ $("musicModeSelect").addEventListener("change", async event => {
 });
 
 $("playSelectedMusicBtn").addEventListener("click", async () => {
-    if (musicMode !== "manual") return;
-    const playlistIds = Array.from($("musicPlaylistSelect").selectedOptions)
-        .map(option => option.value).filter(Boolean);
-    const selected = playlistIds.length > 0
-        ? playlistIds.map(id => musicTracks.find(track => track.track_id === id)).filter(Boolean)
-        : [musicTracks.find(track => track.track_id === $("musicTrackSelect").value)].filter(Boolean);
-    await playMusicQueue(selected);
+    if (musicMode !== "manual") {
+        showToast("Switch to Manual mode to play a custom playlist.");
+        return;
+    }
+    await playMusicQueue(selectedMusicTracks());
+});
+
+$("addMusicToQueueBtn").addEventListener("click", () => {
+    if (musicMode !== "manual") return showToast("Switch to Manual mode to build a playlist queue.");
+    addSelectedTracksToQueue(false);
+});
+
+$("playMusicNextBtn").addEventListener("click", () => {
+    if (musicMode !== "manual") return showToast("Switch to Manual mode to use Play next.");
+    addSelectedTracksToQueue(true);
+});
+
+$("playMusicQueueBtn").addEventListener("click", async () => {
+    if (!musicQueue.length) return showToast("Queue is empty. Add songs first.");
+    const audio = $("relaxationAudio");
+    if (audio.ended) {
+        musicQueueIndex = musicQueueIndex < musicQueue.length - 1 ? musicQueueIndex + 1 : 0;
+    }
+    if (
+        audio.src &&
+        audio.dataset.trackId === musicQueue[musicQueueIndex].track_id &&
+        !audio.paused && !audio.ended
+    ) {
+        showToast("The current queue song is already playing.");
+        return;
+    }
+    if (
+        audio.src &&
+        audio.dataset.trackId === musicQueue[musicQueueIndex].track_id &&
+        audio.paused && !audio.ended && audio.readyState > 0
+    ) {
+        try {
+            await audio.play();
+            setText("musicModeStatus", "Playing: " + musicQueue[musicQueueIndex].file_name);
+            return;
+        } catch (error) {
+            if (error.name !== "NotAllowedError") throw error;
+        }
+    }
+    await playCurrentMusicTrack();
+});
+
+$("clearMusicQueueBtn").addEventListener("click", () => {
+    const audio = $("relaxationAudio");
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.dataset.trackId = "";
+    audio.load();
+    const currentTrack = musicQueue[musicQueueIndex];
+    if (activeMusicUrl && !currentTrack?.localUrl) URL.revokeObjectURL(activeMusicUrl);
+    activeMusicUrl = null;
+    musicQueue = [];
+    musicQueueIndex = 0;
+    renderMusicQueue();
+    updateMusicModeUI();
+    setText("musicModeStatus", "Queue cleared. Choose a song to play.");
+});
+
+$("musicQueueList").addEventListener("click", async event => {
+    const playButton = event.target.closest("[data-play-queue-index]");
+    const removeButton = event.target.closest("[data-remove-queue-index]");
+    if (playButton) {
+        const index = Number(playButton.dataset.playQueueIndex);
+        if (!Number.isInteger(index) || !musicQueue[index]) return;
+        musicQueueIndex = index;
+        await playCurrentMusicTrack();
+        return;
+    }
+    if (removeButton) {
+        const index = Number(removeButton.dataset.removeQueueIndex);
+        if (!Number.isInteger(index) || !musicQueue[index]) return;
+        const removingCurrent = index === musicQueueIndex;
+        if (removingCurrent) {
+            const audio = $("relaxationAudio");
+            audio.pause();
+            audio.removeAttribute("src");
+            audio.load();
+            const currentTrack = musicQueue[musicQueueIndex];
+            if (activeMusicUrl && !currentTrack?.localUrl) URL.revokeObjectURL(activeMusicUrl);
+            activeMusicUrl = null;
+            audio.dataset.trackId = "";
+        }
+        musicQueue.splice(index, 1);
+        if (index < musicQueueIndex) musicQueueIndex -= 1;
+        else if (removingCurrent) musicQueueIndex = Math.min(index, musicQueue.length - 1);
+        if (!musicQueue.length) musicQueueIndex = 0;
+        renderMusicQueue();
+        updateMusicModeUI();
+        if (removingCurrent && musicQueue.length) await playCurrentMusicTrack();
+    }
+});
+
+$("musicAutoNextToggle").addEventListener("change", async event => {
+    musicAutoNextEnabled = Boolean(event.target.checked);
+    writeLocal("neurosense_music_auto_next", musicAutoNextEnabled);
+    if (musicAutoNextEnabled) {
+        const audio = $("relaxationAudio");
+        if (audio.ended && musicQueueIndex < musicQueue.length - 1) {
+            musicQueueIndex += 1;
+            renderMusicQueue();
+            await playCurrentMusicTrack();
+        }
+    }
+    setText("musicModeStatus", musicAutoNextEnabled
+        ? "Automatic next is ON for queued songs."
+        : "Automatic next is OFF. The queue waits after each song.");
 });
 
 $("saveDefaultMusicBtn").addEventListener("click", async () => {
     const trackId = $("musicTrackSelect").value;
     const track = musicTracks.find(item => item.track_id === trackId);
     if (!track) return showToast("Select one song to save as the default.");
+    if (track.driveSource) return showToast("Google Drive session tracks cannot be saved as the automatic default. Upload that song into a saved slot first.");
     if (track.localUrl) {
         musicTracks = musicTracks.map(item => ({ ...item, is_default: item.track_id === trackId }));
         renderMusicLibrary();
@@ -7329,8 +7717,15 @@ $("saveDefaultMusicBtn").addEventListener("click", async () => {
 $("relaxationAudio").addEventListener("ended", async () => {
     const audio = $("relaxationAudio");
     if (musicQueueIndex < musicQueue.length - 1) {
-        musicQueueIndex += 1;
-        await playCurrentMusicTrack();
+        if (musicAutoNextEnabled) {
+            musicQueueIndex += 1;
+            renderMusicQueue();
+            await playCurrentMusicTrack();
+        } else {
+            renderMusicQueue();
+            setText("musicModeStatus",
+                "Song ended. Automatic next is OFF; press Play queue or turn Automatically play next ON.");
+        }
         return;
     }
     const duration = Number.isFinite(audio.duration) ? Math.max(1, Math.round(audio.duration)) : 1;
@@ -7343,6 +7738,8 @@ $("relaxationAudio").addEventListener("ended", async () => {
     }
     musicQueue = [];
     musicQueueIndex = 0;
+    renderMusicQueue();
+    updateMusicModeUI();
     showToast("Music completed. Haptic feedback remains independently controlled.");
 });
 

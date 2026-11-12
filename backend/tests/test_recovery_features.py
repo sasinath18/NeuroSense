@@ -145,6 +145,41 @@ def test_music_library_delete_is_user_scoped_and_removes_audio_file(client):
     assert missing_audio.status_code == 404
 
 
+def test_music_library_allows_ten_saved_tracks_and_rejects_the_eleventh(client):
+    user_headers = auth("ten-song-limit-user")
+    for index in range(10):
+        response = client.post(
+            "/api/music/upload",
+            files={
+                "file": (
+                    f"track-{index + 1}.mp3",
+                    f"audio-content-{index + 1}".encode(),
+                    "audio/mpeg",
+                )
+            },
+            headers=user_headers,
+        )
+        assert response.status_code == 201
+
+    library = client.get("/api/music", headers=user_headers)
+    assert library.status_code == 200
+    assert len(library.json()["tracks"]) == 10
+    assert library.json()["library_limit"] == 10
+    assert library.json()["remaining_slots"] == 0
+
+    rejected = client.post(
+        "/api/music/upload",
+        files={"file": ("track-11.mp3", b"eleventh-track", "audio/mpeg")},
+        headers=user_headers,
+    )
+    assert rejected.status_code == 409
+    assert "10/10" in rejected.json()["detail"]
+
+    after_rejection = client.get("/api/music", headers=user_headers)
+    assert len(after_rejection.json()["tracks"]) == 10
+    assert after_rejection.json()["remaining_slots"] == 0
+
+
 def test_blink_summaries_are_saved_per_google_uid(client):
     saved = client.post(
         "/api/face/blink-summary",

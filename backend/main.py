@@ -87,6 +87,7 @@ MUSIC_STORAGE_DIR = Path(os.getenv(
     "NEUROSENSE_MUSIC_DIR", str(BASE_DIR / "data" / "music")
 ))
 MAX_MUSIC_FILE_BYTES = 20 * 1024 * 1024
+MAX_MUSIC_TRACKS_PER_USER = 10
 ALLOWED_MUSIC_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".webm"}
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
@@ -3691,6 +3692,8 @@ def list_music_tracks(user_id: str = Depends(current_user_id)):
             }
             for item in ordered
         ],
+        "library_limit": MAX_MUSIC_TRACKS_PER_USER,
+        "remaining_slots": max(0, MAX_MUSIC_TRACKS_PER_USER - len(ordered)),
         "storage_configured": configured_music_bucket() is not None,
         "note": "Cloud music survives service restarts when Firebase Storage is configured; local fallback files may be ephemeral on hosted services.",
     }
@@ -3701,6 +3704,33 @@ async def upload_music_track(
     file: UploadFile = File(...),
     user_id: str = Depends(current_user_id),
 ):
+    # Enforce a per-Google-UID library quota. Merge local and cloud IDs so
+    # Render restarts cannot reset the ten-song allowance.
+    with db_connection() as db:
+        local_ids = {
+            str(row["track_id"])
+            for row in db.execute(
+                "SELECT track_id FROM music_tracks WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+        }
+    cloud_items = firestore_read_collection(
+        ("users", user_id, "music_tracks"), limit=200
+    )
+    cloud_ids = {
+        str(item.get("track_id") or item.get("document_id") or "")
+        for item in cloud_items
+    }
+    existing_ids = local_ids | {track_id for track_id in cloud_ids if track_id}
+    if len(existing_ids) >= MAX_MUSIC_TRACKS_PER_USER:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Your music library is full (10/10). Remove one or more songs "
+                "before uploading another track."
+            ),
+        )
+
     original_name = Path(file.filename or "track").name
     extension = Path(original_name).suffix.lower()
     if extension not in ALLOWED_MUSIC_EXTENSIONS:
