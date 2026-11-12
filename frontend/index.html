@@ -1186,19 +1186,45 @@
             grid-template-columns: 1fr;
             gap: 9px;
         }
+        /* Keep the remover card as a normal full-width panel.
+           The two-column grid belongs only to the select + delete controls row. */
         .music-remove-panel {
             display: grid;
-            grid-template-columns: minmax(0,1fr) auto;
-            align-items: end;
-            gap: 10px;
+            grid-template-columns: minmax(0, 1fr);
+            align-items: stretch;
+            gap: 11px;
+            width: 100%;
+            min-width: 0;
             padding-top: 12px;
             margin-top: 8px;
             border-top: 1px solid var(--border);
         }
-        .music-remove-panel .field { margin: 0; }
-        .music-remove-panel .danger-btn { min-height: 42px; }
+        .music-remove-panel > .music-library-manager-heading,
+        .music-remove-panel > p {
+            grid-column: 1 / -1;
+            width: 100%;
+            min-width: 0;
+        }
+        .music-remove-panel .music-library-manager-heading > div {
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+        .music-remove-panel .music-library-manager-heading p {
+            max-width: none;
+            overflow-wrap: anywhere;
+        }
+        .music-remove-controls {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: end;
+            gap: 10px;
+            width: 100%;
+            min-width: 0;
+        }
+        .music-remove-controls .field { margin: 0; min-width: 0; }
+        .music-remove-controls .danger-btn { min-height: 42px; }
         @media (max-width: 560px) {
-            .music-remove-panel { grid-template-columns: 1fr; }
+            .music-remove-controls { grid-template-columns: 1fr; }
         }
         @media (max-width: 850px) {
             .recovery-grid { grid-template-columns: 1fr; }
