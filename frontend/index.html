@@ -1781,8 +1781,6 @@
             min-height: 42px;
         }
         .music-library-play-row {
-            display: flex;
-            width: 100%;
             min-width: 0;
             flex: 1;
             padding: 0;
@@ -1790,7 +1788,6 @@
             background: transparent;
             color: var(--text);
             text-align: left;
-            font: inherit;
             cursor: pointer;
         }
         .music-library-play-row strong {
@@ -7199,6 +7196,8 @@ function renderMusicLibraryManager() {
     setText("musicManageCount", musicTracks.length + " song" + (musicTracks.length === 1 ? "" : "s"));
 
     const hasTracks = musicTracks.length > 0;
+    const removeButton = $("removeSelectedMusicBtn");
+    if (removeButton) removeButton.disabled = true;
     renderRemoveMusicOptions();
 
     if (!hasTracks) {
