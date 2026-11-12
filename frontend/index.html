@@ -1174,9 +1174,31 @@
             padding: 20px 15px;
             min-width: 0;
         }
-        .recovery-right-column .haptic-panel {
+        .recovery-right-column .haptic-panel,
+        .recovery-right-column .recovery-comparison-card {
             width: 100%;
             min-width: 0;
+        }
+        .recovery-right-column .recovery-comparison-card {
+            margin-top: 0 !important;
+        }
+        .recovery-right-column .comparison-grid {
+            grid-template-columns: 1fr;
+            gap: 9px;
+        }
+        .music-remove-panel {
+            display: grid;
+            grid-template-columns: minmax(0,1fr) auto;
+            align-items: end;
+            gap: 10px;
+            padding-top: 12px;
+            margin-top: 8px;
+            border-top: 1px solid var(--border);
+        }
+        .music-remove-panel .field { margin: 0; }
+        .music-remove-panel .danger-btn { min-height: 42px; }
+        @media (max-width: 560px) {
+            .music-remove-panel { grid-template-columns: 1fr; }
         }
         @media (max-width: 850px) {
             .recovery-grid { grid-template-columns: 1fr; }
@@ -1759,6 +1781,8 @@
             min-height: 42px;
         }
         .music-library-play-row {
+            display: flex;
+            width: 100%;
             min-width: 0;
             flex: 1;
             padding: 0;
@@ -1766,6 +1790,7 @@
             background: transparent;
             color: var(--text);
             text-align: left;
+            font: inherit;
             cursor: pointer;
         }
         .music-library-play-row strong {
@@ -2177,6 +2202,19 @@
                 <div>
                     <h3 id="topPageTitle">Dashboard</h3>
                     <p id="currentDate">Your wellness overview</p>
+                    <article class="card" style="margin-top:17px">
+                        <div class="card-header"><div><h3>Wearable Device Management</h3><p>Pair or remove an ESP32 for this account</p></div></div>
+                        <div class="field"><label for="deviceIdInput">Device ID</label><input id="deviceIdInput" class="form-control" type="text" maxlength="80" value="neurosense-esp32-01"></div>
+                        <div class="field"><label for="deviceNameInput">Device name</label><input id="deviceNameInput" class="form-control" type="text" maxlength="80" value="NeuroSense ESP32"></div>
+                        <button id="pairDeviceBtn" class="secondary-btn" type="button">Pair wearable</button>
+                        <div id="deviceTokenPanel" class="notice hidden" style="margin-top:13px" role="status" aria-live="polite">
+                            <strong>One-time device token</strong><p class="small">Copy this now and store it securely on the ESP32. It will not be shown again.</p>
+                            <code id="deviceTokenValue" style="word-break:break-all"></code>
+                            <button id="copyDeviceTokenBtn" class="secondary-btn" type="button" style="margin-top:10px">Copy token</button>
+                        </div>
+                        <div style="margin-top:16px"><strong class="small">Paired devices</strong><div id="pairedDeviceList" style="margin-top:8px"><p class="muted small">Sign in to load paired devices.</p></div></div>
+                    </article>
+
                 </div>
 
             </div>
@@ -2464,6 +2502,8 @@
 
                     </article>
 
+
+        
 
                     <article class="card" style="margin-top:17px">
                         <div class="card-header"><div><h3>Wearable Device Management</h3><p>Pair or remove an ESP32 for this account</p></div></div>
@@ -3080,19 +3120,24 @@
                             <section class="music-library-manager" aria-labelledby="musicLibraryManagerTitle">
                                 <div class="music-library-manager-heading">
                                     <div>
-                                        <h4 id="musicLibraryManagerTitle">Manage uploaded songs</h4>
-                                        <p class="muted small">Tap a song name to play it now. Use its checkbox only when you want to remove it.</p>
+                                        <h4 id="musicLibraryManagerTitle">Choose a song</h4>
+                                        <p class="muted small">Tap any song below to play it immediately or add it to your queue.</p>
                                     </div>
                                     <span id="musicManageCount" class="badge">0 songs</span>
                                 </div>
                                 <div id="musicLibraryManageList" class="music-library-manage-list">
                                     <p class="muted small">Your uploaded songs will appear here.</p>
                                 </div>
-                                <div class="music-library-manager-actions">
-                                    <button id="selectAllMusicBtn" class="secondary-btn" type="button" disabled>Select all</button>
-                                    <button id="removeSelectedMusicBtn" class="danger-btn" type="button" disabled>Remove selected</button>
+                                <div class="music-remove-panel">
+                                    <div class="field">
+                                        <label for="removeMusicTrackSelect">Remove a song</label>
+                                        <select id="removeMusicTrackSelect" class="form-control">
+                                            <option value="">Choose a song to remove</option>
+                                        </select>
+                                    </div>
+                                    <button id="removeSelectedMusicBtn" class="danger-btn" type="button" disabled>Remove selected song</button>
                                 </div>
-                                <p id="musicLibraryManageStatus" class="muted small" role="status" aria-live="polite">You can remove songs and upload new ones at any time.</p>
+                                <p id="musicLibraryManageStatus" class="muted small" role="status" aria-live="polite">Choose songs from the list above. Use the separate selector to remove an uploaded song.</p>
                             </section>
                             <div class="breath-controls">
                                 <button id="playSelectedMusicBtn" class="primary-btn" type="button" disabled>Play selected now</button>
@@ -3198,46 +3243,38 @@
                         </div>
 
                     </article>
+
+                                
+                    <article class="card recovery-comparison-card">
+                        <div class="card-header">
+                            <div>
+                                <h3>Before and After Comparison</h3>
+                                <p>Physiological recovery observations</p>
+                            </div>
+                            <span class="badge">Awaiting real sensor data</span>
+                        </div>
+                        <div class="comparison-grid">
+                            <div class="comparison-box">
+                                <span class="muted small">Before recovery</span>
+                                <strong id="recoveryBeforeValue">--</strong>
+                                <p id="recoveryBeforeText" class="muted small">No wearable reading available yet</p>
+                            </div>
+                            <div class="comparison-box">
+                                <span class="muted small">After recovery</span>
+                                <strong id="recoveryAfterValue">--</strong>
+                                <p id="recoveryAfterText" class="muted small">Waiting for a post-session wearable reading</p>
+                            </div>
+                        </div>
+                        <div class="notice" style="margin-top:13px">
+                            Before/after comparison will use actual timestamped sensor readings after hardware integration. It describes observed changes, not treatment effectiveness.
+                        </div>
+                    </article>
+
                 </div>
 
             </div>
 
-
-            <article class="card" style="margin-top:17px">
-
-                <div class="card-header">
-                    <div>
-                        <h3>Before and After Comparison</h3>
-                        <p>Physiological recovery observations</p>
-                    </div>
-                    <span class="badge">Awaiting real sensor data</span>
-                </div>
-
-                <div class="comparison-grid">
-
-                    <div class="comparison-box">
-                        <span class="muted small">Before recovery</span>
-                        <strong id="recoveryBeforeValue">--</strong>
-                        <p id="recoveryBeforeText" class="muted small">No wearable reading available yet</p>
-                    </div>
-
-                    <div class="comparison-box">
-                        <span class="muted small">After recovery</span>
-                        <strong id="recoveryAfterValue">--</strong>
-                        <p id="recoveryAfterText" class="muted small">Waiting for a post-session wearable reading</p>
-                    </div>
-
-                </div>
-
-                <div class="notice" style="margin-top:13px">
-                    Before/after comparison will use actual timestamped
-                    sensor readings after hardware integration. It will
-                    describe observed changes, not treatment effectiveness.
-                </div>
-
-            </article>
-
-        </section>
+                    </section>
 
 
         <!-- ==============================================
@@ -7162,10 +7199,7 @@ function renderMusicLibraryManager() {
     setText("musicManageCount", musicTracks.length + " song" + (musicTracks.length === 1 ? "" : "s"));
 
     const hasTracks = musicTracks.length > 0;
-    const selectAllButton = $("selectAllMusicBtn");
-    const removeButton = $("removeSelectedMusicBtn");
-    if (selectAllButton) selectAllButton.disabled = !hasTracks;
-    if (removeButton) removeButton.disabled = true;
+    renderRemoveMusicOptions();
 
     if (!hasTracks) {
         const empty = document.createElement("p");
@@ -7176,23 +7210,16 @@ function renderMusicLibraryManager() {
     }
 
     musicTracks.forEach(track => {
-        const row = document.createElement("div");
-        row.className = "music-library-song-row";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "music-library-song-row music-library-play-row";
+        button.dataset.playTrack = track.track_id;
+        button.setAttribute("aria-label", "Play " + track.file_name);
 
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.className = "music-library-song-checkbox";
-        checkbox.value = track.track_id;
-        checkbox.setAttribute("aria-label", "Select " + track.file_name + " for removal");
-
-        const playButton = document.createElement("button");
-        playButton.type = "button";
-        playButton.className = "music-library-play-row";
-        playButton.dataset.playTrack = track.track_id;
-
+        const copy = document.createElement("span");
+        copy.className = "music-library-song-copy";
         const name = document.createElement("strong");
         name.textContent = track.file_name || "Untitled audio";
-
         const details = document.createElement("small");
         const sizeMb = Number(track.size_bytes || 0) / (1024 * 1024);
         details.textContent =
@@ -7200,10 +7227,9 @@ function renderMusicLibraryManager() {
                 track.is_default ? "Automatic default · " : "") +
             (sizeMb > 0 ? sizeMb.toFixed(2) + " MB · " : "") +
             "Tap to play";
-
-        playButton.append(name, details);
-        row.append(checkbox, playButton);
-        list.appendChild(row);
+        copy.append(name, details);
+        button.append(copy);
+        list.appendChild(button);
     });
 }
 
@@ -7279,106 +7305,81 @@ function playMusicTrackNow(track) {
     playCurrentMusicTrack();
 }
 
+function renderRemoveMusicOptions() {
+    const select = $("removeMusicTrackSelect");
+    if (!select) return;
+    const previous = select.value;
+    select.replaceChildren(new Option("Choose a song to remove", ""));
+    musicTracks.filter(track => !track.driveSource).forEach(track => {
+        select.add(new Option(
+            (track.file_name || "Untitled audio") + (track.is_default ? " · Default" : ""),
+            track.track_id
+        ));
+    });
+    if (musicTracks.some(track => track.track_id === previous && !track.driveSource)) {
+        select.value = previous;
+    }
+    updateMusicRemovalSelection();
+}
+
 function updateMusicRemovalSelection() {
-    const checked = $("musicLibraryManageList")
-        ? $("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox:checked").length
-        : 0;
+    const select = $("removeMusicTrackSelect");
     const button = $("removeSelectedMusicBtn");
-    if (button) {
-        button.disabled = checked === 0;
-        button.textContent = checked > 0
-            ? "Remove selected (" + checked + ")"
-            : "Remove selected";
-    }
-    const selectAll = $("selectAllMusicBtn");
-    if (selectAll) {
-        selectAll.textContent = checked === musicTracks.length && musicTracks.length
-            ? "Clear selection"
-            : "Select all";
-    }
+    if (button) button.disabled = !select?.value;
 }
 
 async function removeSelectedMusicTracks() {
-    const selectedIds = Array.from(
-        $("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox:checked")
-    ).map(input => input.value);
-    if (!selectedIds.length) {
-        showToast("Select at least one song to remove.");
+    const selectedId = $("removeMusicTrackSelect")?.value;
+    const track = musicTracks.find(item => item.track_id === selectedId && !item.driveSource);
+    if (!track) {
+        showToast("Choose one uploaded song to remove.");
         return;
     }
-
-    const selectedTracks = musicTracks.filter(track => selectedIds.includes(track.track_id));
-    const message = "Remove " + selectedTracks.length +
-        " selected song(s) from your NeuroSense music library?";
-    if (!window.confirm(message)) return;
+    if (!window.confirm('Remove "' + track.file_name + '" from your NeuroSense music library?')) return;
 
     const audio = $("relaxationAudio");
-    const playingTrack = musicQueue[musicQueueIndex];
-    const removePlayingTrack = Boolean(playingTrack && selectedIds.includes(playingTrack.track_id));
-
-    if (removePlayingTrack) {
+    const currentTrack = musicQueue[musicQueueIndex];
+    if (currentTrack?.track_id === track.track_id) {
         audio.pause();
         audio.removeAttribute("src");
+        audio.dataset.trackId = "";
         audio.load();
         if (activeMusicUrl) URL.revokeObjectURL(activeMusicUrl);
         activeMusicUrl = null;
-        musicQueue = musicQueue.filter(track => !selectedIds.includes(track.track_id));
-        musicQueueIndex = Math.max(0, Math.min(musicQueueIndex, musicQueue.length - 1));
     }
 
-    let removed = 0;
-    const removedIds = new Set();
-    const failures = [];
-    for (const track of selectedTracks) {
-        try {
-            if (track.localUrl) {
-                URL.revokeObjectURL(track.localUrl);
-            } else {
-                if (!hasPrivateApiAccess()) {
-                    throw new Error("Sign in to remove songs from your account library.");
-                }
-                await apiRequest("/api/music/" + encodeURIComponent(track.track_id), {
-                    method: "DELETE"
-                });
+    try {
+        if (track.localUrl) {
+            URL.revokeObjectURL(track.localUrl);
+        } else {
+            if (!hasPrivateApiAccess()) {
+                throw new Error("Sign in to remove songs from your account library.");
             }
-            removed += 1;
-            removedIds.add(track.track_id);
-        } catch (error) {
-            failures.push(track.file_name + ": " + error.message);
+            await apiRequest("/api/music/" + encodeURIComponent(track.track_id), {
+                method: "DELETE"
+            });
         }
-    }
-
-    if (removed) {
-        musicTracks = musicTracks.filter(track => !removedIds.has(track.track_id));
-        musicQueue = musicQueue.filter(track => !removedIds.has(track.track_id));
+        musicTracks = musicTracks.filter(item => item.track_id !== track.track_id);
+        musicQueue = musicQueue.filter(item => item.track_id !== track.track_id);
+        musicQueueIndex = Math.max(0, Math.min(musicQueueIndex, Math.max(0, musicQueue.length - 1)));
+        $("removeMusicTrackSelect").value = "";
         renderMusicLibrary();
         await loadMusicLibrary();
-    }
-
-    if (failures.length) {
-        setText("musicLibraryManageStatus", failures.join(" · "));
-        showToast(removed + " song(s) removed; " + failures.length + " could not be removed.");
-    } else {
-        setText("musicLibraryManageStatus", removed + " song(s) removed. You can upload replacements above.");
-        showToast(removed + " song(s) removed from your library.");
+        setText("musicLibraryManageStatus", '"' + track.file_name + '" removed. You can upload another song now.');
+        showToast("Song removed from your library.");
+    } catch (error) {
+        setText("musicLibraryManageStatus", error.message);
+        showToast("Could not remove song: " + error.message);
     }
 }
 
-$("musicLibraryManageList").addEventListener("change", updateMusicRemovalSelection);
 $("musicLibraryManageList").addEventListener("click", event => {
     const button = event.target.closest("[data-play-track]");
     if (!button) return;
     const track = musicTracks.find(item => item.track_id === button.dataset.playTrack);
     playMusicTrackNow(track);
 });
-$("selectAllMusicBtn").addEventListener("click", () => {
-    const checkboxes = Array.from(
-        $("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox")
-    );
-    const allSelected = checkboxes.length > 0 && checkboxes.every(input => input.checked);
-    checkboxes.forEach(input => { input.checked = !allSelected; });
-    updateMusicRemovalSelection();
-});
+$("removeMusicTrackSelect").addEventListener("change", updateMusicRemovalSelection);
 $("removeSelectedMusicBtn").addEventListener("click", removeSelectedMusicTracks);
 
 async function loadMusicLibrary() {
