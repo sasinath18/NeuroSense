@@ -1156,22 +1156,35 @@
             gap: 17px;
             align-items: start;
         }
-        .recovery-stack { display: contents !important; }
-        .music-panel { grid-column: 1; grid-row: 1; min-width: 0; }
-        .breathing-panel {
+        .music-panel {
+            grid-column: 1;
+            grid-row: 1;
+            min-width: 0;
+        }
+        .recovery-right-column {
             grid-column: 2;
             grid-row: 1;
+            display: grid;
+            align-content: start;
+            gap: 17px;
+            min-width: 0;
+        }
+        .recovery-right-column .breathing-panel {
             text-align: center;
             padding: 20px 15px;
             min-width: 0;
         }
-        .haptic-panel { grid-column: 1 / -1; }
+        .recovery-right-column .haptic-panel {
+            width: 100%;
+            min-width: 0;
+        }
         @media (max-width: 850px) {
             .recovery-grid { grid-template-columns: 1fr; }
             .music-panel { grid-column: 1; grid-row: 1; }
-            .breathing-panel { grid-column: 1; grid-row: 2; }
-            .haptic-panel { grid-column: 1; grid-row: 3; }
-            .recovery-stack { display: contents !important; }
+            .recovery-right-column {
+                grid-column: 1;
+                grid-row: 2;
+            }
         }
 
         .breath-orb {
@@ -3010,50 +3023,7 @@
 
             <div class="recovery-grid">
 
-                <article class="card breathing-panel">
-
-                    <div class="eyebrow">Guided exercise</div>
-                    <h3 style="margin-top:7px">Breathing Exercise</h3>
-
-                    <div id="breathOrb"
-                         class="breath-orb"
-                         data-phase="rest">
-                        Ready
-                    </div>
-
-                    <div id="breathPhase" class="muted">
-                        Start when you are comfortable
-                    </div>
-
-                    <div id="breathPhaseCountdown" class="muted small">
-                        4 sec phase
-                    </div>
-
-                    <div id="breathCountdown" class="breath-timer">
-                        56 sec total
-                    </div>
-
-                    <p class="muted small">
-                        Example cycle: inhale 4 seconds, hold 4 seconds,
-                        exhale 6 seconds. Breathe comfortably; stop if
-                        you feel dizzy or uncomfortable.
-                    </p>
-
-                    <div class="breath-controls">
-                        <button id="startBreathingBtn" class="primary-btn">
-                            Start breathing
-                        </button>
-                        <button id="stopBreathingBtn" class="secondary-btn">
-                            Stop
-                        </button>
-                    </div>
-
-                </article>
-
-
-                <div class="recovery-stack" style="display:grid;gap:17px">
-
-                    <article class="card music-panel">
+                <article class="card music-panel">
 
                         <div class="card-header">
                             <div>
@@ -3146,6 +3116,46 @@
 
                     </article>
 
+                <div class="recovery-right-column">
+                    <article class="card breathing-panel">
+
+                    <div class="eyebrow">Guided exercise</div>
+                    <h3 style="margin-top:7px">Breathing Exercise</h3>
+
+                    <div id="breathOrb"
+                         class="breath-orb"
+                         data-phase="rest">
+                        Ready
+                    </div>
+
+                    <div id="breathPhase" class="muted">
+                        Start when you are comfortable
+                    </div>
+
+                    <div id="breathPhaseCountdown" class="muted small">
+                        4 sec phase
+                    </div>
+
+                    <div id="breathCountdown" class="breath-timer">
+                        56 sec total
+                    </div>
+
+                    <p class="muted small">
+                        Example cycle: inhale 4 seconds, hold 4 seconds,
+                        exhale 6 seconds. Breathe comfortably; stop if
+                        you feel dizzy or uncomfortable.
+                    </p>
+
+                    <div class="breath-controls">
+                        <button id="startBreathingBtn" class="primary-btn">
+                            Start breathing
+                        </button>
+                        <button id="stopBreathingBtn" class="secondary-btn">
+                            Stop
+                        </button>
+                    </div>
+
+                </article>
 
                     <article class="card haptic-panel">
 
@@ -3188,7 +3198,6 @@
                         </div>
 
                     </article>
-
                 </div>
 
             </div>
