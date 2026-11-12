@@ -1774,6 +1774,68 @@
             border: 1px solid var(--border);
             border-radius: 12px;
         }
+        .music-choose-list {
+            display: grid;
+            gap: 6px;
+            max-height: none;
+            overflow: visible;
+        }
+        .music-choose-song-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 44px;
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            background: var(--surface);
+            cursor: pointer;
+        }
+        .music-choose-song-row input {
+            width: 17px;
+            height: 17px;
+            flex: 0 0 auto;
+            cursor: pointer;
+        }
+        .music-choose-song-copy {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+        }
+        .music-choose-song-copy strong {
+            font-size: 12px;
+            overflow-wrap: anywhere;
+        }
+        .music-choose-song-copy small {
+            color: var(--muted);
+            font-size: 10px;
+        }
+        .music-choose-selection-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .music-remove-controls {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: end;
+            gap: 10px;
+        }
+        .music-remove-controls .field { margin: 0; }
+        .music-remove-controls .danger-btn { min-height: 42px; }
+        .music-playback-panel { margin-top: 13px; }
+        .music-playback-panel audio {
+            display: block;
+            width: 100%;
+            margin-top: 12px;
+        }
+        @media (max-width: 560px) {
+            .music-remove-controls { grid-template-columns: 1fr; }
+        }
+
+
         .music-primary-controls {
             display: flex;
             justify-content: flex-start;
@@ -3073,68 +3135,66 @@
                                 <div class="music-library-manager-heading">
                                     <div>
                                         <h4 id="musicChooseTitle">Choose songs</h4>
-                                        <p class="muted small">Choose one song or select multiple songs for a playlist.</p>
+                                        <p class="muted small">Tick one song or multiple songs to create a playlist.</p>
                                     </div>
+                                    <span id="musicChooseCount" class="badge">0 selected</span>
                                 </div>
-                                <div class="field">
-                                    <label for="musicTrackSelect">Single song</label>
-                                    <select id="musicTrackSelect" class="form-control"></select>
+                                <div id="musicChooseList" class="music-choose-list">
+                                    <p class="muted small">Your uploaded songs will appear here.</p>
                                 </div>
-                                <div class="field">
-                                    <label for="musicPlaylistSelect">Playlist · select one or more songs</label>
-                                    <select id="musicPlaylistSelect" class="form-control" multiple size="4"></select>
-                                </div>
-                                <div class="breath-controls music-primary-controls">
-                                    <button id="playSelectedMusicBtn" class="primary-btn" type="button" disabled>Play selected now</button>
-                                    <button id="saveDefaultMusicBtn" class="secondary-btn" type="button" disabled>Save as automatic song</button>
+                                <div class="music-choose-selection-actions">
+                                    <button id="selectAllMusicToPlayBtn" class="secondary-btn" type="button" disabled>Select all songs</button>
+                                    <span id="musicChooseSelectionStatus" class="muted small">No songs selected.</span>
                                 </div>
                             </section>
-                            <section class="music-queue-panel" aria-labelledby="musicQueueTitle">
+                            <section class="music-queue-panel music-playback-panel" aria-labelledby="musicQueueTitle">
                                 <div class="music-library-manager-heading">
                                     <div>
-                                        <h4 id="musicQueueTitle">Playback queue</h4>
-                                        <p class="muted small">Songs you add from the selectors above appear here in playback order.</p>
+                                        <h4 id="musicQueueTitle">Playback controls</h4>
+                                        <p class="muted small">Play the songs you selected or add them to a queue.</p>
                                     </div>
                                     <span id="musicQueueCount" class="badge">0 queued</span>
                                 </div>
+                                <div class="music-primary-controls">
+                                    <button id="playSelectedMusicBtn" class="primary-btn" type="button" disabled>Play selected now</button>
+                                    <button id="saveDefaultMusicBtn" class="secondary-btn" type="button" disabled>Save as automatic song</button>
+                                </div>
                                 <div id="musicQueueList" class="music-queue-list">
-                                    <p class="muted small">Queue is empty.</p>
+                                    <p class="muted small">Queue is empty. Select songs above and choose Add to queue.</p>
                                 </div>
                                 <div class="music-queue-actions">
-                                    <button id="addMusicToQueueBtn" class="secondary-btn" type="button">Add to queue</button>
-                                    <button id="playMusicNextBtn" class="secondary-btn" type="button">Play next</button>
-                                    <button id="playMusicQueueBtn" class="primary-btn" type="button">Play queue</button>
-                                    <button id="clearMusicQueueBtn" class="secondary-btn" type="button">Clear queue</button>
+                                    <button id="addMusicToQueueBtn" class="secondary-btn" type="button" disabled>Add to queue</button>
+                                    <button id="playMusicNextBtn" class="secondary-btn" type="button" disabled>Play next</button>
+                                    <button id="playMusicQueueBtn" class="primary-btn" type="button" disabled>Play queue</button>
+                                    <button id="clearMusicQueueBtn" class="secondary-btn" type="button" disabled>Clear queue</button>
                                 </div>
                                 <label class="music-auto-next">
                                     <input id="musicAutoNextToggle" type="checkbox" checked>
                                     <span><strong>Automatically play next</strong><small>Continue to the next queued song when the current song ends.</small></span>
                                 </label>
+                                <audio id="relaxationAudio" controls preload="auto"></audio>
+                                <p id="musicModeStatus" class="muted small" role="status" aria-live="polite">Manual mode: select songs above, then play or add them to your queue.</p>
+                                <p id="driveImportStatus" class="muted small" role="status" aria-live="polite">Google Drive browsing requires Google Picker API configuration.</p>
                             </section>
-                            <section class="music-library-manager music-remove-list-panel" aria-labelledby="musicLibraryManagerTitle">
+                            <section class="music-library-manager music-remove-panel" aria-labelledby="musicRemoveTitle">
                                 <div class="music-library-manager-heading">
                                     <div>
-                                        <h4 id="musicLibraryManagerTitle">Remove uploaded songs</h4>
-                                        <p class="muted small">Select one or more songs below, then remove them from your library.</p>
+                                        <h4 id="musicRemoveTitle">Remove a song</h4>
+                                        <p class="muted small">Choose the uploaded song you want to remove from your library.</p>
                                     </div>
-                                    <span id="musicManageCount" class="badge">0 songs</span>
+                                    <span id="musicManageCount" class="badge">0 saved songs</span>
                                 </div>
-                                <div id="musicLibraryManageList" class="music-library-manage-list">
-                                    <p class="muted small">Your uploaded songs will appear here.</p>
+                                <div class="music-remove-controls">
+                                    <div class="field">
+                                        <label for="removeMusicTrackSelect">Song to remove</label>
+                                        <select id="removeMusicTrackSelect" class="form-control">
+                                            <option value="">Choose a song to remove</option>
+                                        </select>
+                                    </div>
+                                    <button id="removeSelectedMusicBtn" class="danger-btn" type="button" disabled>Remove selected song</button>
                                 </div>
-                                <div class="music-library-manager-actions">
-                                    <button id="selectAllMusicBtn" class="secondary-btn" type="button" disabled>Select all</button>
-                                    <button id="removeSelectedMusicBtn" class="danger-btn" type="button" disabled>Remove selected</button>
-                                </div>
-                                <p id="musicLibraryManageStatus" class="muted small" role="status" aria-live="polite">You can remove songs and upload replacements at any time.</p>
+                                <p id="musicLibraryManageStatus" class="muted small" role="status" aria-live="polite">Choose songs above to play. Use this separate control to remove an uploaded song.</p>
                             </section>
-                            <p id="musicModeStatus" class="muted small" role="status" aria-live="polite">
-                                Manual mode: choose a song or playlist above, then play it or add it to the queue.
-                            </p>
-                            <p id="driveImportStatus" class="muted small" role="status" aria-live="polite">
-                                Google Drive import requires Google Picker API configuration.
-                            </p>
-                            <audio id="relaxationAudio" controls preload="auto"></audio>
                         </div>
                         <div class="notice" style="margin-top:13px">
                             Music mode controls song playback only. Haptic vibration, warning sound and notifications have separate controls.
@@ -7025,14 +7085,16 @@ function updateMusicModeUI() {
     musicRemainingSlots = Math.max(0, musicLibraryLimit - savedCount);
     setText("musicModeStatus", automatic
         ? "Automatic mode: the saved default song plays after guided breathing. Switch to Manual for queue controls."
-        : "Manual mode: tap a song to play now, build a queue, or enable automatic next. Music playback is independent of breathing.");
-    if ($("musicTrackSelect")) $("musicTrackSelect").disabled = automatic || musicTracks.length === 0;
-    if ($("musicPlaylistSelect")) $("musicPlaylistSelect").disabled = automatic || musicTracks.length === 0;
-    if ($("playSelectedMusicBtn")) $("playSelectedMusicBtn").disabled = automatic || musicTracks.length === 0;
+        : "Manual mode: tick songs in the visible list, then play them or add them to the queue. Music playback is independent of breathing.");
+    const selectedTracks = selectedMusicTracks();
+    if ($("musicChooseList")) $("musicChooseList").querySelectorAll(".music-choose-song-checkbox")
+        .forEach(input => { input.disabled = automatic; });
+    if ($("selectAllMusicToPlayBtn")) $("selectAllMusicToPlayBtn").disabled = automatic || !musicTracks.length;
+    if ($("playSelectedMusicBtn")) $("playSelectedMusicBtn").disabled = automatic || !selectedTracks.length;
     if ($("saveDefaultMusicBtn")) $("saveDefaultMusicBtn").disabled =
-        !musicTracks.some(track => !track.driveSource);
-    if ($("addMusicToQueueBtn")) $("addMusicToQueueBtn").disabled = automatic || !musicTracks.length;
-    if ($("playMusicNextBtn")) $("playMusicNextBtn").disabled = automatic || !musicTracks.length;
+        automatic || selectedTracks.length !== 1 || Boolean(selectedTracks[0]?.driveSource);
+    if ($("addMusicToQueueBtn")) $("addMusicToQueueBtn").disabled = automatic || !selectedTracks.length;
+    if ($("playMusicNextBtn")) $("playMusicNextBtn").disabled = automatic || !selectedTracks.length;
     if ($("playMusicQueueBtn")) $("playMusicQueueBtn").disabled = !musicQueue.length;
     if ($("clearMusicQueueBtn")) $("clearMusicQueueBtn").disabled = !musicQueue.length;
     if ($("musicFileInput")) {
@@ -7049,30 +7111,9 @@ function updateMusicModeUI() {
 }
 
 function renderMusicLibrary() {
-    const single = $("musicTrackSelect");
-    const playlist = $("musicPlaylistSelect");
-    if (!single || !playlist) return;
-    const previousSingle = single.value;
-    single.innerHTML = "";
-    playlist.innerHTML = "";
-    if (!musicTracks.length) {
-        single.add(new Option("No songs uploaded yet", ""));
-        playlist.add(new Option("Upload songs to create a playlist", ""));
-    } else {
-        musicTracks.forEach(track => {
-            const label = track.file_name + (track.is_default ? " · Default" : "");
-            single.add(new Option(label, track.track_id));
-            playlist.add(new Option(track.file_name, track.track_id));
-        });
-        if (musicTracks.some(track => track.track_id === previousSingle)) {
-            single.value = previousSingle;
-        } else {
-            const defaultTrack = musicTracks.find(track => track.is_default);
-            single.value = (defaultTrack || musicTracks[0]).track_id;
-        }
-    }
     const savedCount = musicTracks.filter(track => !track.driveSource).length;
     const driveCount = musicTracks.filter(track => track.driveSource).length;
+    musicRemainingSlots = Math.max(0, musicLibraryLimit - savedCount);
     setText("musicFileName",
         savedCount + "/" + musicLibraryLimit + " saved song(s) · " +
         driveCount + " Google Drive session song(s) · " +
@@ -7083,50 +7124,46 @@ function renderMusicLibrary() {
 }
 
 function renderMusicLibraryManager() {
-    const list = $("musicLibraryManageList");
+    const list = $("musicChooseList");
     if (!list) return;
+    const previouslySelected = new Set(
+        Array.from(list.querySelectorAll(".music-choose-song-checkbox:checked"))
+            .map(input => input.value)
+    );
     list.replaceChildren();
 
-    const removableTracks = musicTracks.filter(track => !track.driveSource);
-    setText("musicManageCount", removableTracks.length + " song" + (removableTracks.length === 1 ? "" : "s"));
-    const selectAllButton = $("selectAllMusicBtn");
-    if (selectAllButton) selectAllButton.disabled = removableTracks.length === 0;
-
-    if (!removableTracks.length) {
+    if (!musicTracks.length) {
         const empty = document.createElement("p");
         empty.className = "muted small";
-        empty.textContent = "No saved songs to remove. Upload songs above or browse Google Drive.";
+        empty.textContent = "No songs uploaded yet. Add songs above or browse Google Drive.";
         list.appendChild(empty);
-        updateMusicRemovalSelection();
-        return;
+    } else {
+        musicTracks.forEach(track => {
+            const row = document.createElement("label");
+            row.className = "music-choose-song-row";
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.className = "music-choose-song-checkbox";
+            checkbox.value = track.track_id;
+            checkbox.checked = previouslySelected.has(track.track_id);
+            checkbox.setAttribute("aria-label", "Choose " + track.file_name);
+            const copy = document.createElement("span");
+            copy.className = "music-choose-song-copy";
+            const name = document.createElement("strong");
+            name.textContent = track.file_name || "Untitled audio";
+            const details = document.createElement("small");
+            const sizeMb = Number(track.size_bytes || 0) / (1024 * 1024);
+            details.textContent =
+                (track.driveSource ? "Google Drive · session only · " :
+                    track.is_default ? "Automatic default · " : "") +
+                (sizeMb > 0 ? sizeMb.toFixed(2) + " MB" : "Audio track");
+            copy.append(name, details);
+            row.append(checkbox, copy);
+            list.appendChild(row);
+        });
     }
-
-    removableTracks.forEach(track => {
-        const row = document.createElement("label");
-        row.className = "music-library-song-row";
-
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.className = "music-library-song-checkbox";
-        checkbox.value = track.track_id;
-        checkbox.setAttribute("aria-label", "Select " + track.file_name + " for removal");
-
-        const copy = document.createElement("span");
-        copy.className = "music-library-song-copy";
-        const name = document.createElement("strong");
-        name.textContent = track.file_name || "Untitled audio";
-
-        const details = document.createElement("small");
-        const sizeMb = Number(track.size_bytes || 0) / (1024 * 1024);
-        details.textContent =
-            (track.is_default ? "Automatic default · " : "") +
-            (sizeMb > 0 ? sizeMb.toFixed(2) + " MB" : "Saved song");
-
-        copy.append(name, details);
-        row.append(checkbox, copy);
-        list.appendChild(row);
-    });
-    updateMusicRemovalSelection();
+    renderRemoveMusicOptions();
+    updateMusicChooseSelection();
 }
 
 function renderMusicQueue() {
@@ -7163,11 +7200,32 @@ function renderMusicQueue() {
 }
 
 function selectedMusicTracks() {
-    const ids = Array.from($("musicPlaylistSelect").selectedOptions)
-        .map(option => option.value).filter(Boolean);
-    return ids.length
-        ? ids.map(id => musicTracks.find(track => track.track_id === id)).filter(Boolean)
-        : [musicTracks.find(track => track.track_id === $("musicTrackSelect").value)].filter(Boolean);
+    const ids = $("musicChooseList")
+        ? Array.from($("musicChooseList").querySelectorAll(".music-choose-song-checkbox:checked"))
+            .map(input => input.value)
+        : [];
+    return ids.map(id => musicTracks.find(track => track.track_id === id)).filter(Boolean);
+}
+
+function updateMusicChooseSelection() {
+    const selected = selectedMusicTracks();
+    setText("musicChooseCount", selected.length + " selected");
+    setText("musicChooseSelectionStatus",
+        selected.length ? selected.length + " song(s) selected for playback." : "No songs selected.");
+    const selectAll = $("selectAllMusicToPlayBtn");
+    if (selectAll) {
+        const allSelected = musicTracks.length > 0 && selected.length === musicTracks.length;
+        selectAll.disabled = musicMode === "automatic" || !musicTracks.length;
+        selectAll.textContent = allSelected ? "Clear selection" : "Select all songs";
+    }
+    if ($("playSelectedMusicBtn")) $("playSelectedMusicBtn").disabled =
+        musicMode === "automatic" || !selected.length;
+    if ($("addMusicToQueueBtn")) $("addMusicToQueueBtn").disabled =
+        musicMode === "automatic" || !selected.length;
+    if ($("playMusicNextBtn")) $("playMusicNextBtn").disabled =
+        musicMode === "automatic" || !selected.length;
+    if ($("saveDefaultMusicBtn")) $("saveDefaultMusicBtn").disabled =
+        musicMode === "automatic" || selected.length !== 1 || Boolean(selected[0]?.driveSource);
 }
 
 function addSelectedTracksToQueue(playNext = false) {
@@ -7193,57 +7251,46 @@ function addSelectedTracksToQueue(playNext = false) {
 
 function playMusicTrackNow(track) {
     if (!track) return;
-    $("musicTrackSelect").value = track.track_id;
-    Array.from($("musicPlaylistSelect").options).forEach(option => { option.selected = false; });
+    const checkbox = Array.from(
+        $("musicChooseList").querySelectorAll(".music-choose-song-checkbox")
+    ).find(input => input.value === track.track_id);
+    if (checkbox) checkbox.checked = true;
+    updateMusicChooseSelection();
     musicQueue = [track];
     musicQueueIndex = 0;
     renderMusicQueue();
     playCurrentMusicTrack();
 }
 
+function renderRemoveMusicOptions() {
+    const select = $("removeMusicTrackSelect");
+    if (!select) return;
+    const previous = select.value;
+    const removableTracks = musicTracks.filter(track => !track.driveSource);
+    setText("musicManageCount", removableTracks.length + " saved songs");
+    select.replaceChildren(new Option("Choose a song to remove", ""));
+    removableTracks.forEach(track => select.add(new Option(
+        (track.file_name || "Untitled audio") + (track.is_default ? " · Default" : ""),
+        track.track_id
+    )));
+    if (removableTracks.some(track => track.track_id === previous)) select.value = previous;
+    updateMusicRemovalSelection();
+}
+
 function updateMusicRemovalSelection() {
-    const checkedBoxes = $("musicLibraryManageList")
-        ? Array.from($("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox:checked"))
-        : [];
-    const checkedCount = checkedBoxes.length;
     const removeButton = $("removeSelectedMusicBtn");
-    if (removeButton) {
-        removeButton.disabled = checkedCount === 0;
-        removeButton.textContent = checkedCount
-            ? "Remove selected (" + checkedCount + ")"
-            : "Remove selected";
-    }
-    const selectAllButton = $("selectAllMusicBtn");
-    const totalCount = musicTracks.filter(track => !track.driveSource).length;
-    if (selectAllButton) {
-        selectAllButton.textContent = totalCount > 0 && checkedCount === totalCount
-            ? "Clear selection"
-            : "Select all";
-    }
+    if (removeButton) removeButton.disabled = !$("removeMusicTrackSelect")?.value;
 }
 
 async function removeSelectedMusicTracks() {
-    const selectedIds = Array.from(
-        $("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox:checked")
-    ).map(input => input.value);
-    if (!selectedIds.length) {
-        showToast("Select at least one song to remove.");
-        return;
-    }
-
-    const selectedTracks = musicTracks.filter(
-        track => selectedIds.includes(track.track_id) && !track.driveSource
-    );
-    if (!selectedTracks.length) return;
-    const names = selectedTracks.map(track => track.file_name).join(", ");
-    if (!window.confirm("Remove " + selectedTracks.length + " song(s) from your NeuroSense library?\n\n" + names)) return;
+    const selectedId = $("removeMusicTrackSelect")?.value;
+    const track = musicTracks.find(item => item.track_id === selectedId && !item.driveSource);
+    if (!track) return showToast("Choose one uploaded song to remove.");
+    if (!window.confirm('Remove "' + track.file_name + '" from your NeuroSense music library?')) return;
 
     const audio = $("relaxationAudio");
-    const currentTrack = musicQueue[musicQueueIndex];
-    const removesPlayingTrack = Boolean(
-        currentTrack && selectedIds.includes(currentTrack.track_id)
-    );
-    if (removesPlayingTrack) {
+    const wasPlaying = musicQueue[musicQueueIndex]?.track_id === track.track_id;
+    if (wasPlaying && audio.src) {
         audio.pause();
         audio.removeAttribute("src");
         audio.dataset.trackId = "";
@@ -7251,54 +7298,41 @@ async function removeSelectedMusicTracks() {
         if (activeMusicUrl) URL.revokeObjectURL(activeMusicUrl);
         activeMusicUrl = null;
     }
-
-    let removed = 0;
-    const removedIds = new Set();
-    const failures = [];
-    for (const track of selectedTracks) {
-        try {
-            if (track.localUrl) {
-                URL.revokeObjectURL(track.localUrl);
-            } else {
-                if (!hasPrivateApiAccess()) {
-                    throw new Error("Sign in to remove songs from your account library.");
-                }
-                await apiRequest("/api/music/" + encodeURIComponent(track.track_id), {
-                    method: "DELETE"
-                });
-            }
-            removed += 1;
-            removedIds.add(track.track_id);
-        } catch (error) {
-            failures.push(track.file_name + ": " + error.message);
+    try {
+        if (track.localUrl) {
+            URL.revokeObjectURL(track.localUrl);
+        } else {
+            if (!hasPrivateApiAccess()) throw new Error("Sign in to remove songs from your account library.");
+            await apiRequest("/api/music/" + encodeURIComponent(track.track_id), { method: "DELETE" });
         }
-    }
-
-    musicTracks = musicTracks.filter(track => !removedIds.has(track.track_id));
-    musicQueue = musicQueue.filter(track => !removedIds.has(track.track_id));
-    musicQueueIndex = Math.max(0, Math.min(musicQueueIndex, Math.max(0, musicQueue.length - 1)));
-    renderMusicLibrary();
-    renderMusicQueue();
-    await loadMusicLibrary();
-
-    if (failures.length) {
-        setText("musicLibraryManageStatus", removed + " removed. " + failures.join(" · "));
-        showToast(removed + " song(s) removed; " + failures.length + " could not be removed.");
-    } else {
-        setText("musicLibraryManageStatus", removed + " song(s) removed. You can upload replacements above.");
-        showToast(removed + " song(s) removed from your library.");
+        musicTracks = musicTracks.filter(item => item.track_id !== track.track_id);
+        musicQueue = musicQueue.filter(item => item.track_id !== track.track_id);
+        musicQueueIndex = Math.max(0, Math.min(musicQueueIndex, Math.max(0, musicQueue.length - 1)));
+        $("removeMusicTrackSelect").value = "";
+        renderMusicLibrary();
+        renderMusicQueue();
+        updateMusicModeUI();
+        await loadMusicLibrary();
+        setText("musicLibraryManageStatus", '"' + track.file_name + '" removed. You can upload another song now.');
+        showToast("Song removed from your library.");
+    } catch (error) {
+        setText("musicLibraryManageStatus", error.message);
+        showToast("Could not remove song: " + error.message);
     }
 }
 
-$("musicLibraryManageList").addEventListener("change", updateMusicRemovalSelection);
-$("selectAllMusicBtn").addEventListener("click", () => {
-    const checkboxes = Array.from(
-        $("musicLibraryManageList").querySelectorAll(".music-library-song-checkbox")
-    );
+$("musicChooseList").addEventListener("change", () => {
+    updateMusicChooseSelection();
+    updateMusicModeUI();
+});
+$("selectAllMusicToPlayBtn").addEventListener("click", () => {
+    const checkboxes = Array.from($("musicChooseList").querySelectorAll(".music-choose-song-checkbox"));
     const allSelected = checkboxes.length > 0 && checkboxes.every(input => input.checked);
     checkboxes.forEach(input => { input.checked = !allSelected; });
-    updateMusicRemovalSelection();
+    updateMusicChooseSelection();
+    updateMusicModeUI();
 });
+$("removeMusicTrackSelect").addEventListener("change", updateMusicRemovalSelection);
 $("removeSelectedMusicBtn").addEventListener("click", removeSelectedMusicTracks);
 
 async function loadMusicLibrary() {
@@ -7623,9 +7657,10 @@ $("musicAutoNextToggle").addEventListener("change", async event => {
 });
 
 $("saveDefaultMusicBtn").addEventListener("click", async () => {
-    const trackId = $("musicTrackSelect").value;
-    const track = musicTracks.find(item => item.track_id === trackId);
-    if (!track) return showToast("Select one song to save as the default.");
+    const selected = selectedMusicTracks();
+    if (selected.length !== 1) return showToast("Select exactly one song to save as the default.");
+    const track = selected[0];
+    const trackId = track.track_id;
     if (track.driveSource) return showToast("Google Drive session tracks cannot be saved as the automatic default. Upload that song into a saved slot first.");
     if (track.localUrl) {
         musicTracks = musicTracks.map(item => ({ ...item, is_default: item.track_id === trackId }));
