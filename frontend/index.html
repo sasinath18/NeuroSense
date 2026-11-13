@@ -3152,8 +3152,8 @@
                     </p>
 
                     <div class="privacy-list" style="margin-top:14px">
-                        <div class="privacy-item"><span class="check">✓</span><span>Face regions and rPPG signals are processed in this browser.</span></div>
-                        <div class="privacy-item"><span class="check">✓</span><span>No webcam frames or extracted pulse samples are uploaded or stored by this scan.</span></div>
+                        <div class="privacy-item"><span class="check">✓</span><span>Face landmarks and blink measurements are processed in this browser.</span></div>
+                        <div class="privacy-item"><span class="check">✓</span><span>No webcam video or frames are uploaded or stored by this scan.</span></div>
                         <div class="privacy-item"><span class="check">✓</span><span>Stop Analysis ends the 120-second measurement; Stop Camera switches the webcam off.</span></div>
                     </div>
 
@@ -4175,6 +4175,7 @@ function clearLiveSensorDisplay(message = "No authenticated wearable readings av
         "A score is shown only when the backend can calculate a model estimate from suitable wearable data and a personal baseline."
     );
     setText("stressStatusBadge", "No estimate");
+    updateFaceScanStressCard({ status: "waiting_for_data" });
     const ring = $("stressRing");
     if (ring) {
         ring.style.setProperty("--score", "0");
