@@ -1810,6 +1810,18 @@ def predict_stress(
 # 13. FIRESTORE STORAGE AND SENSOR READING
 # ============================================================
 
+def stored_or_predicted_stress(user_id: str, reading: dict) -> dict:
+    """Reuse the persisted prediction for a reading instead of re-triggering events."""
+    if reading.get("stress_status"):
+        return {
+            "status": reading.get("stress_status"),
+            "stress_score": reading.get("stress_score"),
+            "stress_probability": reading.get("stress_probability"),
+            "model_validated": False,
+        }
+    return predict_stress(user_id, reading)
+
+
 def store_sensor_reading(
     user_id: str,
     device_id: str,
@@ -2785,10 +2797,12 @@ def latest_stress_estimate(
     else:
         reading = dict(row)
 
-    return predict_stress(
-        user_id,
-        reading
-    )
+    prediction = stored_or_predicted_stress(user_id, reading)
+    return {
+        **prediction,
+        "reading_id": reading.get("id"),
+        "reading_timestamp": reading.get("timestamp"),
+    }
 
 
 # ============================================================
@@ -2869,7 +2883,7 @@ def dashboard_overview(
         and reading.get("source") == "wearable"
     ):
 
-        prediction = predict_stress(
+        prediction = stored_or_predicted_stress(
             user_id,
             reading
         )
