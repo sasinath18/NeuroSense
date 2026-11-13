@@ -5966,11 +5966,14 @@ function eyeAspectRatio(landmarks, ids) {
     if (horizontal <= 0) return null;
     return (landmarkDistance(points[1], points[5]) + landmarkDistance(points[2], points[4])) / (2 * horizontal);
 }
-const FACE_BLINK_CALIBRATION_MS = 1500;
-const FACE_BLINK_MIN_CALIBRATION_SAMPLES = 18;
-const FACE_BLINK_MIN_CLOSED_MS = 45;
+const FACE_BLINK_CALIBRATION_MS = 1800;
+const FACE_BLINK_MIN_CALIBRATION_SAMPLES = 24;
+// More tolerant of natural, shallow blinks while retaining a bilateral closure check.
+const FACE_BLINK_CLOSE_RATIO = 0.78;
+const FACE_BLINK_REOPEN_RATIO = 0.88;
+const FACE_BLINK_MIN_CLOSED_MS = 35;
 const FACE_BLINK_MAX_CLOSED_MS = 450;
-const FACE_BLINK_MIN_INTERVAL_MS = 120;
+const FACE_BLINK_MIN_INTERVAL_MS = 180;
 const FACE_BLINK_MAX_FRAME_GAP_MS = 250;
 
 let faceBlinkCount = 0;
@@ -6059,15 +6062,11 @@ function calibrateBlinkThresholds(left, right, now) {
 
     faceBlinkCalibration = {
         leftOpen: leftBaseline,
-        rightOpen: rightBaseline,
-        leftClose: clampNumber(leftBaseline * 0.70, 0.11, 0.22),
-        rightClose: clampNumber(rightBaseline * 0.70, 0.11, 0.22),
-        leftReopen: clampNumber(leftBaseline * 0.84, 0.13, 0.35),
-        rightReopen: clampNumber(rightBaseline * 0.84, 0.13, 0.35)
+        rightOpen: rightBaseline
     };
 
     setBlinkDetectionStatus(
-        "Eyes calibrated. Blink count now uses your own left/right eye baselines and blink-duration filtering."
+        "Eyes calibrated. Natural blinks are tracked using normalized two-eye movement and duration filtering."
     );
     return true;
 }
@@ -6103,20 +6102,25 @@ function updateBlinkCounter(landmarks, now) {
     }
 
     const calibration = faceBlinkCalibration;
-    const bothClosed =
-        left < calibration.leftClose &&
-        right < calibration.rightClose;
-    const bothOpen =
-        left > calibration.leftReopen &&
-        right > calibration.rightReopen;
+    const leftOpenRatio = left / calibration.leftOpen;
+    const rightOpenRatio = right / calibration.rightOpen;
+    const meanOpenRatio = (leftOpenRatio + rightOpenRatio) / 2;
+    const leastOpenRatio = Math.min(leftOpenRatio, rightOpenRatio);
 
-    if (faceBlinkState === "open" && bothClosed) {
+    // Average normalized eyelid movement across both eyes. This tolerates
+    // small left/right tracking differences without counting a one-eye glitch.
+    const blinkClosing =
+        meanOpenRatio <= FACE_BLINK_CLOSE_RATIO &&
+        leastOpenRatio <= FACE_BLINK_CLOSE_RATIO + 0.08;
+    const blinkReopened = meanOpenRatio >= FACE_BLINK_REOPEN_RATIO;
+
+    if (faceBlinkState === "open" && blinkClosing) {
         faceBlinkState = "closing";
         faceBlinkClosedAt = now;
     } else if (faceBlinkState === "closing") {
         const closedDuration = now - faceBlinkClosedAt;
 
-        if (bothOpen) {
+        if (blinkReopened) {
             if (
                 closedDuration >= FACE_BLINK_MIN_CLOSED_MS &&
                 closedDuration <= FACE_BLINK_MAX_CLOSED_MS &&
@@ -6133,7 +6137,7 @@ function updateBlinkCounter(landmarks, now) {
             faceBlinkState = "held";
             faceBlinkClosedAt = 0;
         }
-    } else if (faceBlinkState === "held" && bothOpen) {
+    } else if (faceBlinkState === "held" && blinkReopened) {
         faceBlinkState = "open";
         faceBlinkClosedAt = 0;
     }
