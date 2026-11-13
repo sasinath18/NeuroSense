@@ -3710,6 +3710,7 @@ let apiRecoveryHistory = [];
 let hasRemoteRecoveryHistory = false;
 let dashboardOverview = null;
 let backendRefreshTimer = null;
+let stressAlertPollTimer = null;
 let apiRefreshInProgress = false;
 let musicMode = "manual";
 let musicTracks = [];
@@ -8043,9 +8044,24 @@ function playWarningTone() {
         oscillator.stop(context.currentTime + 0.24);
     } catch (error) { console.warn("Warning tone unavailable:", error); }
 }
+async function pollStressAlert() {
+    if (!hasPrivateApiAccess()) return;
+    try {
+        const result = await apiRequest("/api/stress/latest");
+        const reading = {
+            id: result.reading_id,
+            timestamp: result.reading_timestamp
+        };
+        dispatchStressNotification(result, reading);
+    } catch (error) {
+        // Alert polling is intentionally silent; regular refresh surfaces API errors.
+        console.debug("Stress alert check unavailable:", error.message);
+    }
+}
+
 function dispatchStressNotification(stress, reading) {
     const score = Number(stress && stress.stress_score);
-    if (!stress || stress.status !== "prediction_available" || !Number.isFinite(score) || score < 67) return;
+    if (!stress || stress.status !== "prediction_available" || !Number.isFinite(score) || score < 75) return;
     const readingId = (reading && (reading.id || reading.timestamp)) || "";
     if (!readingId || readingId === lastStressNotificationReadingId) return;
     lastStressNotificationReadingId = readingId;
@@ -8378,6 +8394,11 @@ function initializeApp() {
             if (!document.hidden && hasPrivateApiAccess()) refreshBackendData();
         }, 30000);
     }
+    if (stressAlertPollTimer === null) {
+        stressAlertPollTimer = setInterval(() => {
+            if (!document.hidden && hasPrivateApiAccess()) pollStressAlert();
+        }, 5000);
+    }
 
     updateProfileUI();
     updateHapticUI();
@@ -8420,6 +8441,10 @@ window.addEventListener("pagehide", () => {
     if (backendRefreshTimer !== null) {
         clearInterval(backendRefreshTimer);
         backendRefreshTimer = null;
+    }
+    if (stressAlertPollTimer !== null) {
+        clearInterval(stressAlertPollTimer);
+        stressAlertPollTimer = null;
     }
 
     if (activeMusicUrl) {
