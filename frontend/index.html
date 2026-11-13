@@ -2977,11 +2977,7 @@
 
             </div>
 
-            <div class="analytics-grid" style="margin-top:17px">
-                <article class="card">
-                    <div class="card-header"><div><h3>Three-hour Summaries</h3><p>Aggregated wearable readings</p></div><span class="badge" id="summaryCountBadge">0 periods</span></div>
-                    <ul id="summaryList" class="muted small" style="padding-left:20px"><li>No summary periods available yet.</li></ul>
-                </article>
+            <div class="analytics-grid" style="margin-top:17px;grid-template-columns:1fr">
                 <article class="card">
                     <div class="card-header"><div><h3>High-stress Events</h3><p>Experimental model event history</p></div><span class="badge" id="highStressCountBadge">0 events</span></div>
                     <ul id="highStressEventList" class="muted small" style="padding-left:20px"><li>No high-stress events recorded.</li></ul>
@@ -4670,7 +4666,9 @@ function renderMonitoringSummaries() {
     const container = $("monitorSummaryList");
     if (!container) return;
     container.replaceChildren();
+    const cutoff = Date.now() - monitoringRangeDays * 24 * 60 * 60 * 1000;
     const summaries = [...monitoringSummaries]
+        .filter(item => item.period_end && new Date(item.period_end).getTime() >= cutoff)
         .sort((a, b) => new Date(b.period_end || 0) - new Date(a.period_end || 0))
         .slice(0, 12);
     setText("monitorSummaryCountBadge", summaries.length + " periods");
