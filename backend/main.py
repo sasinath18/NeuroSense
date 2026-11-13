@@ -1995,11 +1995,18 @@ def create_due_summaries() -> int:
                 (user_id,),
             ).fetchone()
 
-            interval_seconds = (
-                int(settings["monitoring_interval_seconds"])
-                if settings and settings["monitoring_interval_seconds"]
-                else DEFAULT_MONITORING_INTERVAL_SECONDS
-            )
+            if settings and settings["monitoring_interval_seconds"]:
+                interval_seconds = int(settings["monitoring_interval_seconds"])
+            else:
+                cloud_preferences = firestore_read_document(
+                    ("users", user_id, "settings"), "preferences"
+                ) or {}
+                interval_seconds = int(
+                    cloud_preferences.get(
+                        "monitoring_interval_seconds",
+                        DEFAULT_MONITORING_INTERVAL_SECONDS,
+                    )
+                )
             interval_seconds = max(
                 MIN_MONITORING_INTERVAL_SECONDS,
                 min(MAX_MONITORING_INTERVAL_SECONDS, interval_seconds),
