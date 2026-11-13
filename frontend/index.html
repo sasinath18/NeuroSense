@@ -3725,7 +3725,8 @@ let activeMusicUrl = null;
 let warningSoundEnabled = false;
 let browserNotificationsEnabled = false;
 let warningAudioContext = null;
-let lastStressNotificationReadingId = "";
+let highStressEpisodeActive = false;
+let lastStressAlertUserId = "";
 let monitoringDevices = [];
 let monitoringEvents = [];
 let monitoringBlinkSummaries = [];
@@ -8060,11 +8061,23 @@ async function pollStressAlert() {
 }
 
 function dispatchStressNotification(stress, reading) {
+    const currentUserId = firebaseCurrentUser?.uid || "signed-out";
+    if (currentUserId !== lastStressAlertUserId) {
+        highStressEpisodeActive = false;
+        lastStressAlertUserId = currentUserId;
+    }
+
     const score = Number(stress && stress.stress_score);
-    if (!stress || stress.status !== "prediction_available" || !Number.isFinite(score) || score < 75) return;
-    const readingId = (reading && (reading.id || reading.timestamp)) || "";
-    if (!readingId || readingId === lastStressNotificationReadingId) return;
-    lastStressNotificationReadingId = readingId;
+    if (!stress || stress.status !== "prediction_available" || !Number.isFinite(score)) return;
+
+    // Use hysteresis so a sustained high-stress period triggers once, not once per upload.
+    if (score < 65) {
+        highStressEpisodeActive = false;
+        return;
+    }
+    if (score < 75 || highStressEpisodeActive) return;
+
+    highStressEpisodeActive = true;
     playWarningTone();
     if (browserNotificationsEnabled && "Notification" in window && Notification.permission === "granted") {
         try {
