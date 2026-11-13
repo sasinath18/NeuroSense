@@ -117,7 +117,10 @@ HIGH_STRESS_THRESHOLD = float(
     os.getenv("NEUROSENSE_HIGH_STRESS_THRESHOLD", "0.75")
 )
 
-SUMMARY_HOURS = 3
+DEFAULT_MONITORING_INTERVAL_SECONDS = 600
+MIN_MONITORING_INTERVAL_SECONDS = 5
+MAX_MONITORING_INTERVAL_SECONDS = 86400
+MAX_SUMMARY_WINDOWS_PER_PASS = 24
 MAX_READING_AGE_HOURS = 24
 MAX_FUTURE_CLOCK_SKEW_MINUTES = 5
 
@@ -246,7 +249,10 @@ def initialize_database() -> None:
             skin_temperature_c REAL,
             signal_quality TEXT NOT NULL,
             source TEXT NOT NULL,
-            ibi_ms_json TEXT
+            ibi_ms_json TEXT,
+            stress_score REAL,
+            stress_probability REAL,
+            stress_status TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_readings_user_time
@@ -273,6 +279,9 @@ def initialize_database() -> None:
             music_mode TEXT NOT NULL DEFAULT 'manual',
             warning_sound_enabled INTEGER NOT NULL DEFAULT 0,
             notifications_enabled INTEGER NOT NULL DEFAULT 0,
+            monitoring_interval_seconds INTEGER NOT NULL DEFAULT 600,
+            monitoring_interval_value INTEGER NOT NULL DEFAULT 10,
+            monitoring_interval_unit TEXT NOT NULL DEFAULT 'minutes',
             updated_at TEXT NOT NULL
         );
 
@@ -351,8 +360,17 @@ def initialize_database() -> None:
             avg_hrv REAL,
             avg_gsr REAL,
             avg_skin_temperature REAL,
+            avg_stress_score REAL,
+            peak_stress_score REAL,
+            peak_stress_at TEXT,
+            high_stress_event_count INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             UNIQUE(user_id, period_end)
+        );
+
+        CREATE TABLE IF NOT EXISTS monitoring_summary_state (
+            user_id TEXT PRIMARY KEY,
+            last_period_end TEXT NOT NULL
         );
 
 
@@ -378,11 +396,45 @@ def initialize_database() -> None:
             "music_mode": "TEXT NOT NULL DEFAULT 'manual'",
             "warning_sound_enabled": "INTEGER NOT NULL DEFAULT 0",
             "notifications_enabled": "INTEGER NOT NULL DEFAULT 0",
+            "monitoring_interval_seconds": "INTEGER NOT NULL DEFAULT 600",
+            "monitoring_interval_value": "INTEGER NOT NULL DEFAULT 10",
+            "monitoring_interval_unit": "TEXT NOT NULL DEFAULT 'minutes'",
         }
         for column, definition in migrations.items():
             if column not in existing_columns:
                 db.execute(
                     f"ALTER TABLE user_settings ADD COLUMN {column} {definition}"
+                )
+
+        reading_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(sensor_readings)").fetchall()
+        }
+        reading_migrations = {
+            "stress_score": "REAL",
+            "stress_probability": "REAL",
+            "stress_status": "TEXT",
+        }
+        for column, definition in reading_migrations.items():
+            if column not in reading_columns:
+                db.execute(
+                    f"ALTER TABLE sensor_readings ADD COLUMN {column} {definition}"
+                )
+
+        summary_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(summaries)").fetchall()
+        }
+        summary_migrations = {
+            "avg_stress_score": "REAL",
+            "peak_stress_score": "REAL",
+            "peak_stress_at": "TEXT",
+            "high_stress_event_count": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for column, definition in summary_migrations.items():
+            if column not in summary_columns:
+                db.execute(
+                    f"ALTER TABLE summaries ADD COLUMN {column} {definition}"
                 )
 
 
@@ -883,6 +935,11 @@ class RecoveryPreferencesIn(StrictModel):
 class BlinkSummaryIn(StrictModel):
     blink_count: int = Field(ge=0, le=2000)
     duration_seconds: int = Field(ge=10, le=3600)
+
+
+class MonitoringIntervalIn(StrictModel):
+    interval_value: int = Field(ge=1, le=86400)
+    interval_unit: Literal["seconds", "minutes", "hours"]
 
 
 class EmergencyContactIn(StrictModel):
@@ -1826,12 +1883,6 @@ def store_sensor_reading(
         **payload
     }
 
-    cloud_status = firestore_write(
-        ("users", user_id, "sensor_readings"),
-        reading_id,
-        stored
-    )
-
     if device_id != "manual-preview":
         device_record = firestore_read_document(("devices",), device_id)
         if device_record and str(device_record.get("user_id") or "") == user_id:
@@ -1852,6 +1903,32 @@ def store_sensor_reading(
             "stress_score": None
         }
 
+    stored["stress_score"] = prediction.get("stress_score")
+    stored["stress_probability"] = prediction.get("stress_probability")
+    stored["stress_status"] = prediction.get("status")
+
+    with db_connection() as db:
+        db.execute(
+            """
+            UPDATE sensor_readings
+            SET stress_score = ?, stress_probability = ?, stress_status = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                stored["stress_score"],
+                stored["stress_probability"],
+                stored["stress_status"],
+                reading_id,
+                user_id,
+            ),
+        )
+
+    cloud_status = firestore_write(
+        ("users", user_id, "sensor_readings"),
+        reading_id,
+        stored
+    )
+
     return {
         "reading": stored,
         "cloud_sync": cloud_status,
@@ -1860,7 +1937,7 @@ def store_sensor_reading(
 
 
 # ============================================================
-# 14. THREE-HOUR SUMMARY GENERATION
+# 14. USER-INTERVAL MONITORING SUMMARY GENERATION
 # ============================================================
 
 def average(
@@ -1881,12 +1958,11 @@ def average(
 
 
 def create_due_summaries() -> int:
-
+    """Create per-user monitoring summaries using each account's chosen interval."""
     created = 0
     now = utc_now()
 
     with db_connection() as db:
-
         users = db.execute(
             """
             SELECT DISTINCT user_id
@@ -1896,151 +1972,171 @@ def create_due_summaries() -> int:
         ).fetchall()
 
         for user_row in users:
-
             user_id = user_row["user_id"]
 
-            last = db.execute(
+            settings = db.execute(
                 """
-                SELECT MAX(period_end) AS end_time
-                FROM summaries
+                SELECT monitoring_interval_seconds
+                FROM user_settings
                 WHERE user_id = ?
                 """,
-                (user_id,)
+                (user_id,),
             ).fetchone()
 
-            if last["end_time"]:
+            interval_seconds = (
+                int(settings["monitoring_interval_seconds"])
+                if settings and settings["monitoring_interval_seconds"]
+                else DEFAULT_MONITORING_INTERVAL_SECONDS
+            )
+            interval_seconds = max(
+                MIN_MONITORING_INTERVAL_SECONDS,
+                min(MAX_MONITORING_INTERVAL_SECONDS, interval_seconds),
+            )
+            interval = timedelta(seconds=interval_seconds)
 
-                period_start = parse_iso(
-                    last["end_time"]
-                )
+            state = db.execute(
+                """
+                SELECT last_period_end
+                FROM monitoring_summary_state
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
 
+            if state and state["last_period_end"]:
+                period_start = parse_iso(state["last_period_end"])
             else:
-
-                first = db.execute(
+                last_summary = db.execute(
                     """
-                    SELECT MIN(timestamp) AS start_time
-                    FROM sensor_readings
+                    SELECT MAX(period_end) AS end_time
+                    FROM summaries
                     WHERE user_id = ?
-                    AND source = 'wearable'
                     """,
-                    (user_id,)
+                    (user_id,),
                 ).fetchone()
 
-                if not first["start_time"]:
-                    continue
-
-                period_start = parse_iso(
-                    first["start_time"]
-                )
+                if last_summary and last_summary["end_time"]:
+                    period_start = parse_iso(last_summary["end_time"])
+                else:
+                    first = db.execute(
+                        """
+                        SELECT MIN(timestamp) AS start_time
+                        FROM sensor_readings
+                        WHERE user_id = ? AND source = 'wearable'
+                        """,
+                        (user_id,),
+                    ).fetchone()
+                    if not first or not first["start_time"]:
+                        continue
+                    period_start = parse_iso(first["start_time"])
 
             windows = 0
-
-            while (
-                now - period_start
-                >= timedelta(hours=SUMMARY_HOURS)
-                and windows < 24
-            ):
-
-                period_end = period_start + timedelta(
-                    hours=SUMMARY_HOURS
-                )
+            while now - period_start >= interval and windows < MAX_SUMMARY_WINDOWS_PER_PASS:
+                period_end = period_start + interval
+                start_iso = iso(period_start)
+                end_iso = iso(period_end)
 
                 rows = db.execute(
                     """
                     SELECT *
                     FROM sensor_readings
                     WHERE user_id = ?
-                    AND source = 'wearable'
-                    AND timestamp >= ?
-                    AND timestamp < ?
+                      AND source = 'wearable'
+                      AND timestamp >= ?
+                      AND timestamp < ?
+                    ORDER BY timestamp ASC
                     """,
-                    (
-                        user_id,
-                        iso(period_start),
-                        iso(period_end)
-                    )
+                    (user_id, start_iso, end_iso),
                 ).fetchall()
 
                 if rows:
-
                     reliable = [
                         row for row in rows
-                        if row["signal_quality"]
-                        in ("good", "moderate")
+                        if row["signal_quality"] in ("good", "moderate")
                     ]
+                    stress_rows = [
+                        row for row in reliable
+                        if row["stress_score"] is not None
+                    ]
+                    peak_row = (
+                        max(stress_rows, key=lambda row: float(row["stress_score"]))
+                        if stress_rows else None
+                    )
+                    event_count = db.execute(
+                        """
+                        SELECT COUNT(*) AS total
+                        FROM high_stress_events
+                        WHERE user_id = ? AND occurred_at >= ? AND occurred_at < ?
+                        """,
+                        (user_id, start_iso, end_iso),
+                    ).fetchone()["total"]
 
                     summary = {
                         "summary_id": str(uuid.uuid4()),
                         "user_id": user_id,
-                        "period_start": iso(period_start),
-                        "period_end": iso(period_end),
+                        "period_start": start_iso,
+                        "period_end": end_iso,
+                        "interval_seconds": interval_seconds,
                         "reading_count": len(rows),
                         "reliable_reading_count": len(reliable),
-
-                        "avg_heart_rate": average(
-                            reliable, "heart_rate_bpm"
+                        "avg_heart_rate": average(reliable, "heart_rate_bpm"),
+                        "avg_hrv": average(reliable, "hrv_ms"),
+                        "avg_gsr": average(reliable, "gsr_raw"),
+                        "avg_skin_temperature": average(reliable, "skin_temperature_c"),
+                        "avg_stress_score": average(stress_rows, "stress_score"),
+                        "peak_stress_score": (
+                            round(float(peak_row["stress_score"]), 1)
+                            if peak_row else None
                         ),
-
-                        "avg_hrv": average(
-                            reliable, "hrv_ms"
-                        ),
-
-                        "avg_gsr": average(
-                            reliable, "gsr_raw"
-                        ),
-
-                        "avg_skin_temperature": average(
-                            reliable, "skin_temperature_c"
-                        ),
-
-                        "created_at": iso()
+                        "peak_stress_at": peak_row["timestamp"] if peak_row else None,
+                        "high_stress_event_count": int(event_count or 0),
+                        "created_at": iso(),
                     }
 
                     db.execute(
                         """
                         INSERT OR IGNORE INTO summaries (
-                            summary_id,
-                            user_id,
-                            period_start,
-                            period_end,
-                            reading_count,
-                            reliable_reading_count,
-                            avg_heart_rate,
-                            avg_hrv,
-                            avg_gsr,
-                            avg_skin_temperature,
-                            created_at
+                            summary_id, user_id, period_start, period_end,
+                            reading_count, reliable_reading_count,
+                            avg_heart_rate, avg_hrv, avg_gsr,
+                            avg_skin_temperature, avg_stress_score,
+                            peak_stress_score, peak_stress_at,
+                            high_stress_event_count, created_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            summary["summary_id"],
-                            user_id,
-                            summary["period_start"],
-                            summary["period_end"],
-                            summary["reading_count"],
-                            summary["reliable_reading_count"],
-                            summary["avg_heart_rate"],
-                            summary["avg_hrv"],
-                            summary["avg_gsr"],
-                            summary["avg_skin_temperature"],
-                            summary["created_at"]
-                        )
+                            summary["summary_id"], user_id,
+                            summary["period_start"], summary["period_end"],
+                            summary["reading_count"], summary["reliable_reading_count"],
+                            summary["avg_heart_rate"], summary["avg_hrv"],
+                            summary["avg_gsr"], summary["avg_skin_temperature"],
+                            summary["avg_stress_score"], summary["peak_stress_score"],
+                            summary["peak_stress_at"], summary["high_stress_event_count"],
+                            summary["created_at"],
+                        ),
                     )
-
                     firestore_write(
                         ("users", user_id, "summaries"),
                         summary["summary_id"],
-                        summary
+                        summary,
                     )
-
                     created += 1
 
                 period_start = period_end
                 windows += 1
 
-    return created
+            db.execute(
+                """
+                INSERT INTO monitoring_summary_state (user_id, last_period_end)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    last_period_end = excluded.last_period_end
+                """,
+                (user_id, iso(period_start)),
+            )
 
+    return created
 
 async def summary_scheduler():
 
@@ -2062,7 +2158,7 @@ async def summary_scheduler():
                 "Three-hour summary scheduler failed."
             )
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(1)
 
 
 # ============================================================
@@ -2822,6 +2918,9 @@ def get_settings(
             "music_mode": values.get("music_mode", "manual"),
             "warning_sound_enabled": bool(values.get("warning_sound_enabled", False)),
             "notifications_enabled": bool(values.get("notifications_enabled", False)),
+            "monitoring_interval_seconds": int(values.get("monitoring_interval_seconds", DEFAULT_MONITORING_INTERVAL_SECONDS)),
+            "monitoring_interval_value": int(values.get("monitoring_interval_value", 10)),
+            "monitoring_interval_unit": values.get("monitoring_interval_unit", "minutes"),
             "updated_at": values.get("updated_at"),
         }
 
@@ -2830,6 +2929,9 @@ def get_settings(
         "music_mode": row["music_mode"],
         "warning_sound_enabled": bool(row["warning_sound_enabled"]),
         "notifications_enabled": bool(row["notifications_enabled"]),
+        "monitoring_interval_seconds": int(row["monitoring_interval_seconds"]),
+        "monitoring_interval_value": int(row["monitoring_interval_value"]),
+        "monitoring_interval_unit": row["monitoring_interval_unit"],
         "updated_at": row["updated_at"],
     }
 
@@ -2872,6 +2974,9 @@ def set_haptic_setting(
             "music_mode": current_preferences.get("music_mode", "manual"),
             "warning_sound_enabled": current_preferences.get("warning_sound_enabled", False),
             "notifications_enabled": current_preferences.get("notifications_enabled", False),
+            "monitoring_interval_seconds": current_preferences.get("monitoring_interval_seconds", DEFAULT_MONITORING_INTERVAL_SECONDS),
+            "monitoring_interval_value": current_preferences.get("monitoring_interval_value", 10),
+            "monitoring_interval_unit": current_preferences.get("monitoring_interval_unit", "minutes"),
             "updated_at": iso()
         }
     )
@@ -3594,6 +3699,68 @@ def high_stress_events(
 
 
 
+@app.put("/api/settings/monitoring-interval")
+def set_monitoring_interval(
+    payload: MonitoringIntervalIn,
+    user_id: str = Depends(current_user_id),
+):
+    multipliers = {"seconds": 1, "minutes": 60, "hours": 3600}
+    interval_seconds = payload.interval_value * multipliers[payload.interval_unit]
+    if not (
+        MIN_MONITORING_INTERVAL_SECONDS
+        <= interval_seconds
+        <= MAX_MONITORING_INTERVAL_SECONDS
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Monitoring interval must be between 5 seconds and 24 hours.",
+        )
+
+    updated_at = iso()
+    with db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO user_settings (
+                user_id, monitoring_interval_seconds,
+                monitoring_interval_value, monitoring_interval_unit, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                monitoring_interval_seconds = excluded.monitoring_interval_seconds,
+                monitoring_interval_value = excluded.monitoring_interval_value,
+                monitoring_interval_unit = excluded.monitoring_interval_unit,
+                updated_at = excluded.updated_at
+            """,
+            (
+                user_id, interval_seconds, payload.interval_value,
+                payload.interval_unit, updated_at,
+            ),
+        )
+
+    preferences = get_settings(user_id)
+    cloud_sync = firestore_write(
+        ("users", user_id, "settings"),
+        "preferences",
+        {
+            "haptic_enabled": preferences["haptic_enabled"],
+            "music_mode": preferences["music_mode"],
+            "warning_sound_enabled": preferences["warning_sound_enabled"],
+            "notifications_enabled": preferences["notifications_enabled"],
+            "monitoring_interval_seconds": interval_seconds,
+            "monitoring_interval_value": payload.interval_value,
+            "monitoring_interval_unit": payload.interval_unit,
+            "updated_at": updated_at,
+        },
+    )
+    return {
+        "success": True,
+        "monitoring_interval_seconds": interval_seconds,
+        "monitoring_interval_value": payload.interval_value,
+        "monitoring_interval_unit": payload.interval_unit,
+        "cloud_sync": cloud_sync,
+    }
+
+
 @app.put("/api/settings/recovery")
 def set_recovery_preferences(
     payload: RecoveryPreferencesIn,
@@ -3627,6 +3794,9 @@ def set_recovery_preferences(
             "music_mode": payload.music_mode,
             "warning_sound_enabled": payload.warning_sound_enabled,
             "notifications_enabled": payload.notifications_enabled,
+            "monitoring_interval_seconds": get_settings(user_id).get("monitoring_interval_seconds", DEFAULT_MONITORING_INTERVAL_SECONDS),
+            "monitoring_interval_value": get_settings(user_id).get("monitoring_interval_value", 10),
+            "monitoring_interval_unit": get_settings(user_id).get("monitoring_interval_unit", "minutes"),
             "updated_at": updated_at,
         },
     )
