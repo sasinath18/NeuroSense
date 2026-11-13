@@ -1048,7 +1048,7 @@
 
         .face-scan-metrics {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 9px;
         }
 
@@ -3080,28 +3080,27 @@
 
                     <div class="card-header">
                         <div>
-                            <h3>Face-only Physiological Scan</h3>
-                            <p>Camera-based pulse estimation · no wearable required</p>
+                            <h3>Face Scan</h3>
+                            <p>Blink tracking · current stress estimate from your wearable model</p>
                         </div>
-                        <span id="faceRppgStatusBadge" class="badge" data-tone="neutral">Ready</span>
+                        <span id="faceRppgStatusBadge" class="badge" data-tone="neutral" style="display:none">Ready</span>
                     </div>
 
                     <div class="notice">
-                        Sit comfortably, face the camera and keep your head still.
-                        Use even lighting and avoid direct sunlight or strong backlighting.
-                        The scan collects 120 seconds of facial colour signals locally. Blink counting first calibrates to your open eyes; keep both eyes visible, avoid glare on glasses, and look towards the camera.
+                        Sit comfortably, face the camera and keep your head still. Use even lighting and keep both eyes visible.
+                        Blink count calibrates to your naturally open eyes. The stress score shown here comes from the existing wearable PPG + GSR model; it is not calculated from blink count or facial expression.
                     </div>
 
                     <div class="face-scan-metrics">
-                        <div class="face-scan-metric">
+                        <div class="face-scan-metric" style="display:none">
                             <span class="muted small">Camera-estimated pulse</span>
                             <strong id="facePulseValue">-- <small>BPM</small></strong>
                         </div>
-                        <div class="face-scan-metric">
+                        <div class="face-scan-metric" style="display:none">
                             <span class="muted small">Signal quality</span>
                             <strong id="faceSignalQuality">Not measured</strong>
                         </div>
-                        <div class="face-scan-metric">
+                        <div class="face-scan-metric" style="display:none">
                             <span class="muted small">Recording</span>
                             <strong id="faceScanElapsed">0 / 120 sec</strong>
                         </div>
@@ -3109,9 +3108,14 @@
                             <span class="muted small">Blink count</span>
                             <strong id="blinkCountValue">0</strong>
                         </div>
-                        <div class="face-scan-metric">
+                        <div class="face-scan-metric" style="display:none">
                             <span class="muted small">Blink rate</span>
                             <strong id="blinkRateValue">0 <small>/ min</small></strong>
+                        </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Stress score (wearable)</span>
+                            <strong id="faceScanStressValue">--</strong>
+                            <span id="faceScanStressStatus" class="muted small">Waiting for wearable data</span>
                         </div>
                     </div>
 
@@ -3123,7 +3127,7 @@
                         Blink tracking calibrates to your open-eye shape before counting. Keep both eyes visible and look at the camera.
                     </p>
 
-                    <div class="face-pulse-chart-wrap">
+                    <div class="face-pulse-chart-wrap" style="display:none">
                         <div class="card-header">
                             <div>
                                 <h3>Extracted pulse signal</h3>
@@ -3143,16 +3147,9 @@
                         </button>
                     </div>
 
-                    <p id="faceRppgMessage" class="muted small" role="status" aria-live="polite">
+                    <p id="faceRppgMessage" class="muted small" role="status" aria-live="polite" style="display:none">
                         Start the camera first, then begin the face-only scan. The camera can remain on for preview after analysis.
                     </p>
-
-                    <div class="notice face-stress-notice">
-                        <strong>Face-only stress estimate: Not available yet.</strong>
-                        Heart-rate extraction is the first stage. A separate face-only stress model
-                        must be trained and validated against reference measurements before a stress
-                        score can be shown. Facial expression alone is not used to infer stress.
-                    </div>
 
                     <div class="privacy-list" style="margin-top:14px">
                         <div class="privacy-item"><span class="check">✓</span><span>Face regions and rPPG signals are processed in this browser.</span></div>
@@ -4185,7 +4182,46 @@ function clearLiveSensorDisplay(message = "No authenticated wearable readings av
     }
 }
 
+function updateFaceScanStressCard(stress) {
+    const valueElement = $("faceScanStressValue");
+    if (!valueElement) return;
+
+    const statusElement = $("faceScanStressStatus");
+    const status = stress?.status || "waiting_for_data";
+    const score = stress?.stress_score;
+
+    if (
+        status === "prediction_available" &&
+        score !== null && score !== undefined &&
+        Number.isFinite(Number(score))
+    ) {
+        const numericScore = Math.max(0, Math.min(100, Number(score)));
+        const level = numericScore < 34
+            ? "Low estimate"
+            : numericScore < 67
+                ? "Moderate estimate"
+                : "High estimate";
+        valueElement.textContent = displayValue(numericScore, 1) + "%";
+        if (statusElement) statusElement.textContent = level + " · Experimental";
+        return;
+    }
+
+    const messages = {
+        waiting_for_wearable_data: "Waiting for wearable data",
+        waiting_for_data: "Waiting for wearable data",
+        baseline_required: "Personal baseline required",
+        poor_signal_quality: "Wearable signal quality is low",
+        model_not_available: "Stress model unavailable",
+        prediction_error: "Stress estimate unavailable"
+    };
+    valueElement.textContent = "--";
+    if (statusElement) {
+        statusElement.textContent = messages[status] || "Waiting for wearable data";
+    }
+}
+
 function applyStressResult(stress) {
+    updateFaceScanStressCard(stress);
     const score = stress?.stress_score;
     const status = stress?.status || "waiting_for_data";
     const ring = $("stressRing");
@@ -6647,7 +6683,7 @@ function updateFaceOnlyProgress() {
     $("faceScanElapsed").textContent =
         Math.floor(elapsed) + " / " + FACE_RPPG_DURATION_SECONDS + " sec";
     $("faceScanProgressText").textContent =
-        "Recording facial pulse signal · " + Math.floor(percentage) + "% complete";
+        "Tracking blink activity · " + Math.floor(percentage) + "% complete";
     const trackedSeconds = faceBlinkTrackedDurationMs / 1000;
     const rate = trackedSeconds > 0 ? faceBlinkCount * 60 / trackedSeconds : 0;
     $("blinkRateValue").innerHTML = trackedSeconds >= 10
@@ -6737,7 +6773,7 @@ function finishFaceOnlyScan() {
     $("startFaceOnlyScanBtn").disabled = false;
     $("stopFaceOnlyScanBtn").disabled = true;
     $("faceScanProgressBar").style.width = "100%";
-    $("faceScanProgressText").textContent = "120-second face-only scan completed.";
+    $("faceScanProgressText").textContent = "120-second Face Scan completed.";
 
     const result = estimateFacePulse(faceRppgSamples);
     displayFacePulseEstimate(result);
