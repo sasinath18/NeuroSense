@@ -5972,7 +5972,7 @@ const FACE_BLINK_MIN_CALIBRATION_SAMPLES = 24;
 const FACE_BLINK_CLOSE_RATIO = 0.78;
 const FACE_BLINK_REOPEN_RATIO = 0.88;
 const FACE_BLINK_MIN_CLOSED_MS = 35;
-const FACE_BLINK_MAX_CLOSED_MS = 450;
+const FACE_BLINK_MAX_CLOSED_MS = 1500;
 const FACE_BLINK_MIN_INTERVAL_MS = 180;
 const FACE_BLINK_MAX_FRAME_GAP_MS = 250;
 
@@ -6133,7 +6133,7 @@ function updateBlinkCounter(landmarks, now) {
             faceBlinkState = "open";
             faceBlinkClosedAt = 0;
         } else if (closedDuration > FACE_BLINK_MAX_CLOSED_MS) {
-            // A long eye closure is not counted as a normal blink.
+            // Ignore prolonged closures (over 1.5 seconds), but allow deliberate slow blinks.
             faceBlinkState = "held";
             faceBlinkClosedAt = 0;
         }
