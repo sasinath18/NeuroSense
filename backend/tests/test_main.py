@@ -2118,3 +2118,185 @@ def test_monitoring_interval_preferences_support_units_and_are_per_user(client):
         headers=user_a,
     )
     assert too_short.status_code == 422
+
+
+def test_emergency_contact_is_saved_and_reports_missing_twilio_configuration(
+    client,
+    monkeypatch,
+):
+    """WhatsApp contact preferences can be tested without Twilio or hardware."""
+    monkeypatch.setattr(api, "TWILIO_ACCOUNT_SID", "")
+    monkeypatch.setattr(api, "TWILIO_AUTH_TOKEN", "")
+    monkeypatch.setattr(api, "TWILIO_WHATSAPP_FROM", "")
+
+    user_id = "neurosense-whatsapp-save-test"
+    headers = {"X-Demo-User": user_id}
+    phone = "+15555550123"
+
+    saved = client.put(
+        "/api/emergency-contact",
+        json={"phone": phone, "enabled": True},
+        headers=headers,
+    )
+
+    assert saved.status_code == 200
+    assert saved.json()["success"] is True
+    assert saved.json()["phone"] == phone
+    assert saved.json()["enabled"] is True
+    assert saved.json()["whatsapp_configured"] is False
+
+    fetched = client.get("/api/emergency-contact", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["phone"] == phone
+    assert fetched.json()["enabled"] is True
+    assert fetched.json()["whatsapp_configured"] is False
+
+
+def test_whatsapp_test_endpoint_fails_clearly_without_twilio_credentials(
+    client,
+    monkeypatch,
+):
+    """The test-send API must not claim delivery when Twilio is not configured."""
+    monkeypatch.setattr(api, "TWILIO_ACCOUNT_SID", "")
+    monkeypatch.setattr(api, "TWILIO_AUTH_TOKEN", "")
+    monkeypatch.setattr(api, "TWILIO_WHATSAPP_FROM", "")
+
+    headers = {"X-Demo-User": "neurosense-whatsapp-unconfigured-test"}
+    saved = client.put(
+        "/api/emergency-contact",
+        json={"phone": "+15555550123", "enabled": True},
+        headers=headers,
+    )
+    assert saved.status_code == 200
+
+    response = client.post("/api/emergency-contact/test", headers=headers)
+
+    assert response.status_code == 503
+    assert "not configured" in response.json()["detail"].lower()
+
+
+def test_whatsapp_test_endpoint_sends_using_mocked_twilio_request(
+    client,
+    monkeypatch,
+):
+    """The test-send API can be validated without hardware or a real WhatsApp send."""
+    monkeypatch.setattr(api, "TWILIO_ACCOUNT_SID", "AC_TEST_ACCOUNT")
+    monkeypatch.setattr(api, "TWILIO_AUTH_TOKEN", "test-auth-token")
+    monkeypatch.setattr(api, "TWILIO_WHATSAPP_FROM", "whatsapp:+15550001111")
+
+    calls = []
+
+    class FakeTwilioResponse:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, *, data, auth, timeout):
+        calls.append({
+            "url": url,
+            "data": data,
+            "auth": auth,
+            "timeout": timeout,
+        })
+        return FakeTwilioResponse()
+
+    monkeypatch.setattr(api.requests, "post", fake_post)
+
+    headers = {"X-Demo-User": "neurosense-whatsapp-mock-send"}
+    saved = client.put(
+        "/api/emergency-contact",
+        json={"phone": "+15555550123", "enabled": True},
+        headers=headers,
+    )
+    assert saved.status_code == 200
+    assert saved.json()["whatsapp_configured"] is True
+
+    response = client.post("/api/emergency-contact/test", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"success": True, "status": "sent"}
+    assert len(calls) == 1
+    assert calls[0]["data"]["To"] == "whatsapp:+15555550123"
+    assert calls[0]["data"]["From"] == "whatsapp:+15550001111"
+    assert calls[0]["auth"] == ("AC_TEST_ACCOUNT", "test-auth-token")
+    assert "test message" in calls[0]["data"]["Body"].lower()
+
+
+def test_automatic_whatsapp_alert_waits_for_three_events_and_applies_cooldown(
+    client,
+    monkeypatch,
+):
+    """Repeated high-stress alert logic is tested with mocked delivery, no hardware."""
+    monkeypatch.setattr(api, "TWILIO_ACCOUNT_SID", "AC_TEST_ACCOUNT")
+    monkeypatch.setattr(api, "TWILIO_AUTH_TOKEN", "test-auth-token")
+    monkeypatch.setattr(api, "TWILIO_WHATSAPP_FROM", "whatsapp:+15550001111")
+
+    calls = []
+
+    class FakeTwilioResponse:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, *, data, auth, timeout):
+        calls.append(data)
+        return FakeTwilioResponse()
+
+    monkeypatch.setattr(api.requests, "post", fake_post)
+
+    user_id = "neurosense-whatsapp-repeat-test"
+    headers = {"X-Demo-User": user_id}
+    saved = client.put(
+        "/api/emergency-contact",
+        json={"phone": "+15555550123", "enabled": True},
+        headers=headers,
+    )
+    assert saved.status_code == 200
+
+    def add_high_stress_event(index):
+        occurred_at = (
+            datetime.now(timezone.utc) - timedelta(minutes=index)
+        ).isoformat()
+        reading_id = f"whatsapp-test-reading-{index}"
+        with api.db_connection() as db:
+            db.execute(
+                """
+                INSERT INTO sensor_readings (
+                    id, user_id, device_id, timestamp, received_at,
+                    heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                    signal_quality, source, stress_score,
+                    stress_probability, stress_status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    reading_id, user_id, "whatsapp-test-device",
+                    occurred_at, occurred_at, 92, 24, 2300, 33.5,
+                    "good", "wearable", 90, 0.9, "prediction_available",
+                ),
+            )
+            db.execute(
+                """
+                INSERT INTO high_stress_events (
+                    event_id, user_id, reading_id, stress_probability, occurred_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    f"whatsapp-test-event-{index}", user_id,
+                    reading_id, 0.9, occurred_at,
+                ),
+            )
+
+    add_high_stress_event(1)
+    add_high_stress_event(2)
+    waiting = api.maybe_send_whatsapp_alert(user_id, 0.9)
+    assert waiting == "awaiting_repeated_readings"
+    assert calls == []
+
+    add_high_stress_event(3)
+    sent = api.maybe_send_whatsapp_alert(user_id, 0.9)
+    assert sent == "sent"
+    assert len(calls) == 1
+
+    cooldown = api.maybe_send_whatsapp_alert(user_id, 0.9)
+    assert cooldown == "cooldown"
+    assert len(calls) == 1
