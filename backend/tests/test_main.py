@@ -2078,3 +2078,43 @@ def test_pending_haptic_command_restores_from_firestore_after_sqlite_reset(clien
     assert status.status_code == 200
     assert status.json()["status"] == "delivered"
 
+
+def test_monitoring_interval_preferences_support_units_and_are_per_user(client):
+    """Monitoring interval accepts seconds/minutes/hours and stays account-specific."""
+    user_a = {"X-Demo-User": "neurosense-monitor-interval-a"}
+    user_b = {"X-Demo-User": "neurosense-monitor-interval-b"}
+
+    initial = client.get("/api/settings", headers=user_a)
+    assert initial.status_code == 200
+    assert initial.json()["monitoring_interval_seconds"] == 600
+    assert initial.json()["monitoring_interval_value"] == 10
+    assert initial.json()["monitoring_interval_unit"] == "minutes"
+
+    saved_seconds = client.put(
+        "/api/settings/monitoring-interval",
+        json={"interval_value": 30, "interval_unit": "seconds"},
+        headers=user_a,
+    )
+    assert saved_seconds.status_code == 200
+    assert saved_seconds.json()["monitoring_interval_seconds"] == 30
+
+    saved_hours = client.put(
+        "/api/settings/monitoring-interval",
+        json={"interval_value": 2, "interval_unit": "hours"},
+        headers=user_a,
+    )
+    assert saved_hours.status_code == 200
+    assert saved_hours.json()["monitoring_interval_seconds"] == 7200
+
+    fetched_a = client.get("/api/settings", headers=user_a)
+    fetched_b = client.get("/api/settings", headers=user_b)
+    assert fetched_a.json()["monitoring_interval_value"] == 2
+    assert fetched_a.json()["monitoring_interval_unit"] == "hours"
+    assert fetched_b.json()["monitoring_interval_seconds"] == 600
+
+    too_short = client.put(
+        "/api/settings/monitoring-interval",
+        json={"interval_value": 2, "interval_unit": "seconds"},
+        headers=user_a,
+    )
+    assert too_short.status_code == 422
