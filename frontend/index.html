@@ -1984,7 +1984,32 @@
         }
         .monitoring-toolbar strong { font-size: 14px; }
         .monitoring-toolbar p { margin-top: 4px; }
-        .monitoring-range-control { display: grid; gap: 5px; width: min(190px, 100%); }
+        .monitoring-controls {
+            display: flex;
+            align-items: flex-end;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .monitoring-range-control { display: grid; gap: 5px; width: min(180px, 100%); }
+        .monitoring-interval-control { display: grid; gap: 5px; width: min(230px, 100%); }
+        .monitoring-interval-fields {
+            display: grid;
+            grid-template-columns: minmax(70px,.75fr) minmax(110px,1fr);
+            gap: 7px;
+        }
+        .monitoring-save-interval { min-height: 42px; white-space: nowrap; }
+        .monitoring-summary-list { display: grid; gap: 10px; }
+        .monitoring-summary-row {
+            display: grid;
+            gap: 5px;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface-2);
+        }
+        .monitoring-summary-row strong { font-size: 13px; }
+        .monitoring-summary-meta { color: var(--muted); font-size: 12px; line-height: 1.6; }
         .monitoring-metrics {
             display: grid;
             grid-template-columns: repeat(4, minmax(0,1fr));
@@ -2698,14 +2723,30 @@
                     <strong>Monitoring overview</strong>
                     <p class="muted small">All records are scoped to the signed-in Google UID.</p>
                 </div>
-                <label class="monitoring-range-control">
-                    <span class="muted small">Time range</span>
-                    <select id="monitorRangeSelect" class="form-control">
-                        <option value="1">Last 24 hours</option>
-                        <option value="7" selected>Last 7 days</option>
-                        <option value="30">Last 30 days</option>
-                    </select>
-                </label>
+                <div class="monitoring-controls">
+                    <label class="monitoring-range-control">
+                        <span class="muted small">Time range</span>
+                        <select id="monitorRangeSelect" class="form-control">
+                            <option value="1">Last 24 hours</option>
+                            <option value="7" selected>Last 7 days</option>
+                            <option value="30">Last 30 days</option>
+                        </select>
+                    </label>
+                    <div class="monitoring-interval-control">
+                        <label for="monitorIntervalValue" class="muted small">Monitoring interval</label>
+                        <div class="monitoring-interval-fields">
+                            <input id="monitorIntervalValue" class="form-control" type="number"
+                                   min="1" max="86400" step="1" value="10" inputmode="numeric"
+                                   aria-label="Monitoring interval value">
+                            <select id="monitorIntervalUnit" class="form-control" aria-label="Monitoring interval unit">
+                                <option value="seconds">Seconds</option>
+                                <option value="minutes" selected>Minutes</option>
+                                <option value="hours">Hours</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button id="saveMonitoringIntervalBtn" class="secondary-btn monitoring-save-interval" type="button">Save interval</button>
+                </div>
             </div>
 
             <div class="monitoring-metrics">
@@ -2730,6 +2771,19 @@
                     <p class="muted small">Saved blink summaries</p>
                 </article>
             </div>
+
+            <article class="card" style="margin-bottom:16px">
+                <div class="card-header">
+                    <div>
+                        <h3>Monitoring summaries</h3>
+                        <p>Continuous sensor analysis saved at your selected interval</p>
+                    </div>
+                    <span class="badge" id="monitorSummaryCountBadge">0 periods</span>
+                </div>
+                <div id="monitorSummaryList" class="monitoring-summary-list">
+                    <p class="muted small">Your completed monitoring intervals will appear here.</p>
+                </div>
+            </article>
 
             <div class="monitoring-grid">
                 <article class="card">
@@ -3678,8 +3732,11 @@ let lastStressNotificationReadingId = "";
 let monitoringDevices = [];
 let monitoringEvents = [];
 let monitoringBlinkSummaries = [];
+let monitoringSummaries = [];
 let personalMonitoringProfile = null;
 let monitoringRangeDays = 7;
+let monitoringIntervalValue = 10;
+let monitoringIntervalUnit = "minutes";
 
 function hapticPendingStorageKey() {
     const owner = firebaseCurrentUser?.uid ||
@@ -4235,9 +4292,21 @@ function renderRecoveryComparison(comparison) {
 }
 
 
+function updateMonitoringIntervalControls() {
+    const value = $("monitorIntervalValue");
+    const unit = $("monitorIntervalUnit");
+    if (value) value.value = String(monitoringIntervalValue);
+    if (unit) unit.value = monitoringIntervalUnit;
+}
+
 function applyDashboardData(overview, history, settings, recovery) {
     dashboardOverview = overview || null;
     if (settings) {
+        monitoringIntervalValue = Number(settings.monitoring_interval_value) || 10;
+        monitoringIntervalUnit = ["seconds", "minutes", "hours"].includes(settings.monitoring_interval_unit)
+            ? settings.monitoring_interval_unit
+            : "minutes";
+        updateMonitoringIntervalControls();
         musicMode = settings.music_mode === "automatic" ? "automatic" : "manual";
         warningSoundEnabled = Boolean(settings.warning_sound_enabled);
         browserNotificationsEnabled = Boolean(settings.notifications_enabled);
@@ -4597,9 +4666,56 @@ function drawIndividualMonitoringCharts() {
     setText("monitorBlinkBadge", blinkItems.length ? blinkItems.length + " scans" : "No data");
 }
 
+function renderMonitoringSummaries() {
+    const container = $("monitorSummaryList");
+    if (!container) return;
+    container.replaceChildren();
+    const summaries = [...monitoringSummaries]
+        .sort((a, b) => new Date(b.period_end || 0) - new Date(a.period_end || 0))
+        .slice(0, 12);
+    setText("monitorSummaryCountBadge", summaries.length + " periods");
+
+    if (!summaries.length) {
+        const empty = document.createElement("p");
+        empty.className = "muted small";
+        empty.textContent = "No completed monitoring intervals yet. Keep the wearable connected until the first interval finishes.";
+        container.appendChild(empty);
+        return;
+    }
+
+    summaries.forEach(summary => {
+        const card = document.createElement("div");
+        card.className = "monitoring-summary-row";
+
+        const heading = document.createElement("strong");
+        heading.textContent =
+            formatReadingTime(summary.period_start) + " – " +
+            formatReadingTime(summary.period_end);
+        card.appendChild(heading);
+
+        const details = document.createElement("div");
+        details.className = "monitoring-summary-meta";
+        const averageStress = summary.avg_stress_score == null
+            ? "No reliable stress estimate"
+            : "Average stress " + displayValue(summary.avg_stress_score, 1) + "%";
+        const peakStress = summary.peak_stress_score == null
+            ? "Peak stress unavailable"
+            : "Peak stress " + displayValue(summary.peak_stress_score, 1) + "% at " +
+                formatReadingTime(summary.peak_stress_at);
+        const events = Number(summary.high_stress_event_count || 0);
+        details.textContent = averageStress + " · " + peakStress + " · " +
+            events + " elevated event(s) · " +
+            (summary.reliable_reading_count || 0) + "/" +
+            (summary.reading_count || 0) + " reliable readings";
+        card.appendChild(details);
+        container.appendChild(card);
+    });
+}
+
 function renderIndividualMonitoring() {
     if (!$("page-monitoring")) return;
     updateMonitoringIdentity();
+    renderMonitoringSummaries();
     const readings = getMonitoringReadings();
     const stressCount = monitoringCountSince(monitoringEvents, "occurred_at");
     const recoveryCount = monitoringCountSince(apiRecoveryHistory, "completedAt");
@@ -4641,16 +4757,27 @@ function renderBaselineStatus(payload) {
     $("baselineCalibratedAt").textContent = base?.calibrated_at ? "Last calibrated: "+formatReadingTime(base.calibrated_at) : "No calibration recorded.";
 }
 
-function renderAnalyticsRecords(summaryPayload,eventPayload) {
-    const summaries=Array.isArray(summaryPayload?.summaries)?summaryPayload.summaries:[];
-    const events=Array.isArray(eventPayload?.events)?eventPayload.events:[];
-    $("summaryCountBadge").textContent=summaries.length+" periods"; $("highStressCountBadge").textContent=events.length+" events";
-    const sl=$("summaryList"); sl.replaceChildren();
-    if (!summaries.length) { const li=document.createElement("li"); li.textContent="No completed three-hour periods yet."; sl.appendChild(li); }
-    summaries.forEach(x=>{ const li=document.createElement("li"); li.textContent=(x.period_end?formatReadingTime(x.period_end):"Unknown time")+" · "+(x.reliable_reading_count||0)+"/"+(x.reading_count||0)+" reliable readings · HR "+(x.avg_heart_rate==null?"--":displayValue(x.avg_heart_rate))+" BPM · HRV "+(x.avg_hrv==null?"--":displayValue(x.avg_hrv,1))+" ms"; sl.appendChild(li); });
-    const el=$("highStressEventList"); el.replaceChildren();
-    if (!events.length) { const li=document.createElement("li"); li.textContent="No high-stress events recorded."; el.appendChild(li); }
-    events.forEach(x=>{ const li=document.createElement("li"); const p=Number(x.stress_probability); li.textContent=(x.occurred_at?formatReadingTime(x.occurred_at):"Unknown time")+" · "+(Number.isFinite(p)?Math.round(p*100)+"% model probability":"Probability unavailable"); el.appendChild(li); });
+function renderAnalyticsRecords(summaryPayload, eventPayload) {
+    const events = Array.isArray(eventPayload?.events) ? eventPayload.events : [];
+    $("highStressCountBadge").textContent = events.length + " events";
+    const el = $("highStressEventList");
+    el.replaceChildren();
+    if (!events.length) {
+        const li = document.createElement("li");
+        li.textContent = "No high-stress events recorded.";
+        el.appendChild(li);
+    }
+    events.forEach(item => {
+        const li = document.createElement("li");
+        const probability = Number(item.stress_probability);
+        li.textContent =
+            (item.occurred_at ? formatReadingTime(item.occurred_at) : "Unknown time") +
+            " · " +
+            (Number.isFinite(probability)
+                ? Math.round(probability * 100) + "% model probability"
+                : "Probability unavailable");
+        el.appendChild(li);
+    });
 }
 
 $("calibrateBaselineBtn").addEventListener("click",async()=>{
@@ -4730,6 +4857,7 @@ async function refreshBackendData() {
         const [overview, history, settings, recovery, devices, baseline, summaries, events, blinkHistory] =
             results.map(result => result.value);
 
+        monitoringSummaries = Array.isArray(summaries?.summaries) ? summaries.summaries : [];
         applyDashboardData(overview, history, settings, recovery);
         renderDeviceManagement(devices);
         renderBaselineStatus(baseline);
@@ -5013,6 +5141,48 @@ $("sidebarBackdrop").addEventListener("click", () => setSidebarOpen(false));
 $("monitorRangeSelect").addEventListener("change", event => {
     monitoringRangeDays = Number(event.target.value) || 7;
     renderIndividualMonitoring();
+});
+
+$("saveMonitoringIntervalBtn").addEventListener("click", async () => {
+    const button = $("saveMonitoringIntervalBtn");
+    const value = Number($("monitorIntervalValue").value);
+    const unit = $("monitorIntervalUnit").value;
+    const multiplier = { seconds: 1, minutes: 60, hours: 3600 }[unit];
+    const seconds = value * multiplier;
+
+    if (!Number.isInteger(value) || value < 1 || !Number.isFinite(seconds) ||
+        seconds < 5 || seconds > 86400) {
+        showToast("Choose an interval between 5 seconds and 24 hours.");
+        return;
+    }
+    if (!hasPrivateApiAccess()) {
+        showToast("Sign in with Google before saving your monitoring interval.");
+        return;
+    }
+
+    button.disabled = true;
+    button.textContent = "Saving...";
+    try {
+        const result = await apiRequest("/api/settings/monitoring-interval", {
+            method: "PUT",
+            body: JSON.stringify({
+                interval_value: value,
+                interval_unit: unit
+            })
+        });
+        monitoringIntervalValue = Number(result.monitoring_interval_value);
+        monitoringIntervalUnit = result.monitoring_interval_unit;
+        updateMonitoringIntervalControls();
+        showToast(result.cloud_sync === "synced"
+            ? "Monitoring interval saved to your account."
+            : "Monitoring interval saved for this server session; cloud backup is not confirmed.");
+        await refreshBackendData();
+    } catch (error) {
+        showToast("Could not save monitoring interval: " + error.message);
+    } finally {
+        button.disabled = false;
+        button.textContent = "Save interval";
+    }
 });
 
 $("monitorRefreshBtn").addEventListener("click", async () => {
