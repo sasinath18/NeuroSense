@@ -25,6 +25,7 @@ import secrets
 import sqlite3
 import uuid
 import re
+import urllib.request
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -89,6 +90,12 @@ MAX_MUSIC_TRACKS_PER_USER = 10
 ALLOWED_MUSIC_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".webm"}
 
 FIREBASE_WEB_VAPID_KEY = os.getenv("FIREBASE_WEB_VAPID_KEY", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+NEUROSENSE_PUBLIC_URL = os.getenv(
+    "NEUROSENSE_PUBLIC_URL",
+    os.getenv("RENDER_EXTERNAL_URL", "https://neurosense-app.onrender.com")
+).strip().rstrip("/")
 MAX_EMERGENCY_CONTACTS = 10
 MAX_DEVICES_PER_EMERGENCY_CONTACT = 3
 EMERGENCY_INVITE_TTL_DAYS = 7
@@ -339,6 +346,40 @@ def initialize_database() -> None:
         ON emergency_push_devices(user_id, active);
 
         CREATE TABLE IF NOT EXISTS emergency_push_alert_state (
+            user_id TEXT PRIMARY KEY,
+            last_alert_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS telegram_emergency_invites (
+            invite_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            contact_name TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            revoked_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_telegram_emergency_invites_user
+        ON telegram_emergency_invites(user_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS telegram_emergency_contacts (
+            contact_id TEXT PRIMARY KEY,
+            invite_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            chat_id TEXT NOT NULL UNIQUE,
+            telegram_user_id TEXT,
+            username TEXT,
+            first_name TEXT,
+            created_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY(invite_id) REFERENCES telegram_emergency_invites(invite_id)
+                ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_telegram_emergency_contacts_user
+        ON telegram_emergency_contacts(user_id, active);
+
+        CREATE TABLE IF NOT EXISTS telegram_emergency_alert_state (
             user_id TEXT PRIMARY KEY,
             last_alert_at TEXT NOT NULL
         );
@@ -763,8 +804,99 @@ def firestore_read_collection(
 
 
 # ============================================================
-# 7A. OPTIONAL CLOUD MUSIC AND FIREBASE PUSH HELPERS
+# 7A. TELEGRAM ALERTS AND OPTIONAL CLOUD MUSIC
 # ============================================================
+
+def telegram_configured() -> bool:
+    return bool(TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_USERNAME)
+
+
+def telegram_webhook_secret() -> str:
+    """Derive a stable webhook secret without storing another credential."""
+    return hashlib.sha256(
+        ("neurosense-telegram-webhook:" + TELEGRAM_BOT_TOKEN).encode("utf-8")
+    ).hexdigest()
+
+
+def telegram_api_call(method: str, payload: dict) -> dict:
+    """Call Telegram Bot API without logging or exposing the bot token."""
+    if not TELEGRAM_BOT_TOKEN:
+        return {"ok": False, "description": "Telegram bot token is not configured."}
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if not result.get("ok"):
+            logger.warning(
+                "Telegram Bot API %s returned an error: %s",
+                method,
+                result.get("description", "unknown error"),
+            )
+        return result
+    except Exception as error:
+        logger.error("Telegram Bot API %s request failed: %s", method, type(error).__name__)
+        return {"ok": False, "description": "Telegram API request failed."}
+
+
+def configure_telegram_webhook() -> bool:
+    """Register Telegram's HTTPS webhook on Render at application startup."""
+    if not telegram_configured():
+        logger.info("Telegram alerts are not configured; skipping webhook setup.")
+        return False
+
+    result = telegram_api_call(
+        "setWebhook",
+        {
+            "url": NEUROSENSE_PUBLIC_URL + "/api/telegram/webhook",
+            "secret_token": telegram_webhook_secret(),
+            "allowed_updates": ["message"],
+            "drop_pending_updates": False,
+            "max_connections": 5,
+        },
+    )
+    if result.get("ok"):
+        logger.info("Telegram emergency-alert webhook configured.")
+        return True
+    logger.error("Telegram webhook setup failed.")
+    return False
+
+
+def send_telegram_message(chat_id: str | int, text: str) -> bool:
+    result = telegram_api_call(
+        "sendMessage",
+        {"chat_id": str(chat_id), "text": text[:4000], "disable_web_page_preview": True},
+    )
+    return bool(result.get("ok"))
+
+
+def send_user_telegram_alert(user_id: str, title: str, body: str) -> tuple[str, int]:
+    if not telegram_configured():
+        return "not_configured", 0
+    with db_connection() as db:
+        rows = db.execute(
+            """
+            SELECT chat_id
+            FROM telegram_emergency_contacts
+            WHERE user_id = ? AND active = 1
+            ORDER BY created_at
+            """,
+            (user_id,),
+        ).fetchall()
+    chat_ids = [str(row["chat_id"]) for row in rows]
+    if not chat_ids:
+        return "no_registered_contacts", 0
+
+    message = f"{title}\n\n{body}"
+    sent_count = sum(1 for chat_id in chat_ids if send_telegram_message(chat_id, message))
+    return ("sent", sent_count) if sent_count else ("failed", 0)
+
 
 def configured_music_bucket():
     if FIREBASE_APP is None or not FIREBASE_STORAGE_BUCKET:
@@ -819,6 +951,51 @@ def send_emergency_push_message(fids: list[str], title: str, body: str) -> tuple
     except Exception:
         logger.exception("FCM emergency push delivery failed.")
         return "failed", 0
+
+
+def maybe_send_emergency_telegram_alert(user_id: str, probability: float) -> str:
+    """Send a Telegram check-in after three elevated readings within 30 minutes; six-hour cooldown."""
+    if probability < HIGH_STRESS_THRESHOLD:
+        return "not_triggered"
+
+    now = utc_now()
+    now_text = iso(now)
+    with db_connection() as db:
+        recent = db.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM high_stress_events
+            WHERE user_id = ? AND occurred_at >= ?
+            """,
+            (user_id, iso(now - timedelta(minutes=30))),
+        ).fetchone()["total"]
+        if int(recent) < 3:
+            return "awaiting_repeated_readings"
+
+        alert_state = db.execute(
+            "SELECT last_alert_at FROM telegram_emergency_alert_state WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if alert_state and now - parse_iso(alert_state["last_alert_at"]) < timedelta(hours=6):
+            return "cooldown"
+
+    delivery, sent_count = send_user_telegram_alert(
+        user_id,
+        "NeuroSense wellness check-in",
+        "Repeated elevated stress-related readings were recorded. Please check in with the NeuroSense user. "
+        "This is an experimental wellness alert, not a medical diagnosis or emergency service.",
+    )
+    if delivery == "sent" and sent_count:
+        with db_connection() as db:
+            db.execute(
+                """
+                INSERT INTO telegram_emergency_alert_state (user_id, last_alert_at)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET last_alert_at = excluded.last_alert_at
+                """,
+                (user_id, now_text),
+            )
+    return delivery
 
 
 def maybe_send_emergency_push_alert(user_id: str, probability: float) -> str:
@@ -1012,6 +1189,10 @@ class BlinkSummaryIn(StrictModel):
 class MonitoringIntervalIn(StrictModel):
     interval_value: int = Field(ge=1, le=86400)
     interval_unit: Literal["seconds", "minutes", "hours"]
+
+
+class TelegramEmergencyInviteIn(StrictModel):
+    contact_name: str = Field(min_length=2, max_length=60)
 
 
 class EmergencyPushInviteIn(StrictModel):
@@ -1862,7 +2043,7 @@ def predict_stress(
                     }
                 )
 
-                result["push_alert"] = maybe_send_emergency_push_alert(
+                result["telegram_alert"] = maybe_send_emergency_telegram_alert(
                     user_id, probability
                 )
 
@@ -2272,6 +2453,7 @@ async def lifespan(app: FastAPI):
     initialize_database()
     initialize_firebase()
     initialize_ml_model()
+    configure_telegram_webhook()
 
     task = asyncio.create_task(
         summary_scheduler()
@@ -2443,6 +2625,8 @@ def public_config():
         "firebase_sign_in_ready": web_ready and admin_ready,
         "firebase_push_configured": firebase_push_configured(),
         "firebase_vapid_key": FIREBASE_WEB_VAPID_KEY or None,
+        "telegram_alerts_configured": telegram_configured(),
+        "telegram_bot_username": TELEGRAM_BOT_USERNAME or None,
         "firebase": (
             dict(FIREBASE_WEB_CONFIG)
             if web_ready and admin_ready
@@ -4399,6 +4583,262 @@ def blink_history(
         reverse=True,
     )[:limit]
     return {"total": len(summaries), "summaries": summaries}
+
+
+@app.get("/api/telegram-contacts")
+def list_telegram_emergency_contacts(user_id: str = Depends(current_user_id)):
+    with db_connection() as db:
+        rows = db.execute(
+            """
+            SELECT i.invite_id, i.contact_name, i.created_at, i.expires_at,
+                   c.username, c.first_name, c.active AS contact_active,
+                   c.last_seen_at
+            FROM telegram_emergency_invites i
+            LEFT JOIN telegram_emergency_contacts c
+                ON c.invite_id = i.invite_id AND c.user_id = i.user_id
+            WHERE i.user_id = ? AND i.revoked_at IS NULL
+            ORDER BY i.created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+
+    now = utc_now()
+    contacts = []
+    for row in rows:
+        if row["contact_active"] == 1:
+            state = "connected"
+        elif row["contact_active"] == 0:
+            state = "stopped"
+        else:
+            state = "expired" if parse_iso(row["expires_at"]) <= now else "pending"
+        contacts.append({
+            "id": row["invite_id"],
+            "contact_name": row["contact_name"],
+            "username": row["username"],
+            "first_name": row["first_name"],
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "last_seen_at": row["last_seen_at"],
+            "status": state,
+        })
+    return {
+        "contacts": contacts,
+        "telegram_configured": telegram_configured(),
+        "bot_username": TELEGRAM_BOT_USERNAME or None,
+    }
+
+
+@app.post("/api/telegram-contacts/invites")
+def create_telegram_emergency_invite(
+    payload: TelegramEmergencyInviteIn,
+    user_id: str = Depends(current_user_id),
+):
+    if not telegram_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram bot is not configured. Add TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_USERNAME in Render Environment.",
+        )
+
+    contact_name = payload.contact_name.strip()
+    if len(contact_name) < 2:
+        raise HTTPException(status_code=422, detail="Enter a contact name with at least 2 characters.")
+
+    now = utc_now()
+    expires_at = now + timedelta(days=EMERGENCY_INVITE_TTL_DAYS)
+    invite_token = secrets.token_urlsafe(24)
+    invite_id = uuid.uuid4().hex
+    with db_connection() as db:
+        active_count = db.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM telegram_emergency_invites
+            WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+            """,
+            (user_id, iso(now)),
+        ).fetchone()["total"]
+        if int(active_count) >= MAX_EMERGENCY_CONTACTS:
+            raise HTTPException(status_code=429, detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active Telegram contacts.")
+
+        db.execute(
+            """
+            INSERT INTO telegram_emergency_invites (
+                invite_id, user_id, contact_name, token_hash, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (invite_id, user_id, contact_name, token_digest(invite_token), iso(now), iso(expires_at)),
+        )
+
+    invite_url = f"https://t.me/{TELEGRAM_BOT_USERNAME}?start={invite_token}"
+    return {
+        "success": True,
+        "id": invite_id,
+        "contact_name": contact_name,
+        "invite_url": invite_url,
+        "expires_at": iso(expires_at),
+    }
+
+
+@app.delete("/api/telegram-contacts/{invite_id}")
+def revoke_telegram_emergency_contact(invite_id: str, user_id: str = Depends(current_user_id)):
+    with db_connection() as db:
+        deleted = db.execute(
+            "DELETE FROM telegram_emergency_invites WHERE invite_id = ? AND user_id = ?",
+            (invite_id, user_id),
+        )
+        if deleted.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Telegram emergency contact was not found.")
+    return {"success": True}
+
+
+@app.post("/api/telegram-contacts/test")
+def test_telegram_emergency_contact(user_id: str = Depends(current_user_id)):
+    if not telegram_configured():
+        raise HTTPException(status_code=503, detail="Telegram bot is not configured on the server.")
+    with db_connection() as db:
+        rows = db.execute(
+            """
+            SELECT chat_id
+            FROM telegram_emergency_contacts
+            WHERE user_id = ? AND active = 1
+            """,
+            (user_id,),
+        ).fetchall()
+    chat_ids = [str(row["chat_id"]) for row in rows]
+    if not chat_ids:
+        raise HTTPException(status_code=409, detail="No Telegram contact has started the bot from an active invitation yet.")
+
+    message = (
+        "NeuroSense test alert\n\n"
+        "Telegram alerts are connected. This is a test, not an emergency alert."
+    )
+    sent_count = sum(1 for chat_id in chat_ids if send_telegram_message(chat_id, message))
+    if not sent_count:
+        raise HTTPException(status_code=502, detail="Telegram could not deliver the test message to any registered contact.")
+    return {"success": True, "status": "sent", "recipient_count": sent_count}
+
+
+@app.post("/api/telegram/webhook")
+def telegram_webhook(
+    update: dict,
+    x_telegram_bot_api_secret_token: Annotated[
+        str | None, Header(alias="X-Telegram-Bot-Api-Secret-Token")
+    ] = None,
+):
+    expected_secret = telegram_webhook_secret()
+    if not TELEGRAM_BOT_TOKEN or not x_telegram_bot_api_secret_token or not secrets.compare_digest(
+        x_telegram_bot_api_secret_token, expected_secret
+    ):
+        raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret.")
+
+    message = update.get("message") or {}
+    chat = message.get("chat") or {}
+    sender = message.get("from") or {}
+    chat_type = chat.get("type")
+    chat_id = chat.get("id")
+    text_value = str(message.get("text") or "").strip()
+    if chat_type != "private" or chat_id is None or not text_value:
+        return {"ok": True}
+
+    parts = text_value.split(maxsplit=1)
+    command = parts[0].split("@", 1)[0].lower()
+    argument = parts[1].strip() if len(parts) > 1 else ""
+
+    if command == "/stop":
+        with db_connection() as db:
+            db.execute(
+                "UPDATE telegram_emergency_contacts SET active = 0 WHERE chat_id = ?",
+                (str(chat_id),),
+            )
+        send_telegram_message(chat_id, "NeuroSense alerts stopped. Your Telegram chat is no longer receiving alerts.")
+        return {"ok": True}
+
+    if command != "/start":
+        return {"ok": True}
+
+    if not argument:
+        send_telegram_message(
+            chat_id,
+            "To connect this Telegram account, open the personal invitation link shared by your NeuroSense contact and press Start.",
+        )
+        return {"ok": True}
+
+    now = utc_now()
+    now_text = iso(now)
+    with db_connection() as db:
+        invite = db.execute(
+            """
+            SELECT invite_id, user_id, contact_name, expires_at
+            FROM telegram_emergency_invites
+            WHERE token_hash = ? AND revoked_at IS NULL
+            """,
+            (token_digest(argument),),
+        ).fetchone()
+
+        if invite is None:
+            send_telegram_message(chat_id, "This NeuroSense invitation is invalid or has been revoked. Ask the NeuroSense user for a new link.")
+            return {"ok": True}
+        if parse_iso(invite["expires_at"]) <= now:
+            send_telegram_message(chat_id, "This NeuroSense invitation has expired. Ask the NeuroSense user to create a new Telegram link.")
+            return {"ok": True}
+
+        existing = db.execute(
+            "SELECT invite_id, user_id FROM telegram_emergency_contacts WHERE chat_id = ?",
+            (str(chat_id),),
+        ).fetchone()
+        if existing and (existing["invite_id"] != invite["invite_id"] or existing["user_id"] != invite["user_id"]):
+            send_telegram_message(chat_id, "This Telegram account is already linked to another NeuroSense contact. Ask the owner to remove the previous link first.")
+            return {"ok": True}
+
+        if existing is None:
+            contact_count = db.execute(
+                "SELECT COUNT(*) AS total FROM telegram_emergency_contacts WHERE user_id = ? AND active = 1",
+                (invite["user_id"],),
+            ).fetchone()["total"]
+            if int(contact_count) >= MAX_EMERGENCY_CONTACTS:
+                send_telegram_message(chat_id, "This NeuroSense account has reached its Telegram contact limit.")
+                return {"ok": True}
+
+            db.execute(
+                """
+                INSERT INTO telegram_emergency_contacts (
+                    contact_id, invite_id, user_id, chat_id, telegram_user_id,
+                    username, first_name, created_at, last_seen_at, active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    invite["invite_id"],
+                    invite["user_id"],
+                    str(chat_id),
+                    str(sender.get("id")) if sender.get("id") is not None else None,
+                    str(sender.get("username") or "")[:64] or None,
+                    str(sender.get("first_name") or "")[:120] or None,
+                    now_text,
+                    now_text,
+                ),
+            )
+        else:
+            db.execute(
+                """
+                UPDATE telegram_emergency_contacts
+                SET telegram_user_id = ?, username = ?, first_name = ?,
+                    last_seen_at = ?, active = 1
+                WHERE chat_id = ?
+                """,
+                (
+                    str(sender.get("id")) if sender.get("id") is not None else None,
+                    str(sender.get("username") or "")[:64] or None,
+                    str(sender.get("first_name") or "")[:120] or None,
+                    now_text,
+                    str(chat_id),
+                ),
+            )
+
+    send_telegram_message(
+        chat_id,
+        f"Connected to NeuroSense alerts for {invite['contact_name']}. You will receive experimental wellness check-in alerts here. Send /stop anytime to disconnect.",
+    )
+    return {"ok": True}
 
 
 @app.get("/api/emergency-contacts")
