@@ -3576,22 +3576,23 @@
                 </article>
 
                 <article class="card">
-                    <div class="card-header"><div><h3>WhatsApp Emergency Contact</h3><p>Optional check-in alert after repeated elevated readings</p></div></div>
+                    <div class="card-header"><div><h3>Push Emergency Contacts</h3><p>Invite family or trusted contacts to receive browser notifications</p></div></div>
                     <div class="field">
-                        <label for="emergencyPhoneInput">Contact phone · international format</label>
-                        <input id="emergencyPhoneInput" class="form-control" type="tel" placeholder="+919876543210" maxlength="16">
-                    </div>
-                    <div class="toggle-row">
-                        <div class="toggle-copy"><strong>Enable WhatsApp alerts</strong><p>Requires your consent and server-side Twilio configuration.</p></div>
-                        <label class="switch"><input type="checkbox" id="whatsappAlertToggle"><span class="switch-track"></span></label>
+                        <label for="pushContactNameInput">Contact name</label>
+                        <input id="pushContactNameInput" class="form-control" type="text" placeholder="e.g. Parent" maxlength="60">
                     </div>
                     <div class="breath-controls">
-                        <button id="saveEmergencyContactBtn" class="secondary-btn" type="button">Save contact</button>
-                        <button id="testWhatsAppBtn" class="secondary-btn" type="button" disabled>Send test message</button>
+                        <button id="createPushInviteBtn" class="secondary-btn" type="button">Create invite link</button>
+                        <button id="testPushNotificationBtn" class="secondary-btn" type="button" disabled>Send test notification</button>
                     </div>
-                    <p id="whatsappStatusText" class="muted small" role="status" aria-live="polite">WhatsApp delivery requires Twilio credentials on the server.</p>
-                    <a id="whatsappSetupLink" class="small" href="https://dashboard.render.com/web/srv-dbo4uarrjlhs73ae4p8g/env" target="_blank" rel="noopener noreferrer">Open Render environment settings</a>
-                    <div class="notice" style="margin-top:12px">Automatic alerts require three elevated model readings within 30 minutes and use a six-hour cooldown. This is not an emergency service or medical diagnosis.</div>
+                    <div id="pushInviteResult" class="notice hidden" style="margin-top:12px">
+                        <label for="pushInviteLink" class="small">Share this link with your contact (valid for 7 days)</label>
+                        <input id="pushInviteLink" class="form-control" type="url" readonly>
+                        <button id="copyPushInviteLinkBtn" class="secondary-btn" type="button" style="margin-top:9px">Copy invite link</button>
+                    </div>
+                    <p id="pushContactStatus" class="muted small" role="status" aria-live="polite" style="margin-top:12px">Invite a contact; they must open the link and allow browser notifications.</p>
+                    <div id="pushContactsList" style="display:grid;gap:10px;margin-top:14px"><p class="muted small">No emergency contacts invited yet.</p></div>
+                    <div class="notice" style="margin-top:12px">Automatic alerts require three elevated model readings within 30 minutes and use a six-hour cooldown. Push delivery depends on browser support, permission and internet access. This is not an emergency service or medical diagnosis.</div>
                 </article>
 
 
@@ -4430,31 +4431,67 @@ function applyDashboardData(overview, history, settings, recovery) {
     drawAllCharts();
 }
 
-function updateWhatsAppReadiness(contact) {
-    const configured = Boolean(contact?.whatsapp_configured);
-    const enabled = Boolean(contact?.enabled);
-    const phoneSaved = Boolean(contact?.phone);
-    const testButton = $("testWhatsAppBtn");
-    const setupLink = $("whatsappSetupLink");
+function renderEmergencyPushContacts(contacts) {
+    const container = $("pushContactsList");
+    const testButton = $("testPushNotificationBtn");
+    if (!container) return;
+    container.replaceChildren();
+    const connectedCount = contacts.filter(item => item.status === "connected").length;
+    if (testButton) testButton.disabled = connectedCount === 0;
+    if (!contacts.length) {
+        const empty = document.createElement("p");
+        empty.className = "muted small";
+        empty.textContent = "No emergency contacts invited yet.";
+        container.appendChild(empty);
+        return;
+    }
+    contacts.forEach(contact => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)";
+        const details = document.createElement("div");
+        details.style.minWidth = "0";
+        const name = document.createElement("strong");
+        name.textContent = contact.contact_name;
+        const state = document.createElement("p");
+        state.className = "muted small";
+        state.style.marginTop = "4px";
+        state.textContent = contact.status === "connected"
+            ? "Connected · " + contact.device_count + " device(s)"
+            : contact.status === "expired"
+                ? "Invitation expired · create a new link"
+                : "Invitation pending · waiting for contact";
+        details.append(name, state);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "danger-btn";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", async () => {
+            if (!window.confirm("Remove " + contact.contact_name + " from emergency notifications?")) return;
+            try {
+                await apiRequest("/api/emergency-contacts/" + encodeURIComponent(contact.id), { method: "DELETE" });
+                await loadEmergencyPushContacts();
+                showToast("Emergency contact removed.");
+            } catch (error) { showToast("Could not remove contact: " + error.message); }
+        });
+        row.append(details, remove);
+        container.appendChild(row);
+    });
+}
 
-    if (testButton) testButton.disabled = !configured || !enabled || !phoneSaved;
-    if (setupLink) setupLink.hidden = configured;
-
-    if (!configured) {
-        setText(
-            "whatsappStatusText",
-            "WhatsApp sending is not active. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM in Render Environment, then redeploy."
-        );
-    } else if (!phoneSaved || !enabled) {
-        setText(
-            "whatsappStatusText",
-            "Twilio is configured. Save an international-format contact and enable WhatsApp alerts before testing."
-        );
-    } else {
-        setText(
-            "whatsappStatusText",
-            "Twilio is configured and your contact is enabled. Send a test message to verify delivery."
-        );
+async function loadEmergencyPushContacts() {
+    try {
+        const result = await apiRequest("/api/emergency-contacts");
+        renderEmergencyPushContacts(result.contacts || []);
+        if (!result.push_configured) {
+            setText("pushContactStatus", "FCM setup is pending. Add Firebase web app settings, Firebase Admin service account and FIREBASE_WEB_VAPID_KEY before creating invitations.");
+        } else {
+            const connected = (result.contacts || []).filter(item => item.status === "connected").length;
+            setText("pushContactStatus", connected
+                ? "Connected contacts: " + connected + ". You can add more contacts or send a test notification."
+                : "Invite a contact; they must open the link and allow browser notifications.");
+        }
+    } catch (error) {
+        setText("pushContactStatus", "Could not load emergency contacts: " + error.message);
     }
 }
 
@@ -4462,7 +4499,7 @@ async function refreshExtendedFeatures() {
     const results = await Promise.allSettled([
         apiRequest("/api/personalization/profile"),
         apiRequest("/api/music"),
-        apiRequest("/api/emergency-contact")
+        apiRequest("/api/emergency-contacts")
     ]);
     if (results[0].status === "fulfilled") {
         const item = results[0].value;
@@ -4477,10 +4514,10 @@ async function refreshExtendedFeatures() {
         renderMusicLibrary();
     }
     if (results[2].status === "fulfilled") {
-        const contact = results[2].value;
-        $("emergencyPhoneInput").value = contact.phone || "";
-        $("whatsappAlertToggle").checked = Boolean(contact.enabled);
-        updateWhatsAppReadiness(contact);
+        renderEmergencyPushContacts(results[2].value.contacts || []);
+        if (!results[2].value.push_configured) {
+            setText("pushContactStatus", "FCM setup is pending. Add Firebase web app settings, Firebase Admin service account and FIREBASE_WEB_VAPID_KEY before creating invitations.");
+        }
     }
 }
 
@@ -8166,37 +8203,55 @@ $("browserNotificationToggle").addEventListener("change", async event => {
         showToast("Could not save notification preference: " + error.message);
     }
 });
-$("saveEmergencyContactBtn").addEventListener("click", async () => {
-    const phone = $("emergencyPhoneInput").value.trim();
-    const enabled = $("whatsappAlertToggle").checked;
-    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
-        showToast("Enter the phone number in international format, for example +919876543210.");
+$("createPushInviteBtn").addEventListener("click", async () => {
+    const input = $("pushContactNameInput");
+    const contactName = input.value.trim();
+    if (contactName.length < 2) {
+        showToast("Enter the contact's name first.");
+        input.focus();
         return;
     }
+    const button = $("createPushInviteBtn");
+    button.disabled = true;
     try {
-        const result = await apiRequest("/api/emergency-contact", {
-            method: "PUT", body: JSON.stringify({ phone, enabled })
+        const result = await apiRequest("/api/emergency-contacts/invites", {
+            method: "POST", body: JSON.stringify({ contact_name: contactName })
         });
-        updateWhatsAppReadiness({ ...result, phone, enabled });
-        showToast("Emergency contact saved to your account.");
-    } catch (error) { showToast("Could not save emergency contact: " + error.message); }
-});
-$("testWhatsAppBtn").addEventListener("click", async () => {
-    try {
-        await apiRequest("/api/emergency-contact/test", { method: "POST" });
-        setText("whatsappStatusText", "WhatsApp test message sent.");
-        showToast("WhatsApp test message sent.");
+        const inviteUrl = new URL("/emergency-invite", window.location.origin);
+        inviteUrl.searchParams.set("token", result.invite_token);
+        $("pushInviteLink").value = inviteUrl.toString();
+        $("pushInviteResult").classList.remove("hidden");
+        setText("pushContactStatus", "Invite created for " + result.contact_name + ". Share the link within 7 days.");
+        input.value = "";
+        await loadEmergencyPushContacts();
+        showToast("Emergency contact invite created.");
     } catch (error) {
-        const message = error.message || "Unknown WhatsApp delivery error.";
-        setText("whatsappStatusText", message);
-        if (message.toLowerCase().includes("not configured")) {
-            const button = $("testWhatsAppBtn");
-            if (button) button.disabled = true;
-            const link = $("whatsappSetupLink");
-            if (link) link.hidden = false;
-        }
-        showToast("WhatsApp test failed: " + message);
+        setText("pushContactStatus", error.message || "Could not create the invitation.");
+        showToast("Could not create invite: " + error.message);
+    } finally { button.disabled = false; }
+});
+$("copyPushInviteLinkBtn").addEventListener("click", async () => {
+    const link = $("pushInviteLink").value;
+    if (!link) return;
+    try {
+        await navigator.clipboard.writeText(link);
+        showToast("Emergency contact link copied.");
+    } catch (error) {
+        $("pushInviteLink").focus();
+        $("pushInviteLink").select();
+        showToast("Copy was blocked. Select and copy the link manually.");
     }
+});
+$("testPushNotificationBtn").addEventListener("click", async () => {
+    $("testPushNotificationBtn").disabled = true;
+    try {
+        const result = await apiRequest("/api/emergency-contacts/test", { method: "POST" });
+        setText("pushContactStatus", "Test notification sent to " + result.recipient_count + " registered device(s).");
+        showToast("Test push notification sent.");
+    } catch (error) {
+        setText("pushContactStatus", error.message || "FCM test notification failed.");
+        showToast("FCM test failed: " + error.message);
+    } finally { await loadEmergencyPushContacts(); }
 });
 
 
@@ -8442,6 +8497,10 @@ function initializeApp() {
     setTheme(savedTheme);
     refreshPublicSystemStatus();
     configureFirebaseAuthentication();
+    if ("serviceWorker" in navigator && window.isSecureContext) {
+        navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" })
+            .catch(error => console.debug("FCM service worker is not ready:", error.message));
+    }
 
     if (backendRefreshTimer === null) {
         backendRefreshTimer = setInterval(() => {

@@ -25,8 +25,6 @@ import secrets
 import sqlite3
 import uuid
 import re
-import requests
-
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -51,7 +49,7 @@ from scipy.signal import butter, find_peaks, sosfiltfilt
 
 import firebase_admin
 from firebase_admin import auth as firebase_auth
-from firebase_admin import credentials, firestore, storage as firebase_storage
+from firebase_admin import credentials, firestore, messaging as firebase_messaging, storage as firebase_storage
 
 
 # ============================================================
@@ -90,9 +88,10 @@ MAX_MUSIC_FILE_BYTES = 20 * 1024 * 1024
 MAX_MUSIC_TRACKS_PER_USER = 10
 ALLOWED_MUSIC_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".webm"}
 
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "").strip()
+FIREBASE_WEB_VAPID_KEY = os.getenv("FIREBASE_WEB_VAPID_KEY", "").strip()
+MAX_EMERGENCY_CONTACTS = 10
+MAX_DEVICES_PER_EMERGENCY_CONTACT = 3
+EMERGENCY_INVITE_TTL_DAYS = 7
 GOOGLE_DRIVE_API_KEY = os.getenv("GOOGLE_DRIVE_API_KEY", "").strip()
 GOOGLE_DRIVE_APP_ID = os.getenv("GOOGLE_DRIVE_APP_ID", "").strip()
 
@@ -310,12 +309,38 @@ def initialize_database() -> None:
         CREATE INDEX IF NOT EXISTS idx_blink_user_time
         ON blink_summaries(user_id, recorded_at);
 
-        CREATE TABLE IF NOT EXISTS emergency_contacts (
+        CREATE TABLE IF NOT EXISTS emergency_push_invites (
+            invite_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            contact_name TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            revoked_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_emergency_push_invites_user
+        ON emergency_push_invites(user_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS emergency_push_devices (
+            device_id TEXT PRIMARY KEY,
+            invite_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            fcm_fid TEXT NOT NULL UNIQUE,
+            device_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY(invite_id) REFERENCES emergency_push_invites(invite_id)
+                ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_emergency_push_devices_user
+        ON emergency_push_devices(user_id, active);
+
+        CREATE TABLE IF NOT EXISTS emergency_push_alert_state (
             user_id TEXT PRIMARY KEY,
-            phone TEXT NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 0,
-            last_alert_at TEXT,
-            updated_at TEXT NOT NULL
+            last_alert_at TEXT NOT NULL
         );
 
 
@@ -385,6 +410,10 @@ def initialize_database() -> None:
         );
 
         """)
+
+        # Retire the legacy single-phone contact table; emergency contacts
+        # are now represented by opt-in push invitations and device tokens.
+        db.execute("DROP TABLE IF EXISTS emergency_contacts")
 
         # SQLite CREATE TABLE IF NOT EXISTS does not add columns to an
         # existing database. Apply additive migrations for user preferences.
@@ -516,6 +545,14 @@ def firebase_web_configured() -> bool:
         "messagingSenderId"
     )
     return all(FIREBASE_WEB_CONFIG.get(field) for field in required_fields)
+
+
+def firebase_push_configured() -> bool:
+    return bool(
+        FIREBASE_APP is not None
+        and firebase_web_configured()
+        and FIREBASE_WEB_VAPID_KEY
+    )
 
 
 # ============================================================
@@ -726,7 +763,7 @@ def firestore_read_collection(
 
 
 # ============================================================
-# 7A. OPTIONAL CLOUD MUSIC AND WHATSAPP HELPERS
+# 7A. OPTIONAL CLOUD MUSIC AND FIREBASE PUSH HELPERS
 # ============================================================
 
 def configured_music_bucket():
@@ -742,70 +779,105 @@ def configured_music_bucket():
         return None
 
 
-def send_whatsapp_message(phone: str, message: str) -> str:
-    if not all((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM)):
-        return "not_configured"
-    try:
-        response = requests.post(
-            f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json",
-            data={
-                "From": TWILIO_WHATSAPP_FROM,
-                "To": f"whatsapp:{phone}",
-                "Body": message,
-            },
-            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-            timeout=12,
+def send_emergency_push_message(fids: list[str], title: str, body: str) -> tuple[str, int]:
+    """Send data-only Web Push notifications to opted-in contact devices."""
+    if not firebase_push_configured():
+        return "not_configured", 0
+    if not fids:
+        return "no_registered_contacts", 0
+
+    messages = [
+        firebase_messaging.Message(
+            fid=fid,
+            data={"title": title[:100], "body": body[:500], "url": "/dashboard"},
+            webpush=firebase_messaging.WebpushConfig(headers={"Urgency": "high"}),
         )
-        response.raise_for_status()
-        return "sent"
-    except requests.RequestException:
-        logger.exception("WhatsApp message delivery failed.")
-        return "failed"
+        for fid in fids[:500]
+    ]
+    try:
+        response = firebase_messaging.send_each(messages, app=FIREBASE_APP)
+        invalid_tokens = []
+        for index, item in enumerate(response.responses):
+            if item.success:
+                continue
+            error_code = getattr(item.exception, "code", "")
+            if error_code in {
+                "messaging/registration-token-not-registered",
+                "messaging/invalid-registration-token",
+            }:
+                invalid_tokens.append(fids[index])
+        if invalid_tokens:
+            with db_connection() as db:
+                db.executemany(
+                    "UPDATE emergency_push_devices SET active = 0 WHERE fcm_fid = ?",
+                    [(fid,) for fid in invalid_tokens],
+                )
+        if response.success_count:
+            return "sent", int(response.success_count)
+        logger.warning("FCM delivery failed for all %s emergency contact device(s).", len(messages))
+        return "failed", 0
+    except Exception:
+        logger.exception("FCM emergency push delivery failed.")
+        return "failed", 0
 
 
-def maybe_send_whatsapp_alert(user_id: str, probability: float) -> str:
-    """Send only after repeated elevated estimates, with consent and cooldown."""
+def maybe_send_emergency_push_alert(user_id: str, probability: float) -> str:
+    """Send after repeated elevated estimates, with opt-in and six-hour cooldown."""
     if probability < HIGH_STRESS_THRESHOLD:
         return "not_triggered"
 
+    now = utc_now()
+    now_text = iso(now)
     with db_connection() as db:
-        contact = db.execute(
-            "SELECT * FROM emergency_contacts WHERE user_id = ? AND enabled = 1",
-            (user_id,),
-        ).fetchone()
-        if contact is None:
-            return "not_enabled"
-
         recent = db.execute(
             """
             SELECT COUNT(*) AS total
             FROM high_stress_events
             WHERE user_id = ? AND occurred_at >= ?
             """,
-            (user_id, iso(utc_now() - timedelta(minutes=30))),
+            (user_id, iso(now - timedelta(minutes=30))),
         ).fetchone()["total"]
-
         if int(recent) < 3:
             return "awaiting_repeated_readings"
 
-        if contact["last_alert_at"]:
-            last_sent = parse_iso(contact["last_alert_at"])
-            if utc_now() - last_sent < timedelta(hours=6):
-                return "cooldown"
+        alert_state = db.execute(
+            "SELECT last_alert_at FROM emergency_push_alert_state WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if alert_state and now - parse_iso(alert_state["last_alert_at"]) < timedelta(hours=6):
+            return "cooldown"
 
-        phone = contact["phone"]
+        device_rows = db.execute(
+            """
+            SELECT d.fcm_fid
+            FROM emergency_push_devices d
+            JOIN emergency_push_invites i ON i.invite_id = d.invite_id
+            WHERE d.user_id = ? AND d.active = 1
+              AND i.revoked_at IS NULL
+            ORDER BY d.created_at
+            """,
+            (user_id,),
+        ).fetchall()
 
-    delivery = send_whatsapp_message(
-        phone,
-        "NeuroSense check-in: your account has recorded repeated elevated stress-related readings. "
-        "If you are available, please check in with the user. This is an experimental wellness alert, "
-        "not a medical diagnosis or emergency service.",
+    fids = [row["fcm_fid"] for row in device_rows]
+    if not fids:
+        return "no_registered_contacts"
+
+    delivery, sent_count = send_emergency_push_message(
+        fids,
+        "NeuroSense check-in",
+        "Repeated elevated stress-related readings were recorded. Please check in with the user. "
+        "This is an experimental wellness alert, not a medical diagnosis or emergency service.",
     )
-    if delivery == "sent":
+    if delivery == "sent" and sent_count:
         with db_connection() as db:
             db.execute(
-                "UPDATE emergency_contacts SET last_alert_at = ?, updated_at = ? WHERE user_id = ?",
-                (iso(), iso(), user_id),
+                """
+                INSERT INTO emergency_push_alert_state (user_id, last_alert_at)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET last_alert_at = excluded.last_alert_at
+                """,
+                (user_id, now_text),
             )
     return delivery
 
@@ -942,9 +1014,19 @@ class MonitoringIntervalIn(StrictModel):
     interval_unit: Literal["seconds", "minutes", "hours"]
 
 
-class EmergencyContactIn(StrictModel):
-    phone: str = Field(pattern=r"^\+[1-9]\d{7,14}$")
-    enabled: bool = False
+class EmergencyPushInviteIn(StrictModel):
+    contact_name: str = Field(min_length=2, max_length=60)
+
+
+class EmergencyPushRegisterIn(StrictModel):
+    invite_token: str = Field(min_length=40, max_length=128)
+    fcm_fid: str = Field(min_length=10, max_length=128)
+    device_name: str = Field(default="Browser device", min_length=1, max_length=120)
+
+
+class EmergencyPushUnregisterIn(StrictModel):
+    invite_token: str = Field(min_length=40, max_length=128)
+    fcm_fid: str = Field(min_length=10, max_length=128)
 
 
 class HapticCommandIn(StrictModel):
@@ -1780,7 +1862,7 @@ def predict_stress(
                     }
                 )
 
-                result["whatsapp_alert"] = maybe_send_whatsapp_alert(
+                result["push_alert"] = maybe_send_emergency_push_alert(
                     user_id, probability
                 )
 
@@ -2260,6 +2342,57 @@ def dashboard():
     )
 
 
+@app.get("/emergency-invite", include_in_schema=False)
+def emergency_invite_page():
+    """Serve the public, consent-based push subscription page."""
+    invite_file = BASE_DIR / "frontend" / "emergency-invite.html"
+    if not invite_file.is_file():
+        raise HTTPException(status_code=503, detail="Emergency invite page is unavailable.")
+    return FileResponse(invite_file, media_type="text/html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/firebase-messaging-sw.js", include_in_schema=False)
+def firebase_messaging_service_worker():
+    """Serve a root-scoped Firebase worker with public web config only."""
+    if not firebase_web_configured():
+        return Response(
+            "self.addEventListener('push', function () {});",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store", "Service-Worker-Allowed": "/"},
+        )
+
+    config_json = json.dumps(FIREBASE_WEB_CONFIG, separators=(",", ":"))
+    script = (
+        'importScripts("https://www.gstatic.com/firebasejs/13.2.0/firebase-app-compat.js");\n'
+        'importScripts("https://www.gstatic.com/firebasejs/13.2.0/firebase-messaging-compat.js");\n'
+        f"firebase.initializeApp({config_json});\n"
+        "const messaging = firebase.messaging();\n"
+        "messaging.onBackgroundMessage(function(payload) {\n"
+        "  const data = payload.data || {};\n"
+        "  const options = { body: data.body || 'Please check in with your NeuroSense contact.', tag: 'neurosense-emergency', requireInteraction: true, data: { url: data.url || '/dashboard' } };\n"
+        "  return self.registration.showNotification(data.title || 'NeuroSense check-in', options);\n"
+        "});\n"
+        "self.addEventListener('notificationclick', function(event) {\n"
+        "  event.notification.close();\n"
+        "  const destination = new URL(event.notification.data && event.notification.data.url || '/dashboard', self.location.origin).href;\n"
+        "  event.waitUntil(self.clients.matchAll({type: 'window', includeUncontrolled: true}).then(function(windows) {\n"
+        "    for (const client of windows) {\n"
+        "      if (client.url.startsWith(self.location.origin) && 'focus' in client) {\n"
+        "        if ('navigate' in client) client.navigate(destination);\n"
+        "        return client.focus();\n"
+        "      }\n"
+        "    }\n"
+        "    return self.clients.openWindow(destination);\n"
+        "  }));\n"
+        "});\n"
+    )
+    return Response(
+        script,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store", "Service-Worker-Allowed": "/"},
+    )
+
+
 @app.get("/")
 def home():
 
@@ -2308,6 +2441,8 @@ def public_config():
         "firebase_web_configured": web_ready,
         "firebase_auth_backend_ready": admin_ready,
         "firebase_sign_in_ready": web_ready and admin_ready,
+        "firebase_push_configured": firebase_push_configured(),
+        "firebase_vapid_key": FIREBASE_WEB_VAPID_KEY or None,
         "firebase": (
             dict(FIREBASE_WEB_CONFIG)
             if web_ready and admin_ready
@@ -4266,97 +4401,217 @@ def blink_history(
     return {"total": len(summaries), "summaries": summaries}
 
 
-@app.get("/api/emergency-contact")
-def get_emergency_contact(
-    user_id: str = Depends(current_user_id),
-):
+@app.get("/api/emergency-contacts")
+def list_emergency_contacts(user_id: str = Depends(current_user_id)):
     with db_connection() as db:
-        row = db.execute(
-            "SELECT phone, enabled, updated_at, last_alert_at FROM emergency_contacts WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()
-    if row:
-        return {
-            "phone": row["phone"], "enabled": bool(row["enabled"]),
-            "updated_at": row["updated_at"], "last_alert_at": row["last_alert_at"],
-            "whatsapp_configured": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM),
-        }
-    cloud = firestore_read_document(
-        ("users", user_id, "emergency_contact"), "primary"
-    ) or {}
-    if cloud.get("phone"):
-        with db_connection() as db:
-            db.execute(
-                """
-                INSERT OR IGNORE INTO emergency_contacts (
-                    user_id, phone, enabled, last_alert_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id, cloud["phone"], int(bool(cloud.get("enabled", False))),
-                    cloud.get("last_alert_at"), cloud.get("updated_at") or iso(),
-                ),
-            )
-    return {
-        "phone": cloud.get("phone", ""),
-        "enabled": bool(cloud.get("enabled", False)),
-        "updated_at": cloud.get("updated_at"),
-        "last_alert_at": cloud.get("last_alert_at"),
-        "whatsapp_configured": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM),
-    }
-
-
-@app.put("/api/emergency-contact")
-def save_emergency_contact(
-    payload: EmergencyContactIn,
-    user_id: str = Depends(current_user_id),
-):
-    updated_at = iso()
-    with db_connection() as db:
-        db.execute(
+        rows = db.execute(
             """
-            INSERT INTO emergency_contacts (user_id, phone, enabled, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                phone=excluded.phone, enabled=excluded.enabled,
-                updated_at=excluded.updated_at
+            SELECT i.invite_id, i.contact_name, i.created_at, i.expires_at,
+                   COUNT(d.device_id) AS device_count, MAX(d.last_seen_at) AS last_seen_at
+            FROM emergency_push_invites i
+            LEFT JOIN emergency_push_devices d
+                ON d.invite_id = i.invite_id AND d.active = 1
+            WHERE i.user_id = ? AND i.revoked_at IS NULL
+            GROUP BY i.invite_id
+            ORDER BY i.created_at DESC
             """,
-            (user_id, payload.phone, int(payload.enabled), updated_at),
+            (user_id,),
+        ).fetchall()
+
+    contacts = []
+    now = utc_now()
+    for row in rows:
+        state = (
+            "connected" if int(row["device_count"]) > 0
+            else "expired" if parse_iso(row["expires_at"]) <= now
+            else "pending"
         )
-    cloud_sync = firestore_write(
-        ("users", user_id, "emergency_contact"), "primary",
-        {"phone": payload.phone, "enabled": payload.enabled, "updated_at": updated_at},
-    )
-    return {
-        "success": True, "phone": payload.phone, "enabled": payload.enabled,
-        "whatsapp_configured": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM),
-        "cloud_sync": cloud_sync,
-    }
+        contacts.append({
+            "id": row["invite_id"],
+            "contact_name": row["contact_name"],
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "device_count": int(row["device_count"]),
+            "last_seen_at": row["last_seen_at"],
+            "status": state,
+        })
+    return {"contacts": contacts, "push_configured": firebase_push_configured()}
 
 
-@app.post("/api/emergency-contact/test")
-def test_emergency_contact(
+@app.post("/api/emergency-contacts/invites")
+def create_emergency_contact_invite(
+    payload: EmergencyPushInviteIn,
     user_id: str = Depends(current_user_id),
 ):
-    with db_connection() as db:
-        row = db.execute(
-            "SELECT phone, enabled FROM emergency_contacts WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()
-    if row is None or not row["enabled"]:
-        raise HTTPException(status_code=409, detail="Save and enable an emergency contact first.")
-    result = send_whatsapp_message(
-        row["phone"],
-        "NeuroSense test message: WhatsApp emergency-contact integration is configured. This is a test, not an emergency alert.",
-    )
-    if result == "not_configured":
+    if not firebase_push_configured():
         raise HTTPException(
             status_code=503,
-            detail="Twilio WhatsApp credentials are not configured on the server.",
+            detail="Firebase Web Push is not configured. Add Firebase web app settings, the Admin service account and FIREBASE_WEB_VAPID_KEY first.",
         )
-    if result != "sent":
-        raise HTTPException(status_code=502, detail="WhatsApp test message could not be delivered.")
-    return {"success": True, "status": "sent"}
+    contact_name = payload.contact_name.strip()
+    if len(contact_name) < 2:
+        raise HTTPException(status_code=422, detail="Enter a contact name with at least 2 characters.")
+    now = utc_now()
+    expires_at = now + timedelta(days=EMERGENCY_INVITE_TTL_DAYS)
+
+    with db_connection() as db:
+        active_count = db.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM emergency_push_invites
+            WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+            """,
+            (user_id, iso(now)),
+        ).fetchone()["total"]
+        if int(active_count) >= MAX_EMERGENCY_CONTACTS:
+            raise HTTPException(status_code=429, detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active emergency contacts.")
+
+        invite_token = secrets.token_urlsafe(40)
+        invite_id = uuid.uuid4().hex
+        db.execute(
+            """
+            INSERT INTO emergency_push_invites (
+                invite_id, user_id, contact_name, token_hash, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                invite_id, user_id, contact_name,
+                hashlib.sha256(invite_token.encode("utf-8")).hexdigest(),
+                iso(now), iso(expires_at),
+            ),
+        )
+    return {
+        "success": True, "id": invite_id, "contact_name": contact_name,
+        "invite_token": invite_token, "expires_at": iso(expires_at),
+    }
+
+
+@app.post("/api/emergency-contacts/register")
+def register_emergency_contact_device(payload: EmergencyPushRegisterIn):
+    """Accept a public invite and bind this browser's FCM token to its owner."""
+    token_hash = hashlib.sha256(payload.invite_token.encode("utf-8")).hexdigest()
+    now = utc_now()
+    now_text = iso(now)
+    with db_connection() as db:
+        invite = db.execute(
+            """
+            SELECT invite_id, user_id, contact_name, expires_at
+            FROM emergency_push_invites
+            WHERE token_hash = ? AND revoked_at IS NULL
+            """,
+            (token_hash,),
+        ).fetchone()
+        if invite is None:
+            raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
+        if parse_iso(invite["expires_at"]) <= now:
+            raise HTTPException(status_code=410, detail="This invitation has expired. Ask the NeuroSense user to create a new link.")
+
+        existing = db.execute(
+            "SELECT invite_id, user_id FROM emergency_push_devices WHERE fcm_fid = ?",
+            (payload.fcm_fid,),
+        ).fetchone()
+        if existing and (existing["invite_id"] != invite["invite_id"] or existing["user_id"] != invite["user_id"]):
+            raise HTTPException(status_code=409, detail="This browser is already linked to another emergency contact.")
+
+        if existing is None:
+            device_count = db.execute(
+                "SELECT COUNT(*) AS total FROM emergency_push_devices WHERE invite_id = ? AND active = 1",
+                (invite["invite_id"],),
+            ).fetchone()["total"]
+            if int(device_count) >= MAX_DEVICES_PER_EMERGENCY_CONTACT:
+                raise HTTPException(status_code=429, detail=f"This invitation already has {MAX_DEVICES_PER_EMERGENCY_CONTACT} registered devices.")
+            db.execute(
+                """
+                INSERT INTO emergency_push_devices (
+                    device_id, invite_id, user_id, fcm_fid, device_name,
+                    created_at, last_seen_at, active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    uuid.uuid4().hex, invite["invite_id"], invite["user_id"],
+                    payload.fcm_fid, payload.device_name.strip()[:120] or "Browser device",
+                    now_text, now_text,
+                ),
+            )
+        else:
+            db.execute(
+                """
+                UPDATE emergency_push_devices
+                SET device_name = ?, last_seen_at = ?, active = 1
+                WHERE fcm_fid = ?
+                """,
+                (payload.device_name.strip()[:120] or "Browser device", now_text, payload.fcm_fid),
+            )
+    return {
+        "success": True,
+        "contact_name": invite["contact_name"],
+        "message": "This browser is now registered to receive NeuroSense push alerts.",
+    }
+
+
+@app.post("/api/emergency-contacts/unregister")
+def unregister_emergency_contact_device(payload: EmergencyPushUnregisterIn):
+    """Remove an FID when Firebase reports this browser was unregistered."""
+    token_hash = hashlib.sha256(payload.invite_token.encode("utf-8")).hexdigest()
+    with db_connection() as db:
+        invite = db.execute(
+            """
+            SELECT invite_id
+            FROM emergency_push_invites
+            WHERE token_hash = ? AND revoked_at IS NULL
+            """,
+            (token_hash,),
+        ).fetchone()
+        if invite is None:
+            raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
+        deleted = db.execute(
+            "DELETE FROM emergency_push_devices WHERE invite_id = ? AND fcm_fid = ?",
+            (invite["invite_id"], payload.fcm_fid),
+        )
+    return {"success": True, "removed": deleted.rowcount > 0}
+
+
+@app.delete("/api/emergency-contacts/{invite_id}")
+def revoke_emergency_contact(invite_id: str, user_id: str = Depends(current_user_id)):
+    with db_connection() as db:
+        deleted = db.execute(
+            "DELETE FROM emergency_push_invites WHERE invite_id = ? AND user_id = ?",
+            (invite_id, user_id),
+        )
+        if deleted.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Emergency contact was not found.")
+    return {"success": True}
+
+
+@app.post("/api/emergency-contacts/test")
+def test_emergency_contact_push(user_id: str = Depends(current_user_id)):
+    if not firebase_push_configured():
+        raise HTTPException(status_code=503, detail="Firebase Web Push is not configured on the server.")
+    with db_connection() as db:
+        rows = db.execute(
+            """
+            SELECT d.fcm_fid
+            FROM emergency_push_devices d
+            JOIN emergency_push_invites i ON i.invite_id = d.invite_id
+            WHERE d.user_id = ? AND d.active = 1
+              AND i.revoked_at IS NULL
+            """,
+            (user_id,),
+        ).fetchall()
+    fids = [row["fcm_fid"] for row in rows]
+    if not fids:
+        raise HTTPException(status_code=409, detail="No emergency contact has accepted an invitation yet.")
+
+    result, sent_count = send_emergency_push_message(
+        fids,
+        "NeuroSense test notification",
+        "Push notifications are connected. This is a test, not an emergency alert.",
+    )
+    if result == "not_configured":
+        raise HTTPException(status_code=503, detail="Firebase Web Push is not configured on the server.")
+    if result != "sent" or sent_count == 0:
+        raise HTTPException(status_code=502, detail="FCM could not deliver the test notification to any registered device.")
+    return {"success": True, "status": "sent", "recipient_count": sent_count}
 
 
 # ============================================================
