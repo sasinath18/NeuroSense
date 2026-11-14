@@ -5,7 +5,7 @@ scipy
 scikit-learn
 python-dotenv
 pydantic>=2,<3
-firebase-admin
+firebase-admin>=7.5.0
 joblib
 requests
 python-multipart
