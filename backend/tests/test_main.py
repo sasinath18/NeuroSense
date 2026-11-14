@@ -2235,7 +2235,7 @@ def test_emergency_push_test_endpoint_sends_to_registered_devices(client, monkey
     for name, suffix in (("Parent", "d"), ("Partner", "e")):
         invite = create_test_push_invite(client, user_id, name)
         assert register_test_push_device(
-            client, invite["invite_token"], "firebase-installation-" + (suffix * 120)
+            client, invite["invite_token"], "firebase-installation-" + (suffix * 24)
         ).status_code == 200
 
     response = client.post(
@@ -2278,6 +2278,11 @@ def test_automatic_emergency_push_waits_for_three_events_and_applies_cooldown(cl
     assert register_test_push_device(
         client, invite["invite_token"], "firebase-installation-" + ("f" * 24)
     ).status_code == 200
+    with api.db_connection() as db:
+        db.execute(
+            "UPDATE emergency_push_invites SET expires_at = ? WHERE invite_id = ?",
+            (api.iso(api.utc_now() - timedelta(days=1)), invite["id"]),
+        )
 
     def add_high_stress_event(index):
         occurred_at = (datetime.now(timezone.utc) - timedelta(minutes=index)).isoformat()
