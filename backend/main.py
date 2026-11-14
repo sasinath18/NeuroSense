@@ -805,7 +805,7 @@ def send_emergency_push_message(fids: list[str], title: str, body: str) -> tuple
                 "messaging/registration-token-not-registered",
                 "messaging/invalid-registration-token",
             }:
-                invalid_tokens.append(tokens[index])
+                invalid_tokens.append(fids[index])
         if invalid_tokens:
             with db_connection() as db:
                 db.executemany(
