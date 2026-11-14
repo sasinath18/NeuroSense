@@ -31,9 +31,13 @@
   <script type="module">
     const statusNode = document.getElementById("status");
     const button = document.getElementById("enableButton");
-    const inviteToken = new URLSearchParams(window.location.search).get("token") || "";
+    const inviteFromUrl = new URLSearchParams(window.location.search).get("token") || "";
+    const inviteToken = inviteFromUrl || localStorage.getItem("neurosense_emergency_invite_token") || "";
     let publicConfig = null;
-    function showStatus(message) { statusNode.textContent = message; }
+
+    function showStatus(message) {
+      statusNode.textContent = message;
+    }
 
     async function loadConfig() {
       if (!inviteToken) {
@@ -61,7 +65,9 @@
           return;
         }
         button.disabled = false;
-        button.textContent = "Allow NeuroSense notifications";
+        button.textContent = Notification.permission === "granted"
+          ? "Connect / refresh notifications"
+          : "Allow NeuroSense notifications";
         showStatus("Invitation ready. Tap the button to give this browser permission to receive notifications.");
       } catch (error) {
         showStatus(error.message || "Could not check the invitation.");
@@ -79,35 +85,89 @@
           button.textContent = "Permission not granted";
           return;
         }
-        const [{ initializeApp, getApps, getApp }, { getMessaging, getToken, isSupported }] = await Promise.all([
+
+        const [{ initializeApp, getApps, getApp }, {
+          getMessaging, register, onRegistered, onUnregistered, onMessage, isSupported
+        }] = await Promise.all([
           import("https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js"),
           import("https://www.gstatic.com/firebasejs/13.2.0/firebase-messaging.js")
         ]);
         if (!(await isSupported())) throw new Error("Firebase Web Messaging is not supported in this browser.");
+
         const firebaseApp = getApps().length ? getApp() : initializeApp(publicConfig.firebase);
         const registration = await navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" });
         await navigator.serviceWorker.ready;
         const messaging = getMessaging(firebaseApp);
-        const fcmToken = await getToken(messaging, {
-          vapidKey: publicConfig.firebase_vapid_key,
-          serviceWorkerRegistration: registration
+
+        onMessage(messaging, async payload => {
+          const data = payload.data || {};
+          await registration.showNotification(data.title || "NeuroSense check-in", {
+            body: data.body || "Please check in with your NeuroSense contact.",
+            tag: "neurosense-emergency",
+            requireInteraction: true,
+            data: { url: data.url || "/dashboard" }
+          });
         });
-        if (!fcmToken) throw new Error("The browser did not create a push registration token.");
-        const response = await fetch("/api/emergency-contacts/register", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Accept": "application/json" },
-          cache: "no-store",
-          body: JSON.stringify({
-            invite_token: inviteToken,
-            fcm_token: fcmToken,
-            device_name: (navigator.userAgent || "Browser device").slice(0, 120)
-          })
+
+        onUnregistered(messaging, async installationId => {
+          try {
+            await fetch("/api/emergency-contacts/unregister", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Accept": "application/json" },
+              cache: "no-store",
+              body: JSON.stringify({ invite_token: inviteToken, fcm_fid: installationId })
+            });
+          } catch (error) {
+            console.warn("Could not remove unregistered Firebase installation:", error);
+          }
         });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.detail || "Could not register this device.");
+
+        localStorage.setItem("neurosense_emergency_invite_token", inviteToken);
+        const registrationPromise = new Promise((resolve, reject) => {
+          let finished = false;
+          const unsubscribe = onRegistered(messaging, async installationId => {
+            if (finished) return;
+            try {
+              const response = await fetch("/api/emergency-contacts/register", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                cache: "no-store",
+                body: JSON.stringify({
+                  invite_token: inviteToken,
+                  fcm_fid: installationId,
+                  device_name: (navigator.userAgent || "Browser device").slice(0, 120)
+                })
+              });
+              const result = await response.json().catch(() => ({}));
+              if (!response.ok) throw new Error(result.detail || "Could not register this device.");
+              finished = true;
+              unsubscribe();
+              resolve(result);
+            } catch (error) {
+              finished = true;
+              unsubscribe();
+              reject(error);
+            }
+          });
+
+          register(messaging, {
+            vapidKey: publicConfig.firebase_vapid_key,
+            serviceWorkerRegistration: registration
+          }).catch(error => {
+            if (finished) return;
+            finished = true;
+            unsubscribe();
+            reject(error);
+          });
+        });
+
+        const timeoutPromise = new Promise((_, reject) => {
+          window.setTimeout(() => reject(new Error("Firebase registration did not return an installation ID. Please retry.")), 20000);
+        });
+        const result = await Promise.race([registrationPromise, timeoutPromise]);
         showStatus("Connected. This browser is now registered to receive NeuroSense notifications for " + result.contact_name + ".");
         button.textContent = "Notifications enabled";
-        button.disabled = true;
+        button.disabled = false;
         const cleanUrl = new URL(window.location.href);
         cleanUrl.searchParams.delete("token");
         window.history.replaceState({}, "", cleanUrl.toString());
@@ -117,7 +177,7 @@
         button.disabled = false;
       }
     });
+
     loadConfig();
-  </script>
-</body>
+  </script></body>
 </html>
