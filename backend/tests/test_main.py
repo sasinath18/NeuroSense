@@ -2136,6 +2136,7 @@ def configure_test_fcm(monkeypatch):
 
 
 def create_test_push_invite(client, user_id, contact_name="Parent"):
+    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
     response = client.post(
         "/api/emergency-contacts/invites",
         json={"contact_name": contact_name},
@@ -2249,6 +2250,7 @@ def test_emergency_push_test_endpoint_sends_to_registered_devices(client, monkey
 
 def test_emergency_push_test_endpoint_requires_a_registered_contact(client, monkeypatch):
     configure_test_fcm(monkeypatch)
+    client.app.dependency_overrides[api.current_user_id] = lambda: "neurosense-push-no-recipient"
     response = client.post(
         "/api/emergency-contacts/test",
         headers={"X-Demo-User": "neurosense-push-no-recipient"},
