@@ -326,7 +326,7 @@ def initialize_database() -> None:
             device_id TEXT PRIMARY KEY,
             invite_id TEXT NOT NULL,
             user_id TEXT NOT NULL,
-            fcm_token TEXT NOT NULL UNIQUE,
+            fcm_fid TEXT NOT NULL UNIQUE,
             device_name TEXT NOT NULL,
             created_at TEXT NOT NULL,
             last_seen_at TEXT NOT NULL,
@@ -779,20 +779,20 @@ def configured_music_bucket():
         return None
 
 
-def send_emergency_push_message(tokens: list[str], title: str, body: str) -> tuple[str, int]:
+def send_emergency_push_message(fids: list[str], title: str, body: str) -> tuple[str, int]:
     """Send data-only Web Push notifications to opted-in contact devices."""
     if not firebase_push_configured():
         return "not_configured", 0
-    if not tokens:
+    if not fids:
         return "no_registered_contacts", 0
 
     messages = [
         firebase_messaging.Message(
-            token=token,
+            fid=fid,
             data={"title": title[:100], "body": body[:500], "url": "/dashboard"},
             webpush=firebase_messaging.WebpushConfig(headers={"Urgency": "high"}),
         )
-        for token in tokens[:500]
+        for fid in fids[:500]
     ]
     try:
         response = firebase_messaging.send_each(messages, app=FIREBASE_APP)
@@ -809,8 +809,8 @@ def send_emergency_push_message(tokens: list[str], title: str, body: str) -> tup
         if invalid_tokens:
             with db_connection() as db:
                 db.executemany(
-                    "UPDATE emergency_push_devices SET active = 0 WHERE fcm_token = ?",
-                    [(token,) for token in invalid_tokens],
+                    "UPDATE emergency_push_devices SET active = 0 WHERE fcm_fid = ?",
+                    [(fid,) for fid in invalid_tokens],
                 )
         if response.success_count:
             return "sent", int(response.success_count)
@@ -849,22 +849,22 @@ def maybe_send_emergency_push_alert(user_id: str, probability: float) -> str:
 
         device_rows = db.execute(
             """
-            SELECT d.fcm_token
+            SELECT d.fcm_fid
             FROM emergency_push_devices d
             JOIN emergency_push_invites i ON i.invite_id = d.invite_id
             WHERE d.user_id = ? AND d.active = 1
-              AND i.revoked_at IS NULL AND i.expires_at > ?
+              AND i.revoked_at IS NULL
             ORDER BY d.created_at
             """,
-            (user_id, now_text),
+            (user_id,),
         ).fetchall()
 
-    tokens = [row["fcm_token"] for row in device_rows]
-    if not tokens:
+    fids = [row["fcm_fid"] for row in device_rows]
+    if not fids:
         return "no_registered_contacts"
 
     delivery, sent_count = send_emergency_push_message(
-        tokens,
+        fids,
         "NeuroSense check-in",
         "Repeated elevated stress-related readings were recorded. Please check in with the user. "
         "This is an experimental wellness alert, not a medical diagnosis or emergency service.",
@@ -1020,8 +1020,13 @@ class EmergencyPushInviteIn(StrictModel):
 
 class EmergencyPushRegisterIn(StrictModel):
     invite_token: str = Field(min_length=40, max_length=128)
-    fcm_token: str = Field(min_length=50, max_length=4096)
+    fcm_fid: str = Field(min_length=10, max_length=128)
     device_name: str = Field(default="Browser device", min_length=1, max_length=120)
+
+
+class EmergencyPushUnregisterIn(StrictModel):
+    invite_token: str = Field(min_length=40, max_length=128)
+    fcm_fid: str = Field(min_length=10, max_length=128)
 
 
 class HapticCommandIn(StrictModel):
@@ -4416,8 +4421,10 @@ def list_emergency_contacts(user_id: str = Depends(current_user_id)):
     contacts = []
     now = utc_now()
     for row in rows:
-        state = "expired" if parse_iso(row["expires_at"]) <= now else (
-            "connected" if int(row["device_count"]) > 0 else "pending"
+        state = (
+            "connected" if int(row["device_count"]) > 0
+            else "expired" if parse_iso(row["expires_at"]) <= now
+            else "pending"
         )
         contacts.append({
             "id": row["invite_id"],
@@ -4500,8 +4507,8 @@ def register_emergency_contact_device(payload: EmergencyPushRegisterIn):
             raise HTTPException(status_code=410, detail="This invitation has expired. Ask the NeuroSense user to create a new link.")
 
         existing = db.execute(
-            "SELECT invite_id, user_id FROM emergency_push_devices WHERE fcm_token = ?",
-            (payload.fcm_token,),
+            "SELECT invite_id, user_id FROM emergency_push_devices WHERE fcm_fid = ?",
+            (payload.fcm_fid,),
         ).fetchone()
         if existing and (existing["invite_id"] != invite["invite_id"] or existing["user_id"] != invite["user_id"]):
             raise HTTPException(status_code=409, detail="This browser is already linked to another emergency contact.")
@@ -4516,13 +4523,13 @@ def register_emergency_contact_device(payload: EmergencyPushRegisterIn):
             db.execute(
                 """
                 INSERT INTO emergency_push_devices (
-                    device_id, invite_id, user_id, fcm_token, device_name,
+                    device_id, invite_id, user_id, fcm_fid, device_name,
                     created_at, last_seen_at, active
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
                 """,
                 (
                     uuid.uuid4().hex, invite["invite_id"], invite["user_id"],
-                    payload.fcm_token, payload.device_name.strip()[:120] or "Browser device",
+                    payload.fcm_fid, payload.device_name.strip()[:120] or "Browser device",
                     now_text, now_text,
                 ),
             )
@@ -4531,15 +4538,37 @@ def register_emergency_contact_device(payload: EmergencyPushRegisterIn):
                 """
                 UPDATE emergency_push_devices
                 SET device_name = ?, last_seen_at = ?, active = 1
-                WHERE fcm_token = ?
+                WHERE fcm_fid = ?
                 """,
-                (payload.device_name.strip()[:120] or "Browser device", now_text, payload.fcm_token),
+                (payload.device_name.strip()[:120] or "Browser device", now_text, payload.fcm_fid),
             )
     return {
         "success": True,
         "contact_name": invite["contact_name"],
         "message": "This browser is now registered to receive NeuroSense push alerts.",
     }
+
+
+@app.post("/api/emergency-contacts/unregister")
+def unregister_emergency_contact_device(payload: EmergencyPushUnregisterIn):
+    """Remove an FID when Firebase reports this browser was unregistered."""
+    token_hash = hashlib.sha256(payload.invite_token.encode("utf-8")).hexdigest()
+    with db_connection() as db:
+        invite = db.execute(
+            """
+            SELECT invite_id
+            FROM emergency_push_invites
+            WHERE token_hash = ? AND revoked_at IS NULL
+            """,
+            (token_hash,),
+        ).fetchone()
+        if invite is None:
+            raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
+        deleted = db.execute(
+            "DELETE FROM emergency_push_devices WHERE invite_id = ? AND fcm_fid = ?",
+            (invite["invite_id"], payload.fcm_fid),
+        )
+    return {"success": True, "removed": deleted.rowcount > 0}
 
 
 @app.delete("/api/emergency-contacts/{invite_id}")
@@ -4561,20 +4590,20 @@ def test_emergency_contact_push(user_id: str = Depends(current_user_id)):
     with db_connection() as db:
         rows = db.execute(
             """
-            SELECT d.fcm_token
+            SELECT d.fcm_fid
             FROM emergency_push_devices d
             JOIN emergency_push_invites i ON i.invite_id = d.invite_id
             WHERE d.user_id = ? AND d.active = 1
-              AND i.revoked_at IS NULL AND i.expires_at > ?
+              AND i.revoked_at IS NULL
             """,
-            (user_id, iso()),
+            (user_id,),
         ).fetchall()
-    tokens = [row["fcm_token"] for row in rows]
-    if not tokens:
+    fids = [row["fcm_fid"] for row in rows]
+    if not fids:
         raise HTTPException(status_code=409, detail="No emergency contact has accepted an invitation yet.")
 
     result, sent_count = send_emergency_push_message(
-        tokens,
+        fids,
         "NeuroSense test notification",
         "Push notifications are connected. This is a test, not an emergency alert.",
     )
