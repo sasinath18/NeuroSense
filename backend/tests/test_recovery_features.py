@@ -17,9 +17,6 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "FIRESTORE_CLIENT", None)
     monkeypatch.setattr(api, "STRESS_MODEL", None)
     monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "")
-    monkeypatch.setattr(api, "TWILIO_ACCOUNT_SID", "")
-    monkeypatch.setattr(api, "TWILIO_AUTH_TOKEN", "")
-    monkeypatch.setattr(api, "TWILIO_WHATSAPP_FROM", "")
     monkeypatch.setattr(api, "initialize_firebase", lambda: None)
     monkeypatch.setattr(api, "initialize_ml_model", lambda: None)
     with TestClient(api.app) as test_client:
@@ -232,29 +229,3 @@ def test_personalization_profile_uses_distinct_days_and_is_preliminary(client):
     assert profile.json()["days_observed"] == 2
     assert profile.json()["ready_for_preliminary_profile"] is True
     assert profile.json()["recommended_profile_ready"] is False
-
-
-def test_emergency_contact_requires_explicit_enable_and_twilio_setup(client):
-    saved = client.put(
-        "/api/emergency-contact",
-        json={"phone": "+919876543210", "enabled": True},
-        headers=auth("contact-user"),
-    )
-    assert saved.status_code == 200
-    assert saved.json()["enabled"] is True
-    assert saved.json()["whatsapp_configured"] is False
-
-    test_message = client.post(
-        "/api/emergency-contact/test",
-        headers=auth("contact-user"),
-    )
-    assert test_message.status_code == 503
-
-
-def test_emergency_contact_rejects_non_e164_phone(client):
-    response = client.put(
-        "/api/emergency-contact",
-        json={"phone": "9876543210", "enabled": True},
-        headers=auth("invalid-contact-user"),
-    )
-    assert response.status_code == 422
