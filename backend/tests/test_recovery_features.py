@@ -19,8 +19,14 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "")
     monkeypatch.setattr(api, "initialize_firebase", lambda: None)
     monkeypatch.setattr(api, "initialize_ml_model", lambda: None)
-    with TestClient(api.app) as test_client:
-        yield test_client
+    previous_overrides = dict(api.app.dependency_overrides)
+    api.app.dependency_overrides.clear()
+    try:
+        with TestClient(api.app) as test_client:
+            yield test_client
+    finally:
+        api.app.dependency_overrides.clear()
+        api.app.dependency_overrides.update(previous_overrides)
 
 
 def auth(user_id="phase-test-user"):
