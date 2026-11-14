@@ -2120,142 +2120,151 @@ def test_monitoring_interval_preferences_support_units_and_are_per_user(client):
     assert too_short.status_code == 422
 
 
-def test_emergency_contact_is_saved_and_reports_missing_twilio_configuration(
-    client,
-    monkeypatch,
-):
-    """WhatsApp contact preferences can be tested without Twilio or hardware."""
-    monkeypatch.setattr(api, "TWILIO_ACCOUNT_SID", "")
-    monkeypatch.setattr(api, "TWILIO_AUTH_TOKEN", "")
-    monkeypatch.setattr(api, "TWILIO_WHATSAPP_FROM", "")
-
-    user_id = "neurosense-whatsapp-save-test"
-    headers = {"X-Demo-User": user_id}
-    phone = "+15555550123"
-
-    saved = client.put(
-        "/api/emergency-contact",
-        json={"phone": phone, "enabled": True},
-        headers=headers,
+def configure_test_fcm(monkeypatch):
+    monkeypatch.setattr(api, "FIREBASE_APP", object())
+    monkeypatch.setattr(
+        api, "FIREBASE_WEB_CONFIG",
+        {
+            "apiKey": "test-web-key",
+            "authDomain": "neurosense-test.firebaseapp.com",
+            "projectId": "neurosense-test",
+            "appId": "1:123:web:test",
+            "messagingSenderId": "123",
+        },
     )
-
-    assert saved.status_code == 200
-    assert saved.json()["success"] is True
-    assert saved.json()["phone"] == phone
-    assert saved.json()["enabled"] is True
-    assert saved.json()["whatsapp_configured"] is False
-
-    fetched = client.get("/api/emergency-contact", headers=headers)
-    assert fetched.status_code == 200
-    assert fetched.json()["phone"] == phone
-    assert fetched.json()["enabled"] is True
-    assert fetched.json()["whatsapp_configured"] is False
+    monkeypatch.setattr(api, "FIREBASE_WEB_VAPID_KEY", "B" + "x" * 86)
 
 
-def test_whatsapp_test_endpoint_fails_clearly_without_twilio_credentials(
-    client,
-    monkeypatch,
-):
-    """The test-send API must not claim delivery when Twilio is not configured."""
-    monkeypatch.setattr(api, "TWILIO_ACCOUNT_SID", "")
-    monkeypatch.setattr(api, "TWILIO_AUTH_TOKEN", "")
-    monkeypatch.setattr(api, "TWILIO_WHATSAPP_FROM", "")
-
-    headers = {"X-Demo-User": "neurosense-whatsapp-unconfigured-test"}
-    saved = client.put(
-        "/api/emergency-contact",
-        json={"phone": "+15555550123", "enabled": True},
-        headers=headers,
+def create_test_push_invite(client, user_id, contact_name="Parent"):
+    response = client.post(
+        "/api/emergency-contacts/invites",
+        json={"contact_name": contact_name},
+        headers={"X-Demo-User": user_id},
     )
-    assert saved.status_code == 200
-
-    response = client.post("/api/emergency-contact/test", headers=headers)
-
-    assert response.status_code == 503
-    assert "not configured" in response.json()["detail"].lower()
-
-
-def test_whatsapp_test_endpoint_sends_using_mocked_twilio_request(
-    client,
-    monkeypatch,
-):
-    """The test-send API can be validated without hardware or a real WhatsApp send."""
-    monkeypatch.setattr(api, "TWILIO_ACCOUNT_SID", "AC_TEST_ACCOUNT")
-    monkeypatch.setattr(api, "TWILIO_AUTH_TOKEN", "test-auth-token")
-    monkeypatch.setattr(api, "TWILIO_WHATSAPP_FROM", "whatsapp:+15550001111")
-
-    calls = []
-
-    class FakeTwilioResponse:
-        def raise_for_status(self):
-            return None
-
-    def fake_post(url, *, data, auth, timeout):
-        calls.append({
-            "url": url,
-            "data": data,
-            "auth": auth,
-            "timeout": timeout,
-        })
-        return FakeTwilioResponse()
-
-    monkeypatch.setattr(api.requests, "post", fake_post)
-
-    headers = {"X-Demo-User": "neurosense-whatsapp-mock-send"}
-    saved = client.put(
-        "/api/emergency-contact",
-        json={"phone": "+15555550123", "enabled": True},
-        headers=headers,
-    )
-    assert saved.status_code == 200
-    assert saved.json()["whatsapp_configured"] is True
-
-    response = client.post("/api/emergency-contact/test", headers=headers)
-
     assert response.status_code == 200
-    assert response.json() == {"success": True, "status": "sent"}
-    assert len(calls) == 1
-    assert calls[0]["data"]["To"] == "whatsapp:+15555550123"
-    assert calls[0]["data"]["From"] == "whatsapp:+15550001111"
-    assert calls[0]["auth"] == ("AC_TEST_ACCOUNT", "test-auth-token")
-    assert "test message" in calls[0]["data"]["Body"].lower()
+    return response.json()
 
 
-def test_automatic_whatsapp_alert_waits_for_three_events_and_applies_cooldown(
-    client,
-    monkeypatch,
-):
-    """Repeated high-stress alert logic is tested with mocked delivery, no hardware."""
-    monkeypatch.setattr(api, "TWILIO_ACCOUNT_SID", "AC_TEST_ACCOUNT")
-    monkeypatch.setattr(api, "TWILIO_AUTH_TOKEN", "test-auth-token")
-    monkeypatch.setattr(api, "TWILIO_WHATSAPP_FROM", "whatsapp:+15550001111")
-
-    calls = []
-
-    class FakeTwilioResponse:
-        def raise_for_status(self):
-            return None
-
-    def fake_post(url, *, data, auth, timeout):
-        calls.append(data)
-        return FakeTwilioResponse()
-
-    monkeypatch.setattr(api.requests, "post", fake_post)
-
-    user_id = "neurosense-whatsapp-repeat-test"
-    headers = {"X-Demo-User": user_id}
-    saved = client.put(
-        "/api/emergency-contact",
-        json={"phone": "+15555550123", "enabled": True},
-        headers=headers,
+def register_test_push_device(client, invite_token, fcm_token):
+    return client.post(
+        "/api/emergency-contacts/register",
+        json={"invite_token": invite_token, "fcm_token": fcm_token, "device_name": "Test browser"},
     )
-    assert saved.status_code == 200
+
+
+def test_public_firebase_config_exposes_vapid_key_but_never_admin_secrets(client, monkeypatch):
+    configure_test_fcm(monkeypatch)
+    response = client.get("/api/public-config")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["firebase_push_configured"] is True
+    assert body["firebase_vapid_key"] == api.FIREBASE_WEB_VAPID_KEY
+    assert "FIREBASE_SERVICE_ACCOUNT_JSON" not in response.text
+    assert "private_key" not in response.text
+
+
+def test_emergency_push_invites_register_multiple_contacts_and_list_status(client, monkeypatch):
+    configure_test_fcm(monkeypatch)
+    user_id = "neurosense-push-invites"
+    first = create_test_push_invite(client, user_id, "Parent")
+    second = create_test_push_invite(client, user_id, "Partner")
+    registered = register_test_push_device(client, first["invite_token"], "fcm-token-" + ("a" * 120))
+    assert registered.status_code == 200
+    assert registered.json()["contact_name"] == "Parent"
+
+    listed = client.get("/api/emergency-contacts", headers={"X-Demo-User": user_id})
+    assert listed.status_code == 200
+    contacts = {item["contact_name"]: item for item in listed.json()["contacts"]}
+    assert contacts["Parent"]["status"] == "connected"
+    assert contacts["Parent"]["device_count"] == 1
+    assert contacts["Partner"]["status"] == "pending"
+    assert listed.json()["push_configured"] is True
+    assert second["id"] == contacts["Partner"]["id"]
+
+
+def test_emergency_push_registration_rejects_invalid_and_expired_invites(client, monkeypatch):
+    configure_test_fcm(monkeypatch)
+    invalid = register_test_push_device(
+        client, "not-a-real-invitation-token-" + ("x" * 40), "fcm-token-" + ("b" * 120)
+    )
+    assert invalid.status_code == 404
+    invite = create_test_push_invite(client, "neurosense-push-expired", "Contact")
+    with api.db_connection() as db:
+        db.execute(
+            "UPDATE emergency_push_invites SET expires_at = ? WHERE invite_id = ?",
+            (api.iso(api.utc_now() - timedelta(days=1)), invite["id"]),
+        )
+    expired = register_test_push_device(
+        client, invite["invite_token"], "fcm-token-" + ("c" * 120)
+    )
+    assert expired.status_code == 410
+
+
+def test_emergency_push_test_endpoint_sends_to_registered_devices(client, monkeypatch):
+    configure_test_fcm(monkeypatch)
+    sent_messages = []
+
+    class FakeBatchResponse:
+        success_count = 2
+        failure_count = 0
+        responses = []
+
+    def fake_send_each(messages, app=None):
+        sent_messages.extend(messages)
+        assert app is api.FIREBASE_APP
+        return FakeBatchResponse()
+
+    monkeypatch.setattr(api.firebase_messaging, "send_each", fake_send_each)
+    user_id = "neurosense-push-test-send"
+    for name, suffix in (("Parent", "d"), ("Partner", "e")):
+        invite = create_test_push_invite(client, user_id, name)
+        assert register_test_push_device(
+            client, invite["invite_token"], "fcm-token-" + (suffix * 120)
+        ).status_code == 200
+
+    response = client.post(
+        "/api/emergency-contacts/test",
+        headers={"X-Demo-User": user_id},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"success": True, "status": "sent", "recipient_count": 2}
+    assert len(sent_messages) == 2
+    assert all(item.data["title"] == "NeuroSense test notification" for item in sent_messages)
+
+
+def test_emergency_push_test_endpoint_requires_a_registered_contact(client, monkeypatch):
+    configure_test_fcm(monkeypatch)
+    response = client.post(
+        "/api/emergency-contacts/test",
+        headers={"X-Demo-User": "neurosense-push-no-recipient"},
+    )
+    assert response.status_code == 409
+    assert "accepted an invitation" in response.json()["detail"]
+
+
+def test_automatic_emergency_push_waits_for_three_events_and_applies_cooldown(client, monkeypatch):
+    configure_test_fcm(monkeypatch)
+    sent_messages = []
+
+    class FakeBatchResponse:
+        success_count = 1
+        failure_count = 0
+        responses = []
+
+    def fake_send_each(messages, app=None):
+        sent_messages.extend(messages)
+        return FakeBatchResponse()
+
+    monkeypatch.setattr(api.firebase_messaging, "send_each", fake_send_each)
+    user_id = "neurosense-push-automatic"
+    invite = create_test_push_invite(client, user_id, "Trusted contact")
+    assert register_test_push_device(
+        client, invite["invite_token"], "fcm-token-" + ("f" * 120)
+    ).status_code == 200
 
     def add_high_stress_event(index):
-        occurred_at = (
-            datetime.now(timezone.utc) - timedelta(minutes=index)
-        ).isoformat()
-        reading_id = f"whatsapp-test-reading-{index}"
+        occurred_at = (datetime.now(timezone.utc) - timedelta(minutes=index)).isoformat()
+        reading_id = "push-test-reading-" + str(index)
         with api.db_connection() as db:
             db.execute(
                 """
@@ -2268,7 +2277,7 @@ def test_automatic_whatsapp_alert_waits_for_three_events_and_applies_cooldown(
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    reading_id, user_id, "whatsapp-test-device",
+                    reading_id, user_id, "push-test-device",
                     occurred_at, occurred_at, 92, 24, 2300, 33.5,
                     "good", "wearable", 90, 0.9, "prediction_available",
                 ),
@@ -2280,23 +2289,15 @@ def test_automatic_whatsapp_alert_waits_for_three_events_and_applies_cooldown(
                 )
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (
-                    f"whatsapp-test-event-{index}", user_id,
-                    reading_id, 0.9, occurred_at,
-                ),
+                ("push-test-event-" + str(index), user_id, reading_id, 0.9, occurred_at),
             )
 
     add_high_stress_event(1)
     add_high_stress_event(2)
-    waiting = api.maybe_send_whatsapp_alert(user_id, 0.9)
-    assert waiting == "awaiting_repeated_readings"
-    assert calls == []
-
+    assert api.maybe_send_emergency_push_alert(user_id, 0.9) == "awaiting_repeated_readings"
+    assert sent_messages == []
     add_high_stress_event(3)
-    sent = api.maybe_send_whatsapp_alert(user_id, 0.9)
-    assert sent == "sent"
-    assert len(calls) == 1
-
-    cooldown = api.maybe_send_whatsapp_alert(user_id, 0.9)
-    assert cooldown == "cooldown"
-    assert len(calls) == 1
+    assert api.maybe_send_emergency_push_alert(user_id, 0.9) == "sent"
+    assert len(sent_messages) == 1
+    assert api.maybe_send_emergency_push_alert(user_id, 0.9) == "cooldown"
+    assert len(sent_messages) == 1
