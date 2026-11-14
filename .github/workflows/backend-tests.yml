@@ -42,12 +42,18 @@ jobs:
           import re
 
           html = Path("frontend/index.html").read_text(encoding="utf-8")
+          invite = Path("frontend/emergency-invite.html").read_text(encoding="utf-8")
           scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL | re.IGNORECASE)
+          invite_scripts = re.findall(r"<script\\b[^>]*>(.*?)</script>", invite, flags=re.DOTALL | re.IGNORECASE)
           if len(scripts) != 1:
               raise SystemExit(f"Expected one inline application script, found {len(scripts)}")
+          if len(invite_scripts) != 1:
+              raise SystemExit(f"Expected one emergency invite script, found {len(invite_scripts)}")
           Path("/tmp/neurosense-frontend.js").write_text(scripts[0], encoding="utf-8")
+          Path("/tmp/neurosense-invite.js").write_text(invite_scripts[0], encoding="utf-8")
           PY
           node --check /tmp/neurosense-frontend.js
+          node --check /tmp/neurosense-invite.js
 
       - name: Run backend tests
         run: |
