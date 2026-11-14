@@ -2145,10 +2145,10 @@ def create_test_push_invite(client, user_id, contact_name="Parent"):
     return response.json()
 
 
-def register_test_push_device(client, invite_token, fcm_token):
+def register_test_push_device(client, invite_token, fcm_fid):
     return client.post(
         "/api/emergency-contacts/register",
-        json={"invite_token": invite_token, "fcm_token": fcm_token, "device_name": "Test browser"},
+        json={"invite_token": invite_token, "fcm_fid": fcm_fid, "device_name": "Test browser"},
     )
 
 
@@ -2168,9 +2168,14 @@ def test_emergency_push_invites_register_multiple_contacts_and_list_status(clien
     user_id = "neurosense-push-invites"
     first = create_test_push_invite(client, user_id, "Parent")
     second = create_test_push_invite(client, user_id, "Partner")
-    registered = register_test_push_device(client, first["invite_token"], "fcm-token-" + ("a" * 120))
+    registered = register_test_push_device(client, first["invite_token"], "firebase-installation-" + ("a" * 24))
     assert registered.status_code == 200
     assert registered.json()["contact_name"] == "Parent"
+    with api.db_connection() as db:
+        db.execute(
+            "UPDATE emergency_push_invites SET expires_at = ? WHERE invite_id = ?",
+            (api.iso(api.utc_now() - timedelta(days=1)), first["id"]),
+        )
 
     listed = client.get("/api/emergency-contacts", headers={"X-Demo-User": user_id})
     assert listed.status_code == 200
@@ -2185,7 +2190,7 @@ def test_emergency_push_invites_register_multiple_contacts_and_list_status(clien
 def test_emergency_push_registration_rejects_invalid_and_expired_invites(client, monkeypatch):
     configure_test_fcm(monkeypatch)
     invalid = register_test_push_device(
-        client, "not-a-real-invitation-token-" + ("x" * 40), "fcm-token-" + ("b" * 120)
+        client, "not-a-real-invitation-token-" + ("x" * 40), "firebase-installation-" + ("b" * 24)
     )
     assert invalid.status_code == 404
     invite = create_test_push_invite(client, "neurosense-push-expired", "Contact")
@@ -2195,9 +2200,19 @@ def test_emergency_push_registration_rejects_invalid_and_expired_invites(client,
             (api.iso(api.utc_now() - timedelta(days=1)), invite["id"]),
         )
     expired = register_test_push_device(
-        client, invite["invite_token"], "fcm-token-" + ("c" * 120)
+        client, invite["invite_token"], "firebase-installation-" + ("c" * 24)
     )
     assert expired.status_code == 410
+
+    active_invite = create_test_push_invite(client, "neurosense-push-unregister", "Contact")
+    f_id = "firebase-installation-" + ("g" * 24)
+    assert register_test_push_device(client, active_invite["invite_token"], f_id).status_code == 200
+    removed = client.post(
+        "/api/emergency-contacts/unregister",
+        json={"invite_token": active_invite["invite_token"], "fcm_fid": f_id},
+    )
+    assert removed.status_code == 200
+    assert removed.json()["removed"] is True
 
 
 def test_emergency_push_test_endpoint_sends_to_registered_devices(client, monkeypatch):
@@ -2219,7 +2234,7 @@ def test_emergency_push_test_endpoint_sends_to_registered_devices(client, monkey
     for name, suffix in (("Parent", "d"), ("Partner", "e")):
         invite = create_test_push_invite(client, user_id, name)
         assert register_test_push_device(
-            client, invite["invite_token"], "fcm-token-" + (suffix * 120)
+            client, invite["invite_token"], "firebase-installation-" + (suffix * 120)
         ).status_code == 200
 
     response = client.post(
@@ -2259,7 +2274,7 @@ def test_automatic_emergency_push_waits_for_three_events_and_applies_cooldown(cl
     user_id = "neurosense-push-automatic"
     invite = create_test_push_invite(client, user_id, "Trusted contact")
     assert register_test_push_device(
-        client, invite["invite_token"], "fcm-token-" + ("f" * 120)
+        client, invite["invite_token"], "firebase-installation-" + ("f" * 24)
     ).status_code == 200
 
     def add_high_stress_event(index):
@@ -2299,5 +2314,6 @@ def test_automatic_emergency_push_waits_for_three_events_and_applies_cooldown(cl
     add_high_stress_event(3)
     assert api.maybe_send_emergency_push_alert(user_id, 0.9) == "sent"
     assert len(sent_messages) == 1
+    assert sent_messages[0].fid == "firebase-installation-" + ("f" * 24)
     assert api.maybe_send_emergency_push_alert(user_id, 0.9) == "cooldown"
     assert len(sent_messages) == 1
