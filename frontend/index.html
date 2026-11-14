@@ -3576,22 +3576,22 @@
                 </article>
 
                 <article class="card">
-                    <div class="card-header"><div><h3>Push Emergency Contacts</h3><p>Invite family or trusted contacts to receive browser notifications</p></div></div>
+                    <div class="card-header"><div><h3>Telegram Emergency Contacts</h3><p>Connect family or trusted contacts through Telegram for wellness alerts</p></div></div>
                     <div class="field">
                         <label for="pushContactNameInput">Contact name</label>
                         <input id="pushContactNameInput" class="form-control" type="text" placeholder="e.g. Parent" maxlength="60">
                     </div>
                     <div class="breath-controls">
-                        <button id="createPushInviteBtn" class="secondary-btn" type="button">Create invite link</button>
-                        <button id="testPushNotificationBtn" class="secondary-btn" type="button" disabled>Send test notification</button>
+                        <button id="createPushInviteBtn" class="secondary-btn" type="button">Create Telegram invite</button>
+                        <button id="testPushNotificationBtn" class="secondary-btn" type="button" disabled>Send test Telegram alert</button>
                     </div>
                     <div id="pushInviteResult" class="notice hidden" style="margin-top:12px">
-                        <label for="pushInviteLink" class="small">Share this link with your contact (valid for 7 days)</label>
+                        <label for="pushInviteLink" class="small">Share this Telegram bot link with your contact (valid for 7 days)</label>
                         <input id="pushInviteLink" class="form-control" type="url" readonly>
-                        <button id="copyPushInviteLinkBtn" class="secondary-btn" type="button" style="margin-top:9px">Copy invite link</button>
+                        <button id="copyPushInviteLinkBtn" class="secondary-btn" type="button" style="margin-top:9px">Copy Telegram link</button>
                     </div>
-                    <p id="pushContactStatus" class="muted small" role="status" aria-live="polite" style="margin-top:12px">Invite a contact; they must open the link and allow browser notifications.</p>
-                    <div id="pushContactsList" style="display:grid;gap:10px;margin-top:14px"><p class="muted small">No emergency contacts invited yet.</p></div>
+                    <p id="pushContactStatus" class="muted small" role="status" aria-live="polite" style="margin-top:12px">Create an invite and ask your contact to press Start in Telegram.</p>
+                    <div id="pushContactsList" style="display:grid;gap:10px;margin-top:14px"><p class="muted small">No Telegram contacts connected yet.</p></div>
                     <div class="notice" style="margin-top:12px">Automatic alerts require three elevated model readings within 30 minutes and use a six-hour cooldown. Push delivery depends on browser support, permission and internet access. This is not an emergency service or medical diagnosis.</div>
                 </article>
 
@@ -4431,7 +4431,7 @@ function applyDashboardData(overview, history, settings, recovery) {
     drawAllCharts();
 }
 
-function renderEmergencyPushContacts(contacts) {
+function renderTelegramContacts(contacts) {
     const container = $("pushContactsList");
     const testButton = $("testPushNotificationBtn");
     if (!container) return;
@@ -4441,7 +4441,7 @@ function renderEmergencyPushContacts(contacts) {
     if (!contacts.length) {
         const empty = document.createElement("p");
         empty.className = "muted small";
-        empty.textContent = "No emergency contacts invited yet.";
+        empty.textContent = "No Telegram contacts connected yet.";
         container.appendChild(empty);
         return;
     }
@@ -4456,21 +4456,23 @@ function renderEmergencyPushContacts(contacts) {
         state.className = "muted small";
         state.style.marginTop = "4px";
         state.textContent = contact.status === "connected"
-            ? "Connected · " + contact.device_count + " device(s)"
-            : contact.status === "expired"
-                ? "Invitation expired · create a new link"
-                : "Invitation pending · waiting for contact";
+            ? "Connected · Telegram" + (contact.username ? " · @" + contact.username : "")
+            : contact.status === "stopped"
+                ? "Disconnected in Telegram · ask contact to use the invite again"
+                : contact.status === "expired"
+                    ? "Invitation expired · create a new Telegram link"
+                    : "Invitation pending · waiting for Telegram Start";
         details.append(name, state);
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "danger-btn";
         remove.textContent = "Remove";
         remove.addEventListener("click", async () => {
-            if (!window.confirm("Remove " + contact.contact_name + " from emergency notifications?")) return;
+            if (!window.confirm("Remove " + contact.contact_name + " from Telegram alerts?")) return;
             try {
-                await apiRequest("/api/emergency-contacts/" + encodeURIComponent(contact.id), { method: "DELETE" });
-                await loadEmergencyPushContacts();
-                showToast("Emergency contact removed.");
+                await apiRequest("/api/telegram-contacts/" + encodeURIComponent(contact.id), { method: "DELETE" });
+                await loadTelegramContacts();
+                showToast("Telegram contact removed.");
             } catch (error) { showToast("Could not remove contact: " + error.message); }
         });
         row.append(details, remove);
@@ -4478,20 +4480,20 @@ function renderEmergencyPushContacts(contacts) {
     });
 }
 
-async function loadEmergencyPushContacts() {
+async function loadTelegramContacts() {
     try {
-        const result = await apiRequest("/api/emergency-contacts");
-        renderEmergencyPushContacts(result.contacts || []);
-        if (!result.push_configured) {
-            setText("pushContactStatus", "FCM setup is pending. Add Firebase web app settings, Firebase Admin service account and FIREBASE_WEB_VAPID_KEY before creating invitations.");
+        const result = await apiRequest("/api/telegram-contacts");
+        renderTelegramContacts(result.contacts || []);
+        if (!result.telegram_configured) {
+            setText("pushContactStatus", "Telegram setup is pending. Add TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_USERNAME in Render Environment.");
         } else {
             const connected = (result.contacts || []).filter(item => item.status === "connected").length;
             setText("pushContactStatus", connected
-                ? "Connected contacts: " + connected + ". You can add more contacts or send a test notification."
-                : "Invite a contact; they must open the link and allow browser notifications.");
+                ? "Connected Telegram contacts: " + connected + ". You can add more contacts or send a test alert."
+                : "Create an invite and ask your contact to press Start in Telegram.");
         }
     } catch (error) {
-        setText("pushContactStatus", "Could not load emergency contacts: " + error.message);
+        setText("pushContactStatus", "Could not load Telegram contacts: " + error.message);
     }
 }
 
@@ -4499,7 +4501,7 @@ async function refreshExtendedFeatures() {
     const results = await Promise.allSettled([
         apiRequest("/api/personalization/profile"),
         apiRequest("/api/music"),
-        apiRequest("/api/emergency-contacts")
+        apiRequest("/api/telegram-contacts")
     ]);
     if (results[0].status === "fulfilled") {
         const item = results[0].value;
@@ -4514,9 +4516,9 @@ async function refreshExtendedFeatures() {
         renderMusicLibrary();
     }
     if (results[2].status === "fulfilled") {
-        renderEmergencyPushContacts(results[2].value.contacts || []);
-        if (!results[2].value.push_configured) {
-            setText("pushContactStatus", "FCM setup is pending. Add Firebase web app settings, Firebase Admin service account and FIREBASE_WEB_VAPID_KEY before creating invitations.");
+        renderTelegramContacts(results[2].value.contacts || []);
+        if (!results[2].value.telegram_configured) {
+            setText("pushContactStatus", "Telegram setup is pending. Add TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_USERNAME in Render Environment.");
         }
     }
 }
@@ -8214,17 +8216,15 @@ $("createPushInviteBtn").addEventListener("click", async () => {
     const button = $("createPushInviteBtn");
     button.disabled = true;
     try {
-        const result = await apiRequest("/api/emergency-contacts/invites", {
+        const result = await apiRequest("/api/telegram-contacts/invites", {
             method: "POST", body: JSON.stringify({ contact_name: contactName })
         });
-        const inviteUrl = new URL("/emergency-invite", window.location.origin);
-        inviteUrl.searchParams.set("token", result.invite_token);
-        $("pushInviteLink").value = inviteUrl.toString();
+        $("pushInviteLink").value = result.invite_url;
         $("pushInviteResult").classList.remove("hidden");
-        setText("pushContactStatus", "Invite created for " + result.contact_name + ". Share the link within 7 days.");
+        setText("pushContactStatus", "Telegram invite created for " + result.contact_name + ". Share the link within 7 days and ask them to press Start.");
         input.value = "";
-        await loadEmergencyPushContacts();
-        showToast("Emergency contact invite created.");
+        await loadTelegramContacts();
+        showToast("Telegram invite created.");
     } catch (error) {
         setText("pushContactStatus", error.message || "Could not create the invitation.");
         showToast("Could not create invite: " + error.message);
@@ -8245,13 +8245,13 @@ $("copyPushInviteLinkBtn").addEventListener("click", async () => {
 $("testPushNotificationBtn").addEventListener("click", async () => {
     $("testPushNotificationBtn").disabled = true;
     try {
-        const result = await apiRequest("/api/emergency-contacts/test", { method: "POST" });
-        setText("pushContactStatus", "Test notification sent to " + result.recipient_count + " registered device(s).");
-        showToast("Test push notification sent.");
+        const result = await apiRequest("/api/telegram-contacts/test", { method: "POST" });
+        setText("pushContactStatus", "Test Telegram alert sent to " + result.recipient_count + " contact(s).");
+        showToast("Test Telegram alert sent.");
     } catch (error) {
-        setText("pushContactStatus", error.message || "FCM test notification failed.");
-        showToast("FCM test failed: " + error.message);
-    } finally { await loadEmergencyPushContacts(); }
+        setText("pushContactStatus", error.message || "Telegram test alert failed.");
+        showToast("Telegram test failed: " + error.message);
+    } finally { await loadTelegramContacts(); }
 });
 
 
