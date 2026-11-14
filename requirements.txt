@@ -9,7 +9,7 @@ matplotlib
 plotly
 python-dotenv
 pydantic
-firebase-admin
+firebase-admin>=7.5.0
 requests
 joblib
 opencv-contrib-python
