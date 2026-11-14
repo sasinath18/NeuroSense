@@ -2330,3 +2330,129 @@ def test_automatic_emergency_push_waits_for_three_events_and_applies_cooldown(cl
     assert sent_messages[0].fid == "firebase-installation-" + ("f" * 24)
     assert api.maybe_send_emergency_push_alert(user_id, 0.9) == "cooldown"
     assert len(sent_messages) == 1
+
+
+
+def configure_test_telegram(monkeypatch):
+    monkeypatch.setattr(api, "TELEGRAM_BOT_TOKEN", "test-telegram-bot-token")
+    monkeypatch.setattr(api, "TELEGRAM_BOT_USERNAME", "NeuroSense_Wellness_Alert_Bot")
+    monkeypatch.setattr(api, "NEUROSENSE_PUBLIC_URL", "https://neurosense-test.onrender.com")
+
+
+def create_test_telegram_invite(client, user_id, contact_name="Parent"):
+    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
+    response = client.post(
+        "/api/telegram-contacts/invites",
+        json={"contact_name": contact_name},
+        headers={"X-Demo-User": user_id},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def start_test_telegram_contact(client, invite_token, chat_id=123456, username="mubeen"):
+    return client.post(
+        "/api/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": api.telegram_webhook_secret()},
+        json={
+            "update_id": 1,
+            "message": {
+                "message_id": 1,
+                "from": {"id": chat_id, "is_bot": False, "first_name": "Mubeen", "username": username},
+                "chat": {"id": chat_id, "type": "private", "first_name": "Mubeen"},
+                "date": 1,
+                "text": "/start " + invite_token,
+            },
+        },
+    )
+
+
+def test_telegram_invite_creates_deep_link_and_webhook_registers_chat_id(client, monkeypatch):
+    configure_test_telegram(monkeypatch)
+    sent = []
+    monkeypatch.setattr(
+        api,
+        "telegram_api_call",
+        lambda method, payload: (sent.append((method, payload)) or {"ok": True, "result": True}),
+    )
+    user_id = "neurosense-telegram-register"
+    invite = create_test_telegram_invite(client, user_id, "Mubeen")
+
+    assert invite["invite_url"].startswith("https://t.me/NeuroSense_Wellness_Alert_Bot?start=")
+    assert len(invite["invite_url"].split("start=", 1)[1]) <= 64
+
+    response = start_test_telegram_contact(client, invite["invite_url"].split("start=", 1)[1])
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    listed = client.get(
+        "/api/telegram-contacts",
+        headers={"X-Demo-User": user_id},
+    )
+    assert listed.status_code == 200
+    contact = listed.json()["contacts"][0]
+    assert contact["contact_name"] == "Mubeen"
+    assert contact["status"] == "connected"
+    assert contact["username"] == "mubeen"
+    assert sent[-1][0] == "sendMessage"
+    assert "Connected to NeuroSense alerts" in sent[-1][1]["text"]
+
+
+def test_telegram_webhook_rejects_requests_without_valid_secret(client, monkeypatch):
+    configure_test_telegram(monkeypatch)
+    response = client.post(
+        "/api/telegram/webhook",
+        json={"message": {"chat": {"id": 111, "type": "private"}, "text": "/start"}},
+    )
+    assert response.status_code == 401
+
+
+def test_telegram_test_endpoint_sends_to_all_registered_contacts(client, monkeypatch):
+    configure_test_telegram(monkeypatch)
+    sent = []
+    monkeypatch.setattr(
+        api,
+        "telegram_api_call",
+        lambda method, payload: (sent.append((method, payload)) or {"ok": True, "result": True}),
+    )
+    user_id = "neurosense-telegram-test-send"
+    invite_a = create_test_telegram_invite(client, user_id, "Parent")
+    invite_b = create_test_telegram_invite(client, user_id, "Partner")
+    assert start_test_telegram_contact(client, invite_a["invite_url"].split("start=", 1)[1], 222001).status_code == 200
+    assert start_test_telegram_contact(client, invite_b["invite_url"].split("start=", 1)[1], 222002, "partner").status_code == 200
+
+    response = client.post(
+        "/api/telegram-contacts/test",
+        headers={"X-Demo-User": user_id},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"success": True, "status": "sent", "recipient_count": 2}
+    alert_messages = [payload for method, payload in sent if method == "sendMessage" and payload["text"].startswith("NeuroSense test alert")]
+    assert len(alert_messages) == 2
+
+
+def test_telegram_test_endpoint_requires_an_opted_in_chat(client, monkeypatch):
+    configure_test_telegram(monkeypatch)
+    user_id = "neurosense-telegram-no-recipient"
+    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
+    response = client.post("/api/telegram-contacts/test", headers={"X-Demo-User": user_id})
+    assert response.status_code == 409
+    assert "No Telegram contact" in response.json()["detail"]
+
+
+def test_telegram_stop_command_disables_contact(client, monkeypatch):
+    configure_test_telegram(monkeypatch)
+    monkeypatch.setattr(api, "telegram_api_call", lambda method, payload: {"ok": True, "result": True})
+    user_id = "neurosense-telegram-stop"
+    invite = create_test_telegram_invite(client, user_id, "Parent")
+    token = invite["invite_url"].split("start=", 1)[1]
+    assert start_test_telegram_contact(client, token, 333001).status_code == 200
+
+    stopped = client.post(
+        "/api/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": api.telegram_webhook_secret()},
+        json={"message": {"chat": {"id": 333001, "type": "private"}, "text": "/stop"}},
+    )
+    assert stopped.status_code == 200
+    listed = client.get("/api/telegram-contacts", headers={"X-Demo-User": user_id})
+    assert listed.json()["contacts"][0]["status"] == "stopped"
