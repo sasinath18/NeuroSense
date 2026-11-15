@@ -876,27 +876,152 @@ def send_telegram_message(chat_id: str | int, text: str) -> bool:
     return bool(result.get("ok"))
 
 
-def send_user_telegram_alert(user_id: str, title: str, body: str) -> tuple[str, int]:
-    if not telegram_configured():
-        return "not_configured", 0
+def telegram_chat_document_id(chat_id: str | int) -> str:
+    """Stable Firestore-safe ID for a Telegram chat."""
+    return hashlib.sha256(str(chat_id).encode("utf-8")).hexdigest()
+
+
+def telegram_user_collection(user_id: str, collection_name: str):
+    if FIRESTORE_CLIENT is None:
+        raise RuntimeError("Firestore is not configured.")
+    return (
+        FIRESTORE_CLIENT.collection("users")
+        .document(str(user_id))
+        .collection(collection_name)
+    )
+
+
+def telegram_global_document(collection_name: str, document_id: str):
+    if FIRESTORE_CLIENT is None:
+        raise RuntimeError("Firestore is not configured.")
+    return FIRESTORE_CLIENT.collection(collection_name).document(document_id)
+
+
+def telegram_firestore_documents(collection_ref) -> list[dict]:
+    """Return a Firestore collection with document IDs included."""
+    return [
+        {**(snapshot.to_dict() or {}), "document_id": snapshot.id}
+        for snapshot in collection_ref.stream()
+    ]
+
+
+def sync_local_telegram_state_to_firestore(user_id: str) -> None:
+    """
+    One-time-safe migration of any still-visible SQLite Telegram state.
+    Firestore remains authoritative; existing Firestore documents are never
+    overwritten by a local cache copy.
+    """
+    if FIRESTORE_CLIENT is None:
+        return
+
     with db_connection() as db:
-        rows = db.execute(
+        invite_rows = db.execute(
             """
-            SELECT chat_id
-            FROM telegram_emergency_contacts
-            WHERE user_id = ? AND active = 1
-            ORDER BY created_at
+            SELECT invite_id, user_id, contact_name, token_hash,
+                   created_at, expires_at, revoked_at
+            FROM telegram_emergency_invites
+            WHERE user_id = ?
             """,
             (user_id,),
         ).fetchall()
-    chat_ids = [str(row["chat_id"]) for row in rows]
+        contact_rows = db.execute(
+            """
+            SELECT contact_id, invite_id, user_id, chat_id, telegram_user_id,
+                   username, first_name, created_at, last_seen_at, active
+            FROM telegram_emergency_contacts
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchall()
+
+    invite_collection = telegram_user_collection(
+        user_id, "telegram_emergency_invites"
+    )
+    contact_collection = telegram_user_collection(
+        user_id, "telegram_emergency_contacts"
+    )
+
+    for row in invite_rows:
+        invite = dict(row)
+        invite_ref = invite_collection.document(str(invite["invite_id"]))
+        if not invite_ref.get().exists:
+            invite_ref.set(invite)
+        if not invite.get("revoked_at"):
+            token_ref = telegram_global_document(
+                "telegram_invite_tokens", str(invite["token_hash"])
+            )
+            if not token_ref.get().exists:
+                token_ref.set({
+                    "user_id": user_id,
+                    "invite_id": str(invite["invite_id"]),
+                })
+
+    for row in contact_rows:
+        contact = dict(row)
+        chat_id = str(contact["chat_id"])
+        stable_id = telegram_chat_document_id(chat_id)
+        contact_ref = contact_collection.document(stable_id)
+        if not contact_ref.get().exists:
+            contact["active"] = bool(contact.get("active"))
+            contact["chat_id"] = chat_id
+            contact_ref.set(contact)
+        chat_ref = telegram_global_document(
+            "telegram_chat_links", stable_id
+        )
+        if not chat_ref.get().exists:
+            chat_ref.set({
+                "user_id": user_id,
+                "invite_id": str(contact["invite_id"]),
+                "contact_id": stable_id,
+                "active": bool(contact.get("active")),
+            })
+
+
+def telegram_firestore_active_chat_ids(user_id: str) -> list[str]:
+    if FIRESTORE_CLIENT is None:
+        return []
+    contacts = telegram_firestore_documents(
+        telegram_user_collection(user_id, "telegram_emergency_contacts")
+    )
+    return [
+        str(item["chat_id"])
+        for item in contacts
+        if item.get("active") and item.get("chat_id") is not None
+    ]
+
+
+def send_user_telegram_alert(user_id: str, title: str, body: str) -> tuple[str, int]:
+    if not telegram_configured():
+        return "not_configured", 0
+
+    if FIRESTORE_CLIENT is not None:
+        try:
+            chat_ids = telegram_firestore_active_chat_ids(user_id)
+        except Exception:
+            logger.exception("Could not load Telegram contacts from Firestore.")
+            return "storage_failed", 0
+    else:
+        with db_connection() as db:
+            rows = db.execute(
+                """
+                SELECT chat_id
+                FROM telegram_emergency_contacts
+                WHERE user_id = ? AND active = 1
+                ORDER BY created_at
+                """,
+                (user_id,),
+            ).fetchall()
+        chat_ids = [str(row["chat_id"]) for row in rows]
+
     if not chat_ids:
         return "no_registered_contacts", 0
 
     message = f"{title}\n\n{body}"
-    sent_count = sum(1 for chat_id in chat_ids if send_telegram_message(chat_id, message))
+    sent_count = sum(
+        1 for chat_id in chat_ids
+        if send_telegram_message(chat_id, message)
+    )
     return ("sent", sent_count) if sent_count else ("failed", 0)
-
 
 def configured_music_bucket():
     if FIREBASE_APP is None or not FIREBASE_STORAGE_BUCKET:
@@ -4587,42 +4712,98 @@ def blink_history(
 
 @app.get("/api/telegram-contacts")
 def list_telegram_emergency_contacts(user_id: str = Depends(current_user_id)):
-    with db_connection() as db:
-        rows = db.execute(
-            """
-            SELECT i.invite_id, i.contact_name, i.created_at, i.expires_at,
-                   c.username, c.first_name, c.active AS contact_active,
-                   c.last_seen_at
-            FROM telegram_emergency_invites i
-            LEFT JOIN telegram_emergency_contacts c
-                ON c.invite_id = i.invite_id AND c.user_id = i.user_id
-            WHERE i.user_id = ? AND i.revoked_at IS NULL
-            ORDER BY i.created_at DESC
-            """,
-            (user_id,),
-        ).fetchall()
+    if FIRESTORE_CLIENT is not None:
+        try:
+            sync_local_telegram_state_to_firestore(user_id)
+            invitations = telegram_firestore_documents(
+                telegram_user_collection(user_id, "telegram_emergency_invites")
+            )
+            contacts = telegram_firestore_documents(
+                telegram_user_collection(user_id, "telegram_emergency_contacts")
+            )
+            contact_by_invite = {
+                str(item.get("invite_id")): item
+                for item in contacts
+            }
+            now = utc_now()
+            result_contacts = []
+            for invite in invitations:
+                if invite.get("revoked_at"):
+                    continue
+                invite_id = str(invite.get("invite_id") or invite.get("document_id"))
+                linked = contact_by_invite.get(invite_id)
+                if linked and linked.get("active"):
+                    state = "connected"
+                elif linked:
+                    state = "stopped"
+                else:
+                    state = (
+                        "expired"
+                        if parse_iso(invite["expires_at"]) <= now
+                        else "pending"
+                    )
+                result_contacts.append({
+                    "id": invite_id,
+                    "contact_name": invite.get("contact_name", "Emergency contact"),
+                    "username": (linked or {}).get("username"),
+                    "first_name": (linked or {}).get("first_name"),
+                    "created_at": invite.get("created_at"),
+                    "expires_at": invite.get("expires_at"),
+                    "last_seen_at": (linked or {}).get("last_seen_at"),
+                    "status": state,
+                })
+            result_contacts.sort(
+                key=lambda item: str(item.get("created_at") or ""),
+                reverse=True,
+            )
+        except Exception:
+            logger.exception("Could not load durable Telegram contacts from Firestore.")
+            raise HTTPException(
+                status_code=503,
+                detail="Telegram contact storage is temporarily unavailable. Please retry.",
+            )
+    else:
+        if APP_ENV != "development":
+            raise HTTPException(
+                status_code=503,
+                detail="Persistent Telegram contact storage is not configured.",
+            )
+        with db_connection() as db:
+            rows = db.execute(
+                """
+                SELECT i.invite_id, i.contact_name, i.created_at, i.expires_at,
+                       c.username, c.first_name, c.active AS contact_active,
+                       c.last_seen_at
+                FROM telegram_emergency_invites i
+                LEFT JOIN telegram_emergency_contacts c
+                    ON c.invite_id = i.invite_id AND c.user_id = i.user_id
+                WHERE i.user_id = ? AND i.revoked_at IS NULL
+                ORDER BY i.created_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        now = utc_now()
+        result_contacts = []
+        for row in rows:
+            if row["contact_active"] == 1:
+                state = "connected"
+            elif row["contact_active"] == 0:
+                state = "stopped"
+            else:
+                state = "expired" if parse_iso(row["expires_at"]) <= now else "pending"
+            result_contacts.append({
+                "id": row["invite_id"],
+                "contact_name": row["contact_name"],
+                "username": row["username"],
+                "first_name": row["first_name"],
+                "created_at": row["created_at"],
+                "expires_at": row["expires_at"],
+                "last_seen_at": row["last_seen_at"],
+                "status": state,
+            })
 
-    now = utc_now()
-    contacts = []
-    for row in rows:
-        if row["contact_active"] == 1:
-            state = "connected"
-        elif row["contact_active"] == 0:
-            state = "stopped"
-        else:
-            state = "expired" if parse_iso(row["expires_at"]) <= now else "pending"
-        contacts.append({
-            "id": row["invite_id"],
-            "contact_name": row["contact_name"],
-            "username": row["username"],
-            "first_name": row["first_name"],
-            "created_at": row["created_at"],
-            "expires_at": row["expires_at"],
-            "last_seen_at": row["last_seen_at"],
-            "status": state,
-        })
     return {
-        "contacts": contacts,
+        "contacts": result_contacts,
         "telegram_configured": telegram_configured(),
         "bot_username": TELEGRAM_BOT_USERNAME or None,
     }
@@ -4638,6 +4819,11 @@ def create_telegram_emergency_invite(
             status_code=503,
             detail="Telegram bot is not configured. Add TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_USERNAME in Render Environment.",
         )
+    if FIRESTORE_CLIENT is None and APP_ENV != "development":
+        raise HTTPException(
+            status_code=503,
+            detail="Persistent Telegram contact storage is not configured.",
+        )
 
     contact_name = payload.contact_name.strip()
     if len(contact_name) < 2:
@@ -4647,26 +4833,71 @@ def create_telegram_emergency_invite(
     expires_at = now + timedelta(days=EMERGENCY_INVITE_TTL_DAYS)
     invite_token = secrets.token_urlsafe(24)
     invite_id = uuid.uuid4().hex
-    with db_connection() as db:
-        active_count = db.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM telegram_emergency_invites
-            WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
-            """,
-            (user_id, iso(now)),
-        ).fetchone()["total"]
-        if int(active_count) >= MAX_EMERGENCY_CONTACTS:
-            raise HTTPException(status_code=429, detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active Telegram contacts.")
+    token_hash = token_digest(invite_token)
+    invite_data = {
+        "invite_id": invite_id,
+        "user_id": user_id,
+        "contact_name": contact_name,
+        "token_hash": token_hash,
+        "created_at": iso(now),
+        "expires_at": iso(expires_at),
+        "revoked_at": None,
+    }
 
-        db.execute(
-            """
-            INSERT INTO telegram_emergency_invites (
-                invite_id, user_id, contact_name, token_hash, created_at, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (invite_id, user_id, contact_name, token_digest(invite_token), iso(now), iso(expires_at)),
-        )
+    if FIRESTORE_CLIENT is not None:
+        try:
+            sync_local_telegram_state_to_firestore(user_id)
+            existing_invites = telegram_firestore_documents(
+                telegram_user_collection(user_id, "telegram_emergency_invites")
+            )
+            active_count = sum(
+                1 for item in existing_invites
+                if not item.get("revoked_at")
+                and parse_iso(item["expires_at"]) > now
+            )
+            if active_count >= MAX_EMERGENCY_CONTACTS:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active Telegram contacts.",
+                )
+            telegram_user_collection(
+                user_id, "telegram_emergency_invites"
+            ).document(invite_id).set(invite_data)
+            telegram_global_document(
+                "telegram_invite_tokens", token_hash
+            ).set({"user_id": user_id, "invite_id": invite_id})
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Could not save Telegram invitation in Firestore.")
+            try:
+                telegram_user_collection(
+                    user_id, "telegram_emergency_invites"
+                ).document(invite_id).delete()
+                telegram_global_document(
+                    "telegram_invite_tokens", token_hash
+                ).delete()
+            except Exception:
+                logger.exception("Could not roll back partial Telegram invitation.")
+            raise HTTPException(
+                status_code=503,
+                detail="Telegram invite could not be saved safely. Please retry.",
+            )
+
+    # Keep SQLite as a local cache/development fallback, not the production source of truth.
+    try:
+        with db_connection() as db:
+            db.execute(
+                """
+                INSERT INTO telegram_emergency_invites (
+                    invite_id, user_id, contact_name, token_hash, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(invite_id) DO NOTHING
+                """,
+                (invite_id, user_id, contact_name, token_hash, iso(now), iso(expires_at)),
+            )
+    except Exception:
+        logger.exception("Could not update local Telegram invite cache.")
 
     invite_url = f"https://t.me/{TELEGRAM_BOT_USERNAME}?start={invite_token}"
     return {
@@ -4680,13 +4911,47 @@ def create_telegram_emergency_invite(
 
 @app.delete("/api/telegram-contacts/{invite_id}")
 def revoke_telegram_emergency_contact(invite_id: str, user_id: str = Depends(current_user_id)):
+    if FIRESTORE_CLIENT is not None:
+        try:
+            invite_ref = telegram_user_collection(
+                user_id, "telegram_emergency_invites"
+            ).document(invite_id)
+            invite_snapshot = invite_ref.get()
+            if not invite_snapshot.exists:
+                raise HTTPException(status_code=404, detail="Telegram emergency contact was not found.")
+            invite_data = invite_snapshot.to_dict() or {}
+            token_hash = invite_data.get("token_hash")
+            contacts_ref = telegram_user_collection(
+                user_id, "telegram_emergency_contacts"
+            )
+            for snapshot in contacts_ref.where("invite_id", "==", invite_id).stream():
+                contact = snapshot.to_dict() or {}
+                chat_id = contact.get("chat_id")
+                if chat_id is not None:
+                    telegram_global_document(
+                        "telegram_chat_links",
+                        telegram_chat_document_id(str(chat_id)),
+                    ).delete()
+                snapshot.reference.delete()
+            invite_ref.delete()
+            if token_hash:
+                telegram_global_document(
+                    "telegram_invite_tokens", str(token_hash)
+                ).delete()
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Could not revoke Telegram contact in Firestore.")
+            raise HTTPException(
+                status_code=503,
+                detail="Telegram contact could not be removed right now. Please retry.",
+            )
+
     with db_connection() as db:
-        deleted = db.execute(
+        db.execute(
             "DELETE FROM telegram_emergency_invites WHERE invite_id = ? AND user_id = ?",
             (invite_id, user_id),
         )
-        if deleted.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Telegram emergency contact was not found.")
     return {"success": True}
 
 
@@ -4694,16 +4959,29 @@ def revoke_telegram_emergency_contact(invite_id: str, user_id: str = Depends(cur
 def test_telegram_emergency_contact(user_id: str = Depends(current_user_id)):
     if not telegram_configured():
         raise HTTPException(status_code=503, detail="Telegram bot is not configured on the server.")
-    with db_connection() as db:
-        rows = db.execute(
-            """
-            SELECT chat_id
-            FROM telegram_emergency_contacts
-            WHERE user_id = ? AND active = 1
-            """,
-            (user_id,),
-        ).fetchall()
-    chat_ids = [str(row["chat_id"]) for row in rows]
+    if FIRESTORE_CLIENT is not None:
+        try:
+            chat_ids = telegram_firestore_active_chat_ids(user_id)
+        except Exception:
+            logger.exception("Could not load Telegram test recipients from Firestore.")
+            raise HTTPException(
+                status_code=503,
+                detail="Telegram contact storage is temporarily unavailable. Please retry.",
+            )
+    else:
+        if APP_ENV != "development":
+            raise HTTPException(status_code=503, detail="Persistent Telegram contact storage is not configured.")
+        with db_connection() as db:
+            rows = db.execute(
+                """
+                SELECT chat_id
+                FROM telegram_emergency_contacts
+                WHERE user_id = ? AND active = 1
+                """,
+                (user_id,),
+            ).fetchall()
+        chat_ids = [str(row["chat_id"]) for row in rows]
+
     if not chat_ids:
         raise HTTPException(status_code=409, detail="No Telegram contact has started the bot from an active invitation yet.")
 
@@ -4742,12 +5020,35 @@ def telegram_webhook(
     parts = text_value.split(maxsplit=1)
     command = parts[0].split("@", 1)[0].lower()
     argument = parts[1].strip() if len(parts) > 1 else ""
+    chat_id_text = str(chat_id)
+    chat_document_id = telegram_chat_document_id(chat_id_text)
 
     if command == "/stop":
+        if FIRESTORE_CLIENT is not None:
+            try:
+                chat_ref = telegram_global_document(
+                    "telegram_chat_links", chat_document_id
+                )
+                chat_snapshot = chat_ref.get()
+                if chat_snapshot.exists:
+                    link_data = chat_snapshot.to_dict() or {}
+                    owner_id = str(link_data.get("user_id") or "")
+                    contact_id = str(link_data.get("contact_id") or chat_document_id)
+                    if owner_id:
+                        telegram_user_collection(
+                            owner_id, "telegram_emergency_contacts"
+                        ).document(contact_id).set(
+                            {"active": False, "last_seen_at": iso()},
+                            merge=True,
+                        )
+                    chat_ref.set({"active": False}, merge=True)
+            except Exception:
+                logger.exception("Could not persist Telegram /stop in Firestore.")
+                raise HTTPException(status_code=503, detail="Telegram contact storage is temporarily unavailable.")
         with db_connection() as db:
             db.execute(
                 "UPDATE telegram_emergency_contacts SET active = 0 WHERE chat_id = ?",
-                (str(chat_id),),
+                (chat_id_text,),
             )
         send_telegram_message(chat_id, "NeuroSense alerts stopped. Your Telegram chat is no longer receiving alerts.")
         return {"ok": True}
@@ -4764,6 +5065,160 @@ def telegram_webhook(
 
     now = utc_now()
     now_text = iso(now)
+
+    if FIRESTORE_CLIENT is not None:
+        try:
+            token_hash = token_digest(argument)
+            token_snapshot = telegram_global_document(
+                "telegram_invite_tokens", token_hash
+            ).get()
+            token_data = token_snapshot.to_dict() if token_snapshot.exists else None
+
+            # A local invite may predate this Firestore-backed release. Migrate it
+            # when this webhook reaches the same live instance that created it.
+            if not token_data:
+                with db_connection() as db:
+                    invite_row = db.execute(
+                        """
+                        SELECT invite_id, user_id, contact_name, token_hash,
+                               created_at, expires_at, revoked_at
+                        FROM telegram_emergency_invites
+                        WHERE token_hash = ? AND revoked_at IS NULL
+                        """,
+                        (token_hash,),
+                    ).fetchone()
+                if invite_row:
+                    legacy_invite = dict(invite_row)
+                    owner_id = str(legacy_invite["user_id"])
+                    invite_id = str(legacy_invite["invite_id"])
+                    telegram_user_collection(
+                        owner_id, "telegram_emergency_invites"
+                    ).document(invite_id).set(legacy_invite)
+                    telegram_global_document(
+                        "telegram_invite_tokens", token_hash
+                    ).set({"user_id": owner_id, "invite_id": invite_id})
+                    token_data = {"user_id": owner_id, "invite_id": invite_id}
+
+            if not token_data:
+                send_telegram_message(chat_id, "This NeuroSense invitation is invalid or has been revoked. Ask the NeuroSense user for a new link.")
+                return {"ok": True}
+
+            owner_id = str(token_data["user_id"])
+            invite_id = str(token_data["invite_id"])
+            invite_snapshot = telegram_user_collection(
+                owner_id, "telegram_emergency_invites"
+            ).document(invite_id).get()
+            if not invite_snapshot.exists:
+                send_telegram_message(chat_id, "This NeuroSense invitation is invalid or has been revoked. Ask the NeuroSense user for a new link.")
+                return {"ok": True}
+            invite = invite_snapshot.to_dict() or {}
+            if invite.get("revoked_at") or parse_iso(invite["expires_at"]) <= now:
+                send_telegram_message(chat_id, "This NeuroSense invitation has expired. Ask the NeuroSense user to create a new Telegram link.")
+                return {"ok": True}
+
+            chat_link_ref = telegram_global_document(
+                "telegram_chat_links", chat_document_id
+            )
+            existing_snapshot = chat_link_ref.get()
+            existing = existing_snapshot.to_dict() if existing_snapshot.exists else None
+            if existing and (
+                str(existing.get("invite_id")) != invite_id
+                or str(existing.get("user_id")) != owner_id
+            ):
+                send_telegram_message(chat_id, "This Telegram account is already linked to another NeuroSense contact. Ask the owner to remove the previous link first.")
+                return {"ok": True}
+
+            contacts_ref = telegram_user_collection(
+                owner_id, "telegram_emergency_contacts"
+            )
+            contact_ref = contacts_ref.document(chat_document_id)
+            contact_snapshot = contact_ref.get()
+            if not contact_snapshot.exists:
+                active_contacts = [
+                    item for item in telegram_firestore_documents(contacts_ref)
+                    if item.get("active")
+                ]
+                if len(active_contacts) >= MAX_EMERGENCY_CONTACTS:
+                    send_telegram_message(chat_id, "This NeuroSense account has reached its Telegram contact limit.")
+                    return {"ok": True}
+
+            contact_data = {
+                "contact_id": chat_document_id,
+                "invite_id": invite_id,
+                "user_id": owner_id,
+                "chat_id": chat_id_text,
+                "telegram_user_id": (
+                    str(sender.get("id"))
+                    if sender.get("id") is not None else None
+                ),
+                "username": str(sender.get("username") or "")[:64] or None,
+                "first_name": str(sender.get("first_name") or "")[:120] or None,
+                "created_at": (
+                    (contact_snapshot.to_dict() or {}).get("created_at")
+                    if contact_snapshot.exists else now_text
+                ),
+                "last_seen_at": now_text,
+                "active": True,
+            }
+            contact_ref.set(contact_data)
+            chat_link_ref.set({
+                "user_id": owner_id,
+                "invite_id": invite_id,
+                "contact_id": chat_document_id,
+                "active": True,
+            })
+        except Exception:
+            logger.exception("Could not persist Telegram /start connection in Firestore.")
+            raise HTTPException(
+                status_code=503,
+                detail="Telegram contact storage is temporarily unavailable. Telegram will retry this connection.",
+            )
+
+        # Best-effort SQLite mirror for local development and older code paths.
+        try:
+            with db_connection() as db:
+                existing_row = db.execute(
+                    "SELECT contact_id FROM telegram_emergency_contacts WHERE chat_id = ?",
+                    (chat_id_text,),
+                ).fetchone()
+                if existing_row:
+                    db.execute(
+                        """
+                        UPDATE telegram_emergency_contacts
+                        SET invite_id = ?, user_id = ?, telegram_user_id = ?,
+                            username = ?, first_name = ?, last_seen_at = ?, active = 1
+                        WHERE chat_id = ?
+                        """,
+                        (
+                            invite_id, owner_id, contact_data["telegram_user_id"],
+                            contact_data["username"], contact_data["first_name"],
+                            now_text, chat_id_text,
+                        ),
+                    )
+                else:
+                    db.execute(
+                        """
+                        INSERT INTO telegram_emergency_contacts (
+                            contact_id, invite_id, user_id, chat_id, telegram_user_id,
+                            username, first_name, created_at, last_seen_at, active
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                        """,
+                        (
+                            chat_document_id, invite_id, owner_id, chat_id_text,
+                            contact_data["telegram_user_id"], contact_data["username"],
+                            contact_data["first_name"], contact_data["created_at"], now_text,
+                        ),
+                    )
+        except Exception:
+            logger.exception("Could not update local Telegram contact cache.")
+
+        send_telegram_message(
+            chat_id,
+            f"Connected to NeuroSense alerts for {invite.get('contact_name', 'your contact')}. You will receive experimental wellness check-in alerts here. Send /stop anytime to disconnect.",
+        )
+        return {"ok": True}
+
+    # Development-only SQLite path when Firebase is not configured.
     with db_connection() as db:
         invite = db.execute(
             """
@@ -4773,31 +5228,30 @@ def telegram_webhook(
             """,
             (token_digest(argument),),
         ).fetchone()
-
         if invite is None:
             send_telegram_message(chat_id, "This NeuroSense invitation is invalid or has been revoked. Ask the NeuroSense user for a new link.")
             return {"ok": True}
         if parse_iso(invite["expires_at"]) <= now:
             send_telegram_message(chat_id, "This NeuroSense invitation has expired. Ask the NeuroSense user to create a new Telegram link.")
             return {"ok": True}
-
         existing = db.execute(
             "SELECT invite_id, user_id FROM telegram_emergency_contacts WHERE chat_id = ?",
-            (str(chat_id),),
+            (chat_id_text,),
         ).fetchone()
-        if existing and (existing["invite_id"] != invite["invite_id"] or existing["user_id"] != invite["user_id"]):
+        if existing and (
+            existing["invite_id"] != invite["invite_id"]
+            or existing["user_id"] != invite["user_id"]
+        ):
             send_telegram_message(chat_id, "This Telegram account is already linked to another NeuroSense contact. Ask the owner to remove the previous link first.")
             return {"ok": True}
-
         if existing is None:
-            contact_count = db.execute(
+            count = db.execute(
                 "SELECT COUNT(*) AS total FROM telegram_emergency_contacts WHERE user_id = ? AND active = 1",
                 (invite["user_id"],),
             ).fetchone()["total"]
-            if int(contact_count) >= MAX_EMERGENCY_CONTACTS:
+            if int(count) >= MAX_EMERGENCY_CONTACTS:
                 send_telegram_message(chat_id, "This NeuroSense account has reached its Telegram contact limit.")
                 return {"ok": True}
-
             db.execute(
                 """
                 INSERT INTO telegram_emergency_contacts (
@@ -4806,15 +5260,12 @@ def telegram_webhook(
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """,
                 (
-                    uuid.uuid4().hex,
-                    invite["invite_id"],
-                    invite["user_id"],
-                    str(chat_id),
+                    uuid.uuid4().hex, invite["invite_id"], invite["user_id"],
+                    chat_id_text,
                     str(sender.get("id")) if sender.get("id") is not None else None,
                     str(sender.get("username") or "")[:64] or None,
                     str(sender.get("first_name") or "")[:120] or None,
-                    now_text,
-                    now_text,
+                    now_text, now_text,
                 ),
             )
         else:
@@ -4829,8 +5280,7 @@ def telegram_webhook(
                     str(sender.get("id")) if sender.get("id") is not None else None,
                     str(sender.get("username") or "")[:64] or None,
                     str(sender.get("first_name") or "")[:120] or None,
-                    now_text,
-                    str(chat_id),
+                    now_text, chat_id_text,
                 ),
             )
 
