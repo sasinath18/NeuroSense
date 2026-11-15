@@ -506,6 +506,35 @@
             background: var(--surface);
         }
 
+        .sidebar-device-action {
+            display: block;
+            width: 100%;
+            color: var(--text);
+            text-align: left;
+            font: inherit;
+            cursor: pointer;
+            transition: border-color .2s, background .2s, transform .2s;
+        }
+
+        .sidebar-device-action:hover {
+            border-color: var(--accent);
+            background: var(--surface-hover);
+            transform: translateY(-1px);
+        }
+
+        .sidebar-device-action:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 3px;
+        }
+
+        .sidebar-device-action .device-action-hint {
+            display: block;
+            margin-top: 8px;
+            color: var(--accent-hover);
+            font-size: 11px;
+            font-weight: 650;
+        }
+
         .sidebar-device strong {
             font-size: 12px;
             display: block;
@@ -516,6 +545,98 @@
             font-size: 11px;
             line-height: 1.5;
             color: var(--muted);
+        }
+
+        .device-pair-dialog {
+            width: min(640px, calc(100vw - 28px));
+            max-width: 640px;
+            max-height: min(88vh, 900px);
+            padding: 0;
+            overflow: auto;
+            color: var(--text);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            box-shadow: var(--shadow);
+        }
+
+        .device-pair-dialog::backdrop {
+            background: rgba(0, 0, 0, .72);
+            backdrop-filter: blur(3px);
+        }
+
+        .device-pair-dialog-inner {
+            display: grid;
+            gap: 16px;
+            padding: 20px;
+        }
+
+        .device-pair-dialog .card-header {
+            margin-bottom: 0;
+            align-items: center;
+        }
+
+        .device-pair-dialog .device-pair-token {
+            display: grid;
+            gap: 10px;
+            padding: 14px;
+            border: 1px solid color-mix(in srgb, var(--green) 45%, var(--border));
+            border-radius: 12px;
+            background: color-mix(in srgb, var(--green) 7%, var(--surface-2));
+        }
+
+        .device-pair-dialog .device-pair-token code {
+            display: block;
+            overflow-wrap: anywhere;
+            padding: 11px;
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--input);
+            user-select: all;
+        }
+
+        .device-pair-dialog ol {
+            margin: 8px 0 0 18px;
+            padding: 0;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .device-pair-dialog li + li {
+            margin-top: 7px;
+        }
+
+        .device-pair-device-list {
+            display: grid;
+            gap: 8px;
+        }
+
+        .device-pair-device-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 9px 11px;
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            background: var(--surface-2);
+        }
+
+        .device-pair-device-row small {
+            display: block;
+            color: var(--muted);
+            margin-top: 3px;
+            overflow-wrap: anywhere;
+        }
+
+        @media (max-width: 520px) {
+            .device-pair-dialog-inner {
+                padding: 15px;
+            }
+            .device-pair-dialog .card-header {
+                align-items: flex-start;
+            }
         }
 
         .app-main {
@@ -2285,16 +2406,21 @@
 
         <div class="sidebar-bottom">
 
-            <div class="sidebar-device">
+            <button id="sidebarDeviceConnectBtn"
+                    class="sidebar-device sidebar-device-action"
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-controls="devicePairDialog">
                 <strong>Wearable device</strong>
                 <p>
                     <span id="sidebarDeviceDot" class="dot red"></span>
                     <span id="sidebarDeviceStatus">ESP32 not connected</span>
                 </p>
                 <p style="margin-top:5px">
-                    <span id="sidebarDeviceSubtitle">Device integration is pending.</span>
+                    <span id="sidebarDeviceSubtitle">No recent device activity.</span>
                 </p>
-            </div>
+                <span class="device-action-hint">Pair / manage ESP32 →</span>
+            </button>
 
             <div class="muted small" style="padding:16px 5px 0">
                 NeuroSense · Development preview
@@ -2310,6 +2436,65 @@
             aria-label="Close navigation menu"
             tabindex="-1"></button>
 
+
+    <dialog id="devicePairDialog" class="device-pair-dialog" aria-labelledby="devicePairDialogTitle">
+        <div class="device-pair-dialog-inner">
+            <div class="card-header">
+                <div>
+                    <h3 id="devicePairDialogTitle">Connect ESP32 wearable</h3>
+                    <p>Pair this board with your signed-in NeuroSense account.</p>
+                </div>
+                <button id="closeDevicePairDialog" class="icon-btn" type="button" aria-label="Close ESP32 setup">×</button>
+            </div>
+
+            <div id="devicePairCurrentStatus" class="notice" role="status" aria-live="polite">
+                Checking paired devices...
+            </div>
+            <div id="devicePairDevices" class="device-pair-device-list"></div>
+
+            <form id="devicePairForm">
+                <div class="field">
+                    <label for="devicePairId">Device ID</label>
+                    <input id="devicePairId" class="form-control" type="text"
+                           value="neurosense-esp32-01" minlength="3" maxlength="80"
+                           pattern="[A-Za-z0-9_.-]+" required>
+                    <small class="muted">Keep this identical to DEVICE_ID in firmware/esp32_firmware.py.</small>
+                </div>
+                <div class="field">
+                    <label for="devicePairName">Device name</label>
+                    <input id="devicePairName" class="form-control" type="text"
+                           value="NeuroSense ESP32" maxlength="80" required>
+                </div>
+                <button id="createDevicePairBtn" class="primary-btn" type="submit">
+                    Generate one-time pairing token
+                </button>
+            </form>
+
+            <div id="devicePairTokenPanel" class="device-pair-token hidden">
+                <strong>One-time device token</strong>
+                <code id="devicePairTokenText"></code>
+                <button id="copyDevicePairTokenBtn" class="secondary-btn" type="button">Copy device token</button>
+                <p class="muted small">Copy this now. NeuroSense stores only its hash and cannot show this token again after you close or refresh this page. Generating a new token for the same device invalidates the previous token.</p>
+            </div>
+
+            <div class="notice">
+                <strong>Finish setup on the ESP32</strong>
+                <ol>
+                    <li>In Thonny, copy <code>firmware/neurosense_secrets.py.example</code> to the ESP32 as <code>neurosense_secrets.py</code>. Enter your Wi-Fi name, Wi-Fi password and the one-time token above.</li>
+                    <li>Upload <code>firmware/esp32_firmware.py</code> to the ESP32 as <code>main.py</code>. The firmware uses device ID <code>neurosense-esp32-01</code> by default; update it there too if you changed the ID above.</li>
+                    <li>For verified HTTPS, upload the public CA bundle to the ESP32 filesystem as <code>/render_ca_bundle.pem</code>. On your computer run <code>python -m pip install certifi</code>, then <code>python -m certifi</code> to locate the PEM file.</li>
+                    <li>Restart the ESP32. It must join the same Wi-Fi network and upload sensor readings. The dashboard shows Connected after a recent reading is received.</li>
+                </ol>
+            </div>
+
+            <p id="devicePairStatus" class="muted small" role="status" aria-live="polite">
+                ESP32 connects through Wi-Fi and verified HTTPS; it does not pair over browser Bluetooth.
+            </p>
+            <div style="display:flex;justify-content:flex-end;gap:9px;flex-wrap:wrap">
+                <button id="refreshDevicePairStatusBtn" class="secondary-btn" type="button">Refresh connection status</button>
+            </div>
+        </div>
+    </dialog>
 
     <!-- MAIN CONTENT -->
 
@@ -3010,7 +3195,7 @@
                     <div class="card-header">
                         <div>
                             <h3>Live Face Scan</h3>
-                            <p>On-device face landmarks · runs alongside wearable readings</p>
+                            <p>On-device face landmarks · no ESP32 or wearable required</p>
                         </div>
 
                         <span id="cameraStatus" class="badge">
@@ -3080,42 +3265,41 @@
 
                     <div class="card-header">
                         <div>
-                            <h3>Face Scan</h3>
-                            <p>Blink tracking · current stress estimate from your wearable model</p>
+                            <h3>Camera-only results</h3>
+                            <p>Facial pulse estimate (rPPG) · blink tracking</p>
                         </div>
                         <span id="faceRppgStatusBadge" class="badge" data-tone="neutral" style="display:none">Ready</span>
                     </div>
 
-                    <div class="notice">
-                        Sit comfortably, face the camera and keep your head still. Use even lighting and keep both eyes visible.
-                        Blink count calibrates to your naturally open eyes. The stress score shown here comes from the existing wearable PPG + GSR model; it is not calculated from blink count or facial expression.
+                    <div class="notice face-stress-notice">
+                        This scan uses only the camera. It reports an experimental pulse estimate from facial colour changes (rPPG) and blink metrics. A face-only stress score is not enabled in this release because its separate model has not yet been trained, validated and integrated. The wearable-based stress estimate is shown separately on Dashboard.
                     </div>
 
                     <div class="face-scan-metrics">
-                        <div class="face-scan-metric" style="display:none">
-                            <span class="muted small">Camera-estimated pulse</span>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Camera pulse estimate</span>
                             <strong id="facePulseValue">-- <small>BPM</small></strong>
                         </div>
-                        <div class="face-scan-metric" style="display:none">
-                            <span class="muted small">Signal quality</span>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Pulse signal quality</span>
                             <strong id="faceSignalQuality">Not measured</strong>
-                        </div>
-                        <div class="face-scan-metric" style="display:none">
-                            <span class="muted small">Recording</span>
-                            <strong id="faceScanElapsed">0 / 120 sec</strong>
                         </div>
                         <div class="face-scan-metric">
                             <span class="muted small">Blink count</span>
                             <strong id="blinkCountValue">0</strong>
                         </div>
-                        <div class="face-scan-metric" style="display:none">
+                        <div class="face-scan-metric">
                             <span class="muted small">Blink rate</span>
                             <strong id="blinkRateValue">0 <small>/ min</small></strong>
                         </div>
                         <div class="face-scan-metric">
-                            <span class="muted small">Stress score (wearable)</span>
-                            <strong id="faceScanStressValue">--</strong>
-                            <span id="faceScanStressStatus" class="muted small">Waiting for wearable data</span>
+                            <span class="muted small">Face-only stress score</span>
+                            <strong>Not available</strong>
+                            <span class="muted small">Dedicated model not integrated</span>
+                        </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Scan duration</span>
+                            <strong id="faceScanElapsed">0 / 120 sec</strong>
                         </div>
                     </div>
 
@@ -3127,7 +3311,7 @@
                         Blink tracking calibrates to your open-eye shape before counting. Keep both eyes visible and look at the camera.
                     </p>
 
-                    <div class="face-pulse-chart-wrap" style="display:none">
+                    <div class="face-pulse-chart-wrap">
                         <div class="card-header">
                             <div>
                                 <h3>Extracted pulse signal</h3>
@@ -3147,7 +3331,7 @@
                         </button>
                     </div>
 
-                    <p id="faceRppgMessage" class="muted small" role="status" aria-live="polite" style="display:none">
+                    <p id="faceRppgMessage" class="muted small" role="status" aria-live="polite">
                         Start the camera first, then begin the face-only scan. The camera can remain on for preview after analysis.
                     </p>
 
@@ -4176,7 +4360,6 @@ function clearLiveSensorDisplay(message = "No authenticated wearable readings av
         "A score is shown only when the backend can calculate a model estimate from suitable wearable data and a personal baseline."
     );
     setText("stressStatusBadge", "No estimate");
-    updateFaceScanStressCard({ status: "waiting_for_data" });
     const ring = $("stressRing");
     if (ring) {
         ring.style.setProperty("--score", "0");
@@ -4184,46 +4367,7 @@ function clearLiveSensorDisplay(message = "No authenticated wearable readings av
     }
 }
 
-function updateFaceScanStressCard(stress) {
-    const valueElement = $("faceScanStressValue");
-    if (!valueElement) return;
-
-    const statusElement = $("faceScanStressStatus");
-    const status = stress?.status || "waiting_for_data";
-    const score = stress?.stress_score;
-
-    if (
-        status === "prediction_available" &&
-        score !== null && score !== undefined &&
-        Number.isFinite(Number(score))
-    ) {
-        const numericScore = Math.max(0, Math.min(100, Number(score)));
-        const level = numericScore < 34
-            ? "Low estimate"
-            : numericScore < 67
-                ? "Moderate estimate"
-                : "High estimate";
-        valueElement.textContent = displayValue(numericScore, 1) + "%";
-        if (statusElement) statusElement.textContent = level + " · Experimental";
-        return;
-    }
-
-    const messages = {
-        waiting_for_wearable_data: "Waiting for wearable data",
-        waiting_for_data: "Waiting for wearable data",
-        baseline_required: "Personal baseline required",
-        poor_signal_quality: "Wearable signal quality is low",
-        model_not_available: "Stress model unavailable",
-        prediction_error: "Stress estimate unavailable"
-    };
-    valueElement.textContent = "--";
-    if (statusElement) {
-        statusElement.textContent = messages[status] || "Waiting for wearable data";
-    }
-}
-
 function applyStressResult(stress) {
-    updateFaceScanStressCard(stress);
     const score = stress?.stress_score;
     const status = stress?.status || "waiting_for_data";
     const ring = $("stressRing");
@@ -4536,12 +4680,19 @@ function updateMonitoringIdentity(overview = dashboardOverview) {
     setText("monitorAccountUid", uid);
     setText("monitorAccountStatus", account ? "Private account" : "Waiting for sign-in");
     const connected = Boolean(overview && overview.device_connected);
-    setText("sidebarDeviceStatus", connected ? "Connected" : "Offline");
-    setText("sidebarDeviceSubtitle", connected ? "Recent ESP32 activity" : "No recent device activity");
+    const paired = Array.isArray(monitoringDevices) &&
+        monitoringDevices.some(device => device.active === true || Number(device.active) === 1);
+    setText("sidebarDeviceStatus", connected ? "Connected" : paired ? "Paired · Offline" : "Not paired");
+    setText("sidebarDeviceSubtitle", connected
+        ? "Recent ESP32 activity"
+        : paired
+            ? "Waiting for ESP32 readings"
+            : "No ESP32 paired to this account");
     const deviceDot = $("sidebarDeviceDot");
     if (deviceDot) {
         deviceDot.classList.toggle("green", connected);
-        deviceDot.classList.toggle("red", !connected);
+        deviceDot.classList.toggle("yellow", !connected && paired);
+        deviceDot.classList.toggle("red", !connected && !paired);
     }
 }
 
@@ -4825,6 +4976,173 @@ function renderDeviceManagement(payload) {
         row.append(info,controls); list.appendChild(row);
     });
 }
+
+let latestDevicePairToken = "";
+let knownActiveDeviceIds = [];
+
+async function loadDevicePairingStatus() {
+    if (!hasPrivateApiAccess()) {
+        setText("devicePairCurrentStatus", "Sign in with Google before pairing an ESP32.");
+        return;
+    }
+
+    const results = await Promise.allSettled([
+        apiRequest("/api/devices"),
+        apiRequest("/api/device/status")
+    ]);
+    if (results[0].status === "rejected") throw results[0].reason;
+
+    const devices = Array.isArray(results[0].value?.devices)
+        ? results[0].value.devices
+        : [];
+    const activeDevices = devices.filter(device =>
+        device.active === true || Number(device.active) === 1
+    );
+    knownActiveDeviceIds = activeDevices.map(device => String(device.device_id || ""));
+    const connected = results[1].status === "fulfilled" &&
+        Boolean(results[1].value?.connected);
+
+    setText(
+        "devicePairCurrentStatus",
+        connected
+            ? "Connected · NeuroSense has received a recent reading from your ESP32."
+            : activeDevices.length
+                ? "Paired · ESP32 is currently offline or has not sent a recent reading. Check its Wi-Fi, token and firmware."
+                : "No ESP32 is paired to this account yet. Generate a one-time token below to start pairing."
+    );
+
+    const list = $("devicePairDevices");
+    if (list) {
+        list.replaceChildren();
+        activeDevices.forEach(device => {
+            const row = document.createElement("div");
+            row.className = "device-pair-device-row";
+            const info = document.createElement("div");
+            const name = document.createElement("strong");
+            name.textContent = device.device_name || "NeuroSense ESP32";
+            const id = document.createElement("small");
+            id.textContent = device.device_id + " · " +
+                (device.last_seen ? "Last seen " + formatReadingTime(device.last_seen) : "Waiting for first reading");
+            info.append(name, id);
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            const isOnline = Boolean(
+                device.last_seen &&
+                (Date.now() - new Date(device.last_seen).getTime()) <= 60000
+            );
+            badge.textContent = isOnline ? "Connected" : "Offline";
+            row.append(info, badge);
+            list.appendChild(row);
+        });
+    }
+
+    if (latestDevicePairToken) $("devicePairTokenPanel")?.classList.remove("hidden");
+}
+
+function openDevicePairDialog() {
+    if (!hasPrivateApiAccess()) {
+        showToast("Sign in with Google before connecting an ESP32.");
+        return;
+    }
+
+    const dialog = $("devicePairDialog");
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") {
+        if (!dialog.open) dialog.showModal();
+    } else {
+        dialog.setAttribute("open", "");
+    }
+    loadDevicePairingStatus().catch(error => {
+        setText("devicePairCurrentStatus", "Could not load device status: " + error.message);
+    });
+}
+
+$("sidebarDeviceConnectBtn")?.addEventListener("click", openDevicePairDialog);
+$("closeDevicePairDialog")?.addEventListener("click", () => {
+    const dialog = $("devicePairDialog");
+    if (dialog?.open) dialog.close();
+    else dialog?.removeAttribute("open");
+});
+$("devicePairDialog")?.addEventListener("click", event => {
+    if (event.target === $("devicePairDialog")) $("devicePairDialog").close();
+});
+$("refreshDevicePairStatusBtn")?.addEventListener("click", async () => {
+    const button = $("refreshDevicePairStatusBtn");
+    button.disabled = true;
+    try {
+        await loadDevicePairingStatus();
+        showToast("ESP32 connection status refreshed.");
+    } catch (error) {
+        setText("devicePairStatus", "Status refresh failed: " + error.message);
+    } finally {
+        button.disabled = false;
+    }
+});
+
+$("devicePairForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!hasPrivateApiAccess()) {
+        showToast("Sign in with Google before pairing an ESP32.");
+        return;
+    }
+
+    const deviceId = $("devicePairId").value.trim();
+    const deviceName = $("devicePairName").value.trim();
+    if (!deviceId || !deviceName) {
+        setText("devicePairStatus", "Enter both the device ID and device name.");
+        return;
+    }
+
+    if (knownActiveDeviceIds.includes(deviceId) && !window.confirm(
+        "This device is already paired to this account. Generating a new token will invalidate the token currently saved on the ESP32. Continue?"
+    )) return;
+
+    const button = $("createDevicePairBtn");
+    button.disabled = true;
+    button.textContent = "Generating token...";
+    setText("devicePairStatus", "");
+    try {
+        const result = await apiRequest("/api/devices/pair", {
+            method: "POST",
+            body: JSON.stringify({ device_id: deviceId, device_name: deviceName })
+        });
+        latestDevicePairToken = String(result.device_token || "");
+        if (!latestDevicePairToken) {
+            throw new Error("Backend did not return a device token. Please retry.");
+        }
+        $("devicePairTokenText").textContent = latestDevicePairToken;
+        $("devicePairTokenPanel").classList.remove("hidden");
+        setText(
+            "devicePairStatus",
+            "Device paired in NeuroSense. Copy the one-time token into neurosense_secrets.py on the ESP32, then restart its firmware. " +
+            (result.cloud_sync === "synced" ? "Device ownership was also backed up to Firestore." : "")
+        );
+        showToast("ESP32 paired. Copy the one-time token now.");
+        await loadDevicePairingStatus();
+    } catch (error) {
+        setText("devicePairStatus", "Pairing failed: " + error.message);
+        showToast("ESP32 pairing failed: " + error.message);
+    } finally {
+        button.disabled = false;
+        button.textContent = "Generate one-time pairing token";
+    }
+});
+
+$("copyDevicePairTokenBtn")?.addEventListener("click", async () => {
+    if (!latestDevicePairToken) return;
+    try {
+        await navigator.clipboard.writeText(latestDevicePairToken);
+        showToast("ESP32 device token copied. Paste it into neurosense_secrets.py.");
+    } catch (error) {
+        const token = $("devicePairTokenText");
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(token);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        showToast("Clipboard access was blocked. The token is selected; copy it manually.");
+    }
+});
 
 function renderBaselineStatus(payload) {
     const base=payload?.baseline || null; const badge=$("baselineStatusBadge"); if (!badge) return;
