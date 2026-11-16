@@ -103,13 +103,5 @@ jobs:
               -q
             csv="$(find /tmp/openface-smoke -maxdepth 1 -type f -name "*.csv" -size +0c -print -quit)"
             test -n "$csv"
-            python - "$csv" <<\x27PY\x27
-            import csv, sys
-            with open(sys.argv[1], newline="", encoding="utf-8-sig") as handle:
-                fields = next(csv.reader(handle))
-            required = {"timestamp", "success", "confidence", "gaze_angle_x", "pose_Tx", "AU01_r"}
-            missing = sorted(required.difference(fields))
-            if missing:
-                raise SystemExit(f"OpenFace CSV missing expected fields: {missing}")
-            PY
+            python -c "import csv,sys; fields=next(csv.reader(open(sys.argv[1], newline=\"\", encoding=\"utf-8-sig\"))); required={\"timestamp\",\"success\",\"confidence\",\"gaze_angle_x\",\"pose_Tx\",\"AU01_r\"}; missing=sorted(required.difference(fields)); assert not missing, f\"OpenFace CSV missing expected fields: {missing}\"" "$csv"
           '
