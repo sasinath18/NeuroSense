@@ -1,9 +1,20 @@
 name: NeuroSense Backend Tests
 
 on:
+  # The feature branch is validated by its pull request; running both push
+  # and pull_request for every commit caused duplicate multi-minute Docker builds.
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
+
+# Keep only one active CI run per branch/PR; a newer commit supersedes stale runs.
+concurrency:
+  group: neurosense-ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
