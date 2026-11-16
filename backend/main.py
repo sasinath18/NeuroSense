@@ -668,7 +668,7 @@ def initialize_face_valence_model() -> None:
             model_url=model_url,
             expected_sha256=expected_sha256,
         )
-        logger.info("AFFEC felt-valence model loaded from %s", model_path)
+        logger.info("AFFEC artifact verified for isolated worker at %s", FACE_VALENCE_MODEL)
     except FileNotFoundError:
         FACE_VALENCE_MODEL = None
         logger.warning(
