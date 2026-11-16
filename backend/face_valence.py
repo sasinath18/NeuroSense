@@ -116,19 +116,30 @@ def load_face_valence_model(
                 "Google Drive sharing URL. Install requirements-render.txt."
             ) from exc
 
+        # Download to a temporary file and validate before publishing it at
+        # the configured model path. Never leave a truncated artifact behind.
         temporary_path = model_path.with_suffix(model_path.suffix + ".download")
-        downloaded = gdown.download(
-            url=model_url,
-            output=str(temporary_path),
-            quiet=False,
-            fuzzy=True,
-        )
-        if not downloaded or not temporary_path.is_file():
-            raise RuntimeError(
-                "Could not download the face-valence model. Check that the "
-                "Google Drive file is shared as 'Anyone with the link – Viewer'."
+        try:
+            downloaded = gdown.download(
+                url=model_url,
+                output=str(temporary_path),
+                quiet=False,
+                fuzzy=True,
             )
-        temporary_path.replace(model_path)
+            if not downloaded or not temporary_path.is_file():
+                raise RuntimeError(
+                    "Could not download the face-valence model. Check that the "
+                    "Google Drive file is shared as 'Anyone with the link – Viewer'."
+                )
+            if temporary_path.stat().st_size < 1_000_000:
+                raise RuntimeError("Downloaded face-valence model is unexpectedly small.")
+            if expected_sha256:
+                digest = hashlib.sha256(temporary_path.read_bytes()).hexdigest()
+                if digest.lower() != expected_sha256.strip().lower():
+                    raise RuntimeError("Downloaded face-valence model SHA-256 does not match.")
+            temporary_path.replace(model_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     if not model_path.is_file():
         raise FileNotFoundError(
