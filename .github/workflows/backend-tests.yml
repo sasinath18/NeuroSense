@@ -43,7 +43,7 @@ jobs:
           html = Path("frontend/index.html").read_text(encoding="utf-8")
           invite = Path("frontend/emergency-invite.html").read_text(encoding="utf-8")
           scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL | re.IGNORECASE)
-          invite_scripts = re.findall(r"<script\\b[^>]*>(.*?)</script>", invite, flags=re.DOTALL | re.IGNORECASE)
+          invite_scripts = re.findall(r"<script[^>]*>(.*?)</script>", invite, flags=re.DOTALL | re.IGNORECASE)
           if len(scripts) != 1:
               raise SystemExit(f"Expected one inline application script, found {len(scripts)}")
           if len(invite_scripts) != 1:
@@ -82,7 +82,7 @@ jobs:
             test -x "$OPENFACE_FEATURE_EXTRACTION_PATH"
             missing="$(ldd "$OPENFACE_FEATURE_EXTRACTION_PATH" | grep "not found" || true)"
             if [ -n "$missing" ]; then
-              printf "%s\\n" "$missing"
+              printf "%s\n" "$missing"
               exit 1
             fi
             model_dir="$OPENFACE_ROOT/build/bin/model/patch_experts"
@@ -111,19 +111,13 @@ jobs:
             export MKL_NUM_THREADS=1
             export OPENCV_FOR_THREADS_NUM=1
 
-            ffmpeg -y -v error \\
-              -i "$OPENFACE_ROOT/samples/2015-10-15-15-14.avi" \\
-              -t 5 -vf "scale=640:-2,fps=15" -an \\
-              -c:v mjpeg -q:v 5 /tmp/openface-smoke/fixture.avi
+            ffmpeg -y -v error -i "$OPENFACE_ROOT/samples/2015-10-15-15-14.avi" -t 5 -vf "scale=640:-2,fps=15" -an -c:v mjpeg -q:v 5 /tmp/openface-smoke/fixture.avi
 
             echo "Container memory:"
             free -h
-            ./FeatureExtraction \\
-              -f /tmp/openface-smoke/fixture.avi \\
-              -aus -gaze -pose \\
-              -out_dir /tmp/openface-smoke -q
+            ./FeatureExtraction -f /tmp/openface-smoke/fixture.avi -aus -gaze -pose -out_dir /tmp/openface-smoke -q
 
             csv="$(find /tmp/openface-smoke -maxdepth 1 -type f -name "fixture.csv" -size +0c -print -quit)"
             test -n "$csv"
-            python -c "import csv,sys; fields=next(csv.reader(open(sys.argv[1], newline=\\"\\", encoding=\\"utf-8-sig\\"))); required={\\"timestamp\\",\\"success\\",\\"confidence\\",\\"gaze_angle_x\\",\\"pose_Tx\\",\\"AU01_r\\"}; missing=sorted(required.difference(fields)); assert not missing, f\\"OpenFace CSV missing expected fields: {missing}\\"" "$csv"
+            python -c "import csv,sys; fields=next(csv.reader(open(sys.argv[1], newline='', encoding='utf-8-sig'))); required={'timestamp','success','confidence','gaze_angle_x','pose_Tx','AU01_r'}; missing=sorted(required.difference(fields)); assert not missing, f'OpenFace CSV missing expected fields: {missing}'" "$csv"
           '
