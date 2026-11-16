@@ -24,7 +24,7 @@ The Blueprint uses the free web-service plan, the Singapore region, Python 3.13.
 
 ## Configure Firebase Authentication
 
-The application code supports Firebase Google Sign-In, but Firebase must be configured in your own Firebase project before the sign-in button becomes active.
+The application code supports Firebase Google Sign-In. Configure the Firebase project and deploy credentials before enabling the production sign-in flow.
 
 1. Create a Firebase project in the [Firebase Console](https://console.firebase.google.com/).
 2. Add a Web App to that project. Copy its web configuration values.
