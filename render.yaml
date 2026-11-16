@@ -1,16 +1,13 @@
 services:
   - type: web
     name: neurosense-app
-    runtime: python
+    runtime: docker
     plan: free
     region: singapore
     branch: main
-    buildCommand: pip install -r requirements-render.txt
-    startCommand: python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.13.14
       - key: NEUROSENSE_ENV
         value: production
       - key: NEUROSENSE_DB_PATH
@@ -41,3 +38,13 @@ services:
         sync: false
       - key: GOOGLE_DRIVE_APP_ID
         sync: false
+      - key: NEUROSENSE_FACE_VALENCE_MODEL_URL
+        sync: false
+      - key: NEUROSENSE_FACE_VALENCE_MODEL_SHA256
+        sync: false
+      - key: NEUROSENSE_FACE_VALENCE_MODEL_PATH
+        value: /app/ml_model/face_valence/neurosense_face_valence_rf.joblib
+      - key: OPENFACE_ROOT
+        value: /opt/OpenFace
+      - key: OPENFACE_FEATURE_EXTRACTION_PATH
+        value: /opt/OpenFace/build/bin/FeatureExtraction
