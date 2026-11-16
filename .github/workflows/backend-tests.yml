@@ -82,13 +82,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build runtime image
-        run: |
-          # Persist apt/model downloads, native OpenFace compilation, and Python
-          # environment layers so subsequent commits do not rebuild the whole image.
-          docker buildx build --progress=plain --load --tag neurosense-openface:ci \
-            --cache-from type=gha,scope=neurosense-openface \
-            --cache-to type=gha,scope=neurosense-openface,mode=max .
+      - name: Build runtime image (persistent GitHub Actions cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: neurosense-openface:ci
+          cache-from: type=gha,scope=neurosense-openface
+          cache-to: type=gha,scope=neurosense-openface,mode=max
 
       - name: Verify wearable model under its serialized scikit-learn version
         run: |
