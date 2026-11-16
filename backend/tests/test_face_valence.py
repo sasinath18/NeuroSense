@@ -130,8 +130,8 @@ def test_predict_from_video_bytes_keeps_uploaded_video_inside_tempdir(tmp_path, 
         else:
             out_dir = Path(command[command.index("-out_dir") + 1])
             (out_dir / "camera_capture.csv").write_text(
-                "timestamp,success,confidence," + ",".join(RAW_FEATURES) + "\\n" +
-                ",".join(["0.1","1","0.9"] + ["1.0"]*len(RAW_FEATURES)) + "\\n",
+                "timestamp,success,confidence," + ",".join(RAW_FEATURES) + "\n" +
+                ",".join(["0.1","1","0.9"] + ["1.0"]*len(RAW_FEATURES)) + "\n",
                 encoding="utf-8",
             )
             observed["cwd"] = kwargs["cwd"]
