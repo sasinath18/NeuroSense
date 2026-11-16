@@ -366,6 +366,17 @@ def predict_from_video_bytes(
 
         csv_path = max(csv_candidates, key=lambda path: path.stat().st_mtime)
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-            rows = list(csv.DictReader(handle))
+            reader = csv.DictReader(handle)
+            if reader.fieldnames is None:
+                raise RuntimeError("OpenFace feature CSV has no header.")
+            reader.fieldnames = [name.strip() for name in reader.fieldnames]
+            rows = [
+                {
+                    str(name).strip(): (value.strip() if isinstance(value, str) else value)
+                    for name, value in row.items()
+                    if name is not None
+                }
+                for row in reader
+            ]
 
         return predict_from_openface_rows(model, rows)
