@@ -33,7 +33,7 @@ jobs:
 
       - name: Validate firmware Python syntax
         run: |
-          python -m py_compile firmware/esp32_firmware.py ml_model/train_face_stress_model.py
+          python -m py_compile firmware/esp32_firmware.py ml_model/train_face_stress_model.py backend/face_valence.py
 
       - name: Validate frontend JavaScript syntax
         run: |
@@ -57,4 +57,4 @@ jobs:
 
       - name: Run backend tests
         run: |
-          python -m pytest backend/tests/test_main.py backend/tests/test_face_stress_training.py backend/tests/test_recovery_features.py -v
+          python -m pytest backend/tests/test_main.py backend/tests/test_face_stress_training.py backend/tests/test_recovery_features.py backend/tests/test_face_valence.py -v
