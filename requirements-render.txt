@@ -9,3 +9,5 @@ firebase-admin>=7.5.0
 joblib
 requests
 python-multipart
+pandas>=2.2,<3.0
+gdown>=5.2,<6.0
