@@ -176,7 +176,7 @@ def build_live_feature_frame(
         success = _as_float(row.get("success"))
         confidence = _as_float(row.get("confidence"))
 
-        if not np.isfinite(timestamp) or timestamp < 0 or timestamp > WINDOW_SECONDS:
+        if not np.isfinite(timestamp) or timestamp < 0 or timestamp > (WINDOW_SECONDS + 1e-9):
             continue
         if success != 1:
             continue
