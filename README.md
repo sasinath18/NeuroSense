@@ -119,19 +119,17 @@ Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi crede
 
 ## NeuroSense recovery and personalization updates
 
-- The existing Google Sign-In Firebase UID remains the sole account key. Sensor readings, baselines, recovery history, blink summaries, music metadata and emergency-contact settings are isolated by that UID; the app does not create a second profile.
-- ESP32 pairing remains Wi-Fi based, using the existing one-time device token and verified HTTPS firmware path.
-- Wearable sensor acquisition runs continuously on the ESP32, with readings uploaded to the backend on its existing five-second cadence. My Monitoring lets each Google account choose a summary interval from 5 seconds to 24 hours (seconds, minutes or hours; default 10 minutes). Each completed interval records available sensor averages, average and peak experimental stress estimates, the peak timestamp and the number of elevated-stress events. High-stress alerts are checked independently of the summary interval. The personal reference endpoint evaluates the most recent 72 hours: two distinct days and at least ten reliable readings allow a preliminary reference; three days and at least twenty readings are recommended. This is not a new ML model or a clinical validation.
-- Face Scan calibrates separate left/right eye-aspect-ratio baselines at the start of each scan, validates bilateral close/reopen transitions by duration, and calculates blink rate from valid face-visible tracking time rather than total scan time. This improves webcam consistency but remains an estimate, not a clinical measurement. Only derived count, observed tracking duration and blink rate can be saved; camera frames remain in the browser.
-- Haptic vibration remains independently enabled/disabled. Manual/Automatic mode applies only to music: Manual lets the user select a single track or playlist; Automatic attempts the one saved default track after breathing.
-- Each Google UID can keep up to 10 saved music tracks in NeuroSense (20 MB maximum per file). The Recovery player supports tap-to-play, a queue, Play next and automatic next-track playback. Additional Google Drive tracks can be browsed and streamed in the current browser session without using the 10 saved slots; select them again after refreshing the page. For durable hosted playback of saved tracks, configure `FIREBASE_STORAGE_BUCKET`; without it, local fallback files may be lost on Render restarts/redeploys.
-- Warning sound and browser notifications are separate preferences. Browser notifications require browser permission.
-- WhatsApp check-in alerts require an opted-in emergency contact plus Twilio WhatsApp credentials. The backend sends only after three elevated model readings within 30 minutes and applies a six-hour cooldown. The model remains experimental; this is not an emergency service.
+- The existing Google Sign-In Firebase UID remains the sole account key. Sensor readings, baselines, recovery history, blink summaries, music metadata and emergency-contact settings are isolated by that UID.
+- ESP32 pairing uses the one-time device token and verified HTTPS firmware path.
+- Wearable sensor acquisition uploads readings on its existing cadence. My Monitoring supports per-user summaries and alert checks; the personal reference is preliminary and is not clinical validation.
+- Face Scan calibrates left/right eye-aspect-ratio baselines and stores derived blink summaries only. Camera frames remain in the browser for the local rPPG/blink scan.
+- Haptic vibration remains independently enabled/disabled. Manual/Automatic mode applies only to music.
+- Each Google UID can keep up to 10 saved music tracks (20 MB maximum per file). Durable hosted playback requires Firebase Storage. Drive tracks are streamed in the browser and must be selected again after refresh.
+- Telegram replaces the legacy WhatsApp emergency-alert flow. Contacts must explicitly opt in through the invite flow, and the app exposes test-send and `/stop` controls.
 
-### WhatsApp setup
+### Telegram emergency-alert setup
 
-Configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and an approved `TWILIO_WHATSAPP_FROM` sender in the hosting provider's secret environment. The user must save and explicitly enable an E.164-format emergency contact in Settings. Use the in-app test message before relying on alerts. Never commit Twilio credentials.
-
+Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_BOT_USERNAME` in Render's secret environment. The backend registers its HTTPS webhook at startup. Each emergency contact must open the invite link and press Start before receiving check-in alerts. Use the in-app test message and explain the experimental nature of the underlying stress signal; this is not an emergency service.
 
 ### Google Drive music browsing
 
