@@ -212,6 +212,19 @@ def test_model_download_publishes_only_after_minimum_size_check(tmp_path, monkey
 
 
 
+
+def test_model_loader_rejects_incompatible_sklearn_before_unpickling(tmp_path, monkeypatch):
+    import pytest
+    import backend.face_valence as face_valence
+
+    model_path = tmp_path / "face_valence.joblib"
+    model_path.write_bytes(b"x" * 1_000_000)
+    monkeypatch.setattr(face_valence.sklearn, "__version__", "1.9.1")
+
+    with pytest.raises(RuntimeError, match="serialized with scikit-learn 1.6.1"):
+        face_valence.load_face_valence_model(model_path)
+
+
 def test_openface_timeout_is_reported_as_a_feature_extraction_timeout(tmp_path, monkeypatch):
     import subprocess
     import pytest
