@@ -1220,13 +1220,14 @@ def test_face_scan_status_reports_browser_local_landmark_privacy(client):
     assert response.status_code == 200
     body = response.json()
     assert body["available"] is True
-    assert body["status"] == "browser_local_scan_with_optional_felt_valence"
-    assert body["processing"] == "browser_local_rppg_and_backend_openface_valence"
+    assert body["status"] == "browser_local_scan_affec_validation_pending"
+    assert body["processing"] == "browser_local_rppg_and_blink_only"
     assert body["rppg_frames_uploaded"] is False
-    assert body["valence_clip_uploaded_on_explicit_action"] is True
+    assert body["valence_clip_uploaded_on_explicit_action"] is False
     assert body["valence_clip_retained"] is False
     assert body["felt_valence_inference"] is False
     assert body["stress_inference"] is False
+    assert "stimulus-locked video-phase windows" in body["message"]
     assert "OFF by default" in body["camera_policy"]
 
 
@@ -1289,13 +1290,14 @@ def test_face_scan_status_enforces_local_landmark_privacy_contract(client):
     assert response.status_code == 200
     body = response.json()
     assert body["available"] is True
-    assert body["status"] == "browser_local_scan_with_optional_felt_valence"
-    assert body["processing"] == "browser_local_rppg_and_backend_openface_valence"
+    assert body["status"] == "browser_local_scan_affec_validation_pending"
+    assert body["processing"] == "browser_local_rppg_and_blink_only"
     assert body["rppg_frames_uploaded"] is False
-    assert body["valence_clip_uploaded_on_explicit_action"] is True
+    assert body["valence_clip_uploaded_on_explicit_action"] is False
     assert body["valence_clip_retained"] is False
     assert body["felt_valence_inference"] is False
     assert body["stress_inference"] is False
+    assert "stimulus-locked video-phase windows" in body["message"]
     assert "OFF by default" in body["camera_policy"]
 
 
@@ -2458,3 +2460,18 @@ def test_telegram_stop_command_disables_contact(client, monkeypatch):
     assert stopped.status_code == 200
     listed = client.get("/api/telegram-contacts", headers={"X-Demo-User": user_id})
     assert listed.json()["contacts"][0]["status"] == "stopped"
+
+
+
+def test_face_valence_webcam_inference_requires_explicit_opt_in(client, monkeypatch):
+    monkeypatch.setattr(api, "FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED", False)
+    client.app.dependency_overrides[api.current_user_id] = lambda: "test-google-uid"
+
+    response = client.post(
+        "/api/face/valence/predict",
+        files={"video": ("test.webm", b"not-used", "video/webm")},
+    )
+
+    assert response.status_code == 503
+    assert "stimulus-locked video-phase windows" in response.json()["detail"]
+    assert "new-user validation" in response.json()["detail"]
