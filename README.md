@@ -67,16 +67,15 @@ The backend exposes only the public Firebase Web App configuration from `/api/pu
 
 ## Current prototype limitations
 
-- The dashboard reads backend health and, after secure authentication is configured, loads dashboard overview, wearable history, settings and recovery history from FastAPI. It does not generate sample sensor values.
-- Face Scan uses MediaPipe Face Landmarker in the browser to draw facial landmarks and a mesh when the user explicitly starts the camera.
-- The optional 120-second Face-only scan samples small forehead/cheek skin regions locally and applies a POS-style remote photoplethysmography (rPPG) signal pipeline. A camera-estimated pulse rate is displayed only when the 30-second signal window passes basic continuity, brightness and spectral-peak checks.
-- Webcam frames and extracted RGB traces remain in browser memory for the scan; they are not uploaded to the NeuroSense backend or persisted by this feature.
-- Face-only pulse estimates are experimental and non-medical. Webcam lighting, motion, frame rate, skin reflectance and device characteristics can reduce accuracy. The browser brightness indicator is not a lux measurement and cannot guarantee rPPG quality.
-- A face-only stress score is intentionally not displayed yet. It requires a separately trained and independently validated model; facial expression alone is not treated as a stress measurement.
-- ESP32 hardware integration and live sensor validation are not yet complete.
-- Firebase project credentials must be configured before production sign-in and private account data can be used.
-- The SQLite database is configured at `/tmp/neurosense.db` on the free preview service. This filesystem is ephemeral, so stored records can be lost when the service restarts or redeploys.
-- The WESAD-trained model is an experimental research prototype, not clinically validated and not intended for diagnosis or treatment.
+- The dashboard uses the FastAPI backend and does not fabricate sensor readings.
+- Face Scan provides browser-local facial landmarks, blink metrics and an experimental camera rPPG pulse estimate. These are wellness research outputs, not medical measurements.
+- The separate AFFEC research feature estimates **felt valence**, not stress. It is optional, requires an explicitly user-started 4.8-second camera clip, and depends on the separately supplied model artifact and OpenFace runtime. The clip and derived OpenFace CSV are held in a temporary directory and deleted after processing.
+- The AFFEC model's reported cross-validation is modest (mean-fold R² around 0.08; high/low-valence balanced accuracy around 0.60). New-user validation has not been performed. Do not interpret its result as a reliable emotion classification, stress score, diagnosis or treatment recommendation.
+- ESP32 firmware includes authenticated one-time pairing and verified HTTPS transport. Physical sensor accuracy and end-to-end hardware operation remain to be validated on the actual device.
+- The wearable stress model is experimental. Raw ESP32 GSR ADC counts are not calibrated EDA units from WESAD; MAX30102 signal quality, HR/HRV extraction, GSR calibration, temperature sensing, motor-driver wiring and live cloud operation require hardware validation.
+- Firebase Google Sign-In and Firestore cloud persistence require the project's Firebase Web App configuration and a valid server-side Firebase Admin service account.
+- The free Render service currently uses SQLite and local music storage under `/tmp`; this filesystem is ephemeral. Configure Firebase Storage for durable per-user music uploads and cloud data backup.
+- Telegram emergency alerts require a configured Telegram bot token and a contact who explicitly accepts the invite. This is a check-in feature, not an emergency-response service.
 
 ## Local development
 
