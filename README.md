@@ -53,13 +53,12 @@ The application code supports Firebase Google Sign-In, but Firebase must be conf
 | `FIREBASE_WEB_PROJECT_ID` | Web app `projectId` |
 | `FIREBASE_WEB_APP_ID` | Web app `appId` |
 | `FIREBASE_WEB_MESSAGING_SENDER_ID` | Web app `messagingSenderId` |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | Complete service-account JSON, pasted as compact JSON; mark as secret |
-| `FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket name for persistent per-user music uploads; mark as non-public configuration |
-| `TWILIO_ACCOUNT_SID` | Twilio account SID; mark as secret |
-| `TWILIO_AUTH_TOKEN` | Twilio auth token; mark as secret |
-| `TWILIO_WHATSAPP_FROM` | Approved WhatsApp sender in `whatsapp:+...` format |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Complete service-account JSON, stored as a secret |
+| `FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket name for persistent per-user music uploads |
 | `GOOGLE_DRIVE_API_KEY` | Google Picker API key; restrict it to your dashboard domains |
 | `GOOGLE_DRIVE_APP_ID` | Google Cloud project number used by Google Picker |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token, stored as a secret |
+| `TELEGRAM_BOT_USERNAME` | Telegram bot username without `@` |
 
 The web configuration is browser-visible by design. The service-account JSON is a private Admin credential and must remain only in Render's secret environment. Never commit it to GitHub or paste it into chat.
 
