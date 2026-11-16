@@ -43,7 +43,7 @@ jobs:
           html = Path("frontend/index.html").read_text(encoding="utf-8")
           invite = Path("frontend/emergency-invite.html").read_text(encoding="utf-8")
           scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL | re.IGNORECASE)
-          invite_scripts = re.findall(r"<script\\b[^>]*>(.*?)</script>", invite, flags=re.DOTALL | re.IGNORECASE)
+          invite_scripts = re.findall(r"<script\b[^>]*>(.*?)</script>", invite, flags=re.DOTALL | re.IGNORECASE)
           if len(scripts) != 1:
               raise SystemExit(f"Expected one inline application script, found {len(scripts)}")
           if len(invite_scripts) != 1:
@@ -82,7 +82,7 @@ jobs:
             test -x "$OPENFACE_FEATURE_EXTRACTION_PATH"
             missing="$(ldd "$OPENFACE_FEATURE_EXTRACTION_PATH" | grep "not found" || true)"
             if [ -n "$missing" ]; then
-              printf "%s\\n" "$missing"
+              printf "%s\n" "$missing"
               exit 1
             fi
             test -f "$OPENFACE_ROOT/model/main_clm_general.txt"
@@ -94,10 +94,10 @@ jobs:
             set -euo pipefail
             mkdir -p /tmp/openface-smoke
             cd "$OPENFACE_ROOT"
-            "$OPENFACE_FEATURE_EXTRACTION_PATH" \\
-              -f samples/2015-10-15-15-14.avi \\
-              -aus -gaze -pose \\
-              -out_dir /tmp/openface-smoke \\
+            "$OPENFACE_FEATURE_EXTRACTION_PATH" \
+              -f samples/2015-10-15-15-14.avi \
+              -aus -gaze -pose \
+              -out_dir /tmp/openface-smoke \
               -q
             test -n "$(find /tmp/openface-smoke -maxdepth 1 -type f -name "*.csv" -size +0c -print -quit)"
           '
