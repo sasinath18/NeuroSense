@@ -20,7 +20,7 @@ This repository includes a Render Blueprint at `render.yaml`.
 4. Review the service settings from `render.yaml`, then apply the Blueprint.
 5. When the service is live, open the service URL followed by `/dashboard`.
 
-The Blueprint uses the free web-service plan, the Singapore region, Python 3.13.14, and the lightweight production dependency list in `requirements-render.txt`.
+The Blueprint uses the free web-service plan, the Singapore region, and the repository Dockerfile. The image builds OpenFace and installs the pinned production Python dependencies from `requirements-render.txt`.
 
 ## Configure Firebase Authentication
 
@@ -59,6 +59,9 @@ The application code supports Firebase Google Sign-In. Configure the Firebase pr
 | `GOOGLE_DRIVE_APP_ID` | Google Cloud project number used by Google Picker |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token, stored as a secret |
 | `TELEGRAM_BOT_USERNAME` | Telegram bot username without `@` |
+| `NEUROSENSE_FACE_VALENCE_MODEL_URL` | Optional Google Drive share URL for the model artifact (Viewer access) |
+| `NEUROSENSE_FACE_VALENCE_MODEL_SHA256` | Optional model SHA-256 checksum |
+| `NEUROSENSE_FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED` | Keep `false`; the AFFEC selfie inference path is disabled pending validation |
 
 The web configuration is browser-visible by design. The service-account JSON is a private Admin credential and must remain only in Render's secret environment. Never commit it to GitHub or paste it into chat.
 
@@ -68,8 +71,8 @@ The backend exposes only the public Firebase Web App configuration from `/api/pu
 
 - The dashboard uses the FastAPI backend and does not fabricate sensor readings.
 - Face Scan provides browser-local facial landmarks, blink metrics and an experimental camera rPPG pulse estimate. These are wellness research outputs, not medical measurements.
-- The separate AFFEC research feature estimates **felt valence**, not stress. It is optional, requires an explicitly user-started 4.8-second camera clip, and depends on the separately supplied model artifact and OpenFace runtime. The clip and derived OpenFace CSV are held in a temporary directory and deleted after processing.
-- The AFFEC model's reported cross-validation is modest (mean-fold R² around 0.08; high/low-valence balanced accuracy around 0.60). New-user validation has not been performed. Do not interpret its result as a reliable emotion classification, stress score, diagnosis or treatment recommendation.
+- The separate AFFEC research model targets **felt valence**, not stress. Its training data used stimulus-locked video-phase windows (variable duration; median 4.61 seconds, observed 3.53–about 5.3 seconds). An arbitrary 4.8-second webcam selfie is not the same input context. Therefore the live webcam inference endpoint is OFF by default and must remain disabled until numerical feature parity and new-user validation are completed. The existing browser-local rPPG/blink scan is independent and remains available. If an explicitly approved research experiment is enabled later, its clip and derived OpenFace CSV are handled in a temporary directory and deleted after processing.
+- The AFFEC model's reported subject-wise cross-validation is weak (mean-fold R² around 0.08; high/low-valence balanced accuracy around 0.60). The metadata explicitly says numerical feature parity is still required, and new-user validation has not been performed. Do not interpret its output as a reliable emotion classification, stress score, diagnosis or treatment recommendation.
 - ESP32 firmware includes authenticated one-time pairing and verified HTTPS transport. Physical sensor accuracy and end-to-end hardware operation remain to be validated on the actual device.
 - The wearable stress model is experimental. Raw ESP32 GSR ADC counts are not calibrated EDA units from WESAD; MAX30102 signal quality, HR/HRV extraction, GSR calibration, temperature sensing, motor-driver wiring and live cloud operation require hardware validation.
 - Firebase Google Sign-In and Firestore cloud persistence require the project's Firebase Web App configuration and a valid server-side Firebase Admin service account.
