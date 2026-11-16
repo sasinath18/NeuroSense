@@ -119,5 +119,11 @@ jobs:
 
             csv="$(find /tmp/openface-smoke -maxdepth 1 -type f -name "fixture.csv" -size +0c -print -quit)"
             test -n "$csv"
-            python -c "import csv,sys; fields=next(csv.reader(open(sys.argv[1], newline='', encoding='utf-8-sig'))); required={'timestamp','success','confidence','gaze_angle_x','pose_Tx','AU01_r'}; missing=sorted(required.difference(fields)); assert not missing, f'OpenFace CSV missing expected fields: {missing}'" "$csv"
+            header="$(head -n 1 "$csv")"
+            for field in timestamp success confidence gaze_angle_x pose_Tx AU01_r; do
+              case ",$header," in
+                *,"$field",*) ;;
+                *) echo "OpenFace CSV is missing required field: $field"; exit 1 ;;
+              esac
+            done
           '
