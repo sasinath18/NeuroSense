@@ -133,8 +133,9 @@ def test_predict_from_video_bytes_keeps_uploaded_video_inside_tempdir(tmp_path, 
                 ",".join(["timestamp", "success", "confidence", *RAW_FEATURES]),
             ]
             for index in range(40):
+                timestamp = index * 0.1
                 csv_rows.append(
-                    ",".join([str(index * 0.1), "1", "0.9"] + ["1.0"] * len(RAW_FEATURES))
+                    ",".join([str(timestamp), "1", "0.9"] + ["1.0"] * len(RAW_FEATURES))
                 )
             (out_dir / "camera_capture.csv").write_text(
                 "\n".join(csv_rows) + "\n",
