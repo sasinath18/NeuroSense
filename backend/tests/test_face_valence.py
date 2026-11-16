@@ -107,6 +107,51 @@ def test_valid_rows_are_passed_to_model_as_50_float32_features():
 
 
 
+
+
+def test_predict_from_video_bytes_keeps_uploaded_video_inside_tempdir(tmp_path, monkeypatch):
+    import subprocess
+    from pathlib import Path
+    from backend.face_valence import predict_from_video_bytes
+
+    executable = tmp_path / "FeatureExtraction"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    openface_root = tmp_path / "OpenFace"
+    openface_root.mkdir()
+    observed = {}
+
+    monkeypatch.setattr("backend.face_valence._probe_duration", lambda _path: 5.0)
+
+    def fake_run(command, **kwargs):
+        if command[0] == "ffmpeg":
+            Path(command[-1]).write_bytes(b"fake-mp4")
+        else:
+            out_dir = Path(command[command.index("-out_dir") + 1])
+            (out_dir / "camera_capture.csv").write_text(
+                "timestamp,success,confidence," + ",".join(RAW_FEATURES) + "\\n" +
+                ",".join(["0.1","1","0.9"] + ["1.0"]*len(RAW_FEATURES)) + "\\n",
+                encoding="utf-8",
+            )
+            observed["cwd"] = kwargs["cwd"]
+            observed["video_path"] = command[command.index("-f") + 1]
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("backend.face_valence.subprocess.run", fake_run)
+
+    class CaptureModel:
+        def predict(self, features):
+            assert features.shape == (1, 50)
+            return np.array([0.25])
+
+    result = predict_from_video_bytes(
+        CaptureModel(), b"fake-webm", executable, openface_root
+    )
+    assert result["status"] == "prediction_available"
+    assert result["felt_valence"] == 0.25
+    assert Path(observed["cwd"]) == executable.parent
+    assert not Path(observed["video_path"]).exists()
+
 def test_model_download_is_not_published_when_sha256_is_wrong(tmp_path, monkeypatch):
     from backend.face_valence import load_face_valence_model
 
