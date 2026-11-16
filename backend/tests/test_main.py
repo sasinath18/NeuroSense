@@ -1220,11 +1220,12 @@ def test_face_scan_status_reports_browser_local_landmark_privacy(client):
     assert response.status_code == 200
     body = response.json()
     assert body["available"] is True
-    assert body["status"] == "browser_local_landmark_detection_only"
-    assert body["processing"] == "on_device_browser"
-    assert body["raw_frames_uploaded"] is False
-    assert body["image_storage"] is False
-    assert body["emotion_inference"] is False
+    assert body["status"] == "browser_local_scan_with_optional_felt_valence"
+    assert body["processing"] == "browser_local_rppg_and_backend_openface_valence"
+    assert body["rppg_frames_uploaded"] is False
+    assert body["valence_clip_uploaded_on_explicit_action"] is True
+    assert body["valence_clip_retained"] is False
+    assert body["felt_valence_inference"] is False
     assert body["stress_inference"] is False
     assert "OFF by default" in body["camera_policy"]
 
@@ -1288,11 +1289,12 @@ def test_face_scan_status_enforces_local_landmark_privacy_contract(client):
     assert response.status_code == 200
     body = response.json()
     assert body["available"] is True
-    assert body["status"] == "browser_local_landmark_detection_only"
-    assert body["processing"] == "on_device_browser"
-    assert body["raw_frames_uploaded"] is False
-    assert body["image_storage"] is False
-    assert body["emotion_inference"] is False
+    assert body["status"] == "browser_local_scan_with_optional_felt_valence"
+    assert body["processing"] == "browser_local_rppg_and_backend_openface_valence"
+    assert body["rppg_frames_uploaded"] is False
+    assert body["valence_clip_uploaded_on_explicit_action"] is True
+    assert body["valence_clip_retained"] is False
+    assert body["felt_valence_inference"] is False
     assert body["stress_inference"] is False
     assert "OFF by default" in body["camera_policy"]
 
