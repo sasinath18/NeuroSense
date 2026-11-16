@@ -4,7 +4,7 @@ uvicorn>=0.30,<1.0
 numpy==2.4.6
 pandas==2.2.3
 scipy
-scikit-learn==1.6.1
+scikit-learn==1.9.1
 matplotlib
 plotly
 python-dotenv
