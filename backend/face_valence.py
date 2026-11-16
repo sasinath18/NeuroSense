@@ -7,23 +7,19 @@ features over the first 4.8 seconds of a video. It is not a stress model.
 from __future__ import annotations
 
 import csv
+import json
 import hashlib
 import logging
 import os
 import re
 import subprocess
-import sys
 import tempfile
 import warnings
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-import joblib
 import numpy as np
 import pandas as pd
-import sklearn
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.feature_selection import SelectKBest, f_regression
 
 logger = logging.getLogger("neurosense.face_valence")
 
@@ -34,7 +30,6 @@ MAX_VIDEO_BYTES = 12 * 1024 * 1024
 MIN_VIDEO_SECONDS = 4.70
 MAX_VIDEO_SECONDS = 8.0
 OPENFACE_TIMEOUT_SECONDS = 90
-EXPECTED_SKLEARN_VERSION = "1.6.1"  # Version recorded when the AFFEC joblib artifact was trained.
 
 RAW_FEATURES = (
     "gaze_angle_x",
@@ -71,40 +66,16 @@ FEATURE_NAMES = tuple(
 )
 
 
-class ClipQ(BaseEstimator, TransformerMixin):
-    """Training-compatible 1st-99th percentile feature clipping."""
-
-    def fit(self, X, y=None):
-        values = np.asarray(X, dtype=np.float64)
-        self.lo_ = np.nanpercentile(values, 1, axis=0)
-        self.hi_ = np.nanpercentile(values, 99, axis=0)
-        return self
-
-    def transform(self, X):
-        return np.clip(X, self.lo_, self.hi_)
-
-
-class KB(SelectKBest):
-    """Training-compatible SelectKBest with a capped feature count."""
-
-    def __init__(self, score_func=f_regression, k_max=60):
-        super().__init__(score_func=score_func, k=k_max)
-        self.k_max = k_max
-
-    def fit(self, X, y):
-        self.k = min(self.k_max, X.shape[1])
-        return super().fit(X, y)
-
-
 def load_face_valence_model(
     model_path: Path,
     model_url: str | None = None,
     expected_sha256: str | None = None,
-):
-    """Load the saved sklearn Pipeline, including its __main__ transformers.
+) -> Path:
+    """Ensure the AFFEC artifact exists and passes integrity checks.
 
-    Colab serialized ClipQ and KB with __module__ == "__main__".
-    Register the compatible definitions under __main__ before joblib.load.
+    The model was serialized with scikit-learn 1.6.1, while the wearable
+    stress model uses 1.9.1. Do not unpickle AFFEC in the main API process.
+    Inference is delegated to the isolated /opt/affec-venv runtime.
     """
     model_path = Path(model_path)
     model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,8 +89,6 @@ def load_face_valence_model(
                 "Google Drive sharing URL. Install requirements-render.txt."
             ) from exc
 
-        # Download to a temporary file and validate before publishing it at
-        # the configured model path. Never leave a truncated artifact behind.
         temporary_path = model_path.with_suffix(model_path.suffix + ".download")
         try:
             downloaded = gdown.download(
@@ -157,28 +126,7 @@ def load_face_valence_model(
         if digest.lower() != expected_sha256.strip().lower():
             raise RuntimeError("Face-valence model SHA-256 does not match.")
 
-    # scikit-learn does not guarantee joblib compatibility across versions.
-    # Fail before unpickling rather than returning a plausible but broken prediction.
-    runtime_sklearn_version = sklearn.__version__
-    if runtime_sklearn_version != EXPECTED_SKLEARN_VERSION:
-        raise RuntimeError(
-            "The AFFEC model was serialized with scikit-learn "
-            f"{EXPECTED_SKLEARN_VERSION}, but the runtime has "
-            f"{runtime_sklearn_version}. Install the pinned NeuroSense requirements."
-        )
-
-    main_module = sys.modules["__main__"]
-    setattr(main_module, "ClipQ", ClipQ)
-    setattr(main_module, "KB", KB)
-
-    model = joblib.load(model_path)
-    feature_count = getattr(model, "n_features_in_", None)
-    if feature_count is not None and int(feature_count) != len(FEATURE_NAMES):
-        raise RuntimeError(
-            f"Loaded model expects {feature_count} inputs; "
-            f"the live schema provides {len(FEATURE_NAMES)}."
-        )
-    return model
+    return model_path
 
 
 def _as_float(value: Any) -> float:
@@ -250,6 +198,58 @@ def build_live_feature_frame(
     return feature_frame, valid_count, None
 
 
+def _predict_with_affec_worker(
+    model_path: Path,
+    feature_frame: pd.DataFrame,
+) -> float:
+    """Run the serialized AFFEC pipeline in its pinned isolated environment."""
+    python_path = Path(os.getenv(
+        "NEUROSENSE_AFFEC_PYTHON",
+        "/opt/affec-venv/bin/python",
+    ))
+    worker_path = Path(__file__).with_name("face_valence_worker.py")
+    if not python_path.is_file():
+        raise FileNotFoundError(
+            f"Isolated AFFEC Python runtime not found: {python_path}. "
+            "Build the Docker image with requirements-affec-worker.txt."
+        )
+    if not worker_path.is_file():
+        raise FileNotFoundError(f"AFFEC worker script not found: {worker_path}")
+
+    row = feature_frame.iloc[0].to_dict()
+    payload = {
+        "feature_names": list(FEATURE_NAMES),
+        "features": {
+            name: (float(value) if np.isfinite(value) else None)
+            for name, value in row.items()
+        },
+    }
+    try:
+        process = subprocess.run(
+            [str(python_path), str(worker_path), str(Path(model_path))],
+            input=json.dumps(payload, allow_nan=False),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=45,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise TimeoutError("AFFEC isolated model inference exceeded its time limit.") from error
+
+    if process.returncode != 0:
+        detail = (process.stderr or process.stdout or "No worker details returned.")[-1800:]
+        raise RuntimeError("AFFEC model worker failed. " + detail)
+
+    try:
+        response = json.loads(process.stdout)
+        prediction = float(response["felt_valence"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError("AFFEC model worker returned an invalid response.") from error
+    if not np.isfinite(prediction):
+        raise RuntimeError("The AFFEC worker returned a non-finite felt-valence value.")
+    return prediction
+
+
 def predict_from_openface_rows(
     model,
     rows: Iterable[Mapping[str, Any]],
@@ -263,7 +263,12 @@ def predict_from_openface_rows(
             "required_frames": MIN_VALID_FRAMES,
         }
 
-    prediction = float(np.asarray(model.predict(feature_frame)).reshape(-1)[0])
+    if isinstance(model, (str, Path)):
+        prediction = _predict_with_affec_worker(Path(model), feature_frame)
+    else:
+        # Retained for unit tests and explicitly injected in-process estimators.
+        prediction = float(np.asarray(model.predict(feature_frame)).reshape(-1)[0])
+
     if not np.isfinite(prediction):
         raise RuntimeError("The model returned a non-finite felt-valence value.")
 
