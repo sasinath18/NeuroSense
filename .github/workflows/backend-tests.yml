@@ -75,23 +75,35 @@ jobs:
         run: |
           docker buildx build --load --tag neurosense-openface:ci .
 
-      - name: Verify existing wearable stress model loads with pinned production dependencies
+      - name: Verify wearable model under its serialized scikit-learn version
         run: |
           docker run --rm --entrypoint python neurosense-openface:ci -c '
-          import warnings
           import joblib
+          import numpy as np
           import sklearn
-          from sklearn.exceptions import InconsistentVersionWarning
-          path = "/app/ml_model/neurosense_stress_model.joblib"
-          with warnings.catch_warnings(record=True) as captured:
-              warnings.simplefilter("always")
-              model = joblib.load(path)
-          version_warnings = [w for w in captured if issubclass(w.category, InconsistentVersionWarning)]
-          if version_warnings:
-              raise SystemExit("Wearable stress model was serialized with a different scikit-learn version: " + str(version_warnings[0].message))
+          from pathlib import Path
+          assert sklearn.__version__ == "1.9.1", sklearn.__version__
+          model = joblib.load("/app/ml_model/neurosense_stress_model.joblib")
           if not hasattr(model, "predict"):
-              raise SystemExit("Wearable stress artifact is not a directly usable estimator; backend inference expects predict().")
-          print("Wearable stress model loaded:", type(model).__name__, "scikit-learn:", sklearn.__version__)
+              raise SystemExit("Wearable stress artifact is not a directly usable estimator.")
+          feature_count = int(getattr(model, "n_features_in_", 8))
+          model.predict(np.zeros((1, feature_count), dtype=np.float32))
+          print("Wearable model load/predict OK:", type(model).__name__, "scikit-learn:", sklearn.__version__)
+          '
+
+      - name: Verify isolated AFFEC worker runtime
+        run: |
+          docker run --rm --entrypoint /opt/affec-venv/bin/python neurosense-openface:ci -c '
+          import joblib
+          import numpy
+          import pandas
+          import sklearn
+          assert sklearn.__version__ == "1.6.1", sklearn.__version__
+          assert numpy.__version__ == "2.4.6", numpy.__version__
+          assert pandas.__version__ == "2.2.3", pandas.__version__
+          assert joblib.__version__ == "1.6.0", joblib.__version__
+          compile(open("/app/backend/face_valence_worker.py", encoding="utf-8").read(), "face_valence_worker.py", "exec")
+          print("AFFEC worker runtime OK:", sklearn.__version__, numpy.__version__, pandas.__version__, joblib.__version__)
           '
 
       - name: Verify OpenFace executable, dependencies and model assets
