@@ -37,4 +37,4 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 COPY . .
 
 EXPOSE 10000
-CMD ["sh", "-c", "python -m uvicorn backend.main:app --host 0.0.0.0 --port \${PORT:-10000}"]
+CMD ["sh", "-c", "python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
