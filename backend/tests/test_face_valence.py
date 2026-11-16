@@ -213,16 +213,68 @@ def test_model_download_publishes_only_after_minimum_size_check(tmp_path, monkey
 
 
 
-def test_model_loader_rejects_incompatible_sklearn_before_unpickling(tmp_path, monkeypatch):
-    import pytest
-    import backend.face_valence as face_valence
+def test_affec_artifact_is_verified_without_unpickling_in_main_process(tmp_path, monkeypatch):
+    import hashlib
+    from backend.face_valence import load_face_valence_model
 
     model_path = tmp_path / "face_valence.joblib"
-    model_path.write_bytes(b"x" * 1_000_000)
-    monkeypatch.setattr(face_valence.sklearn, "__version__", "1.9.1")
+    payload = b"safe-model-artifact" * 60_000
+    model_path.write_bytes(payload)
 
-    with pytest.raises(RuntimeError, match="serialized with scikit-learn 1.6.1"):
-        face_valence.load_face_valence_model(model_path)
+    # A main-process joblib load would mix AFFEC sklearn 1.6.1 with the
+    # wearable model's sklearn 1.9.1. The loader must only verify the file.
+    import joblib
+    monkeypatch.setattr(
+        joblib,
+        "load",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("AFFEC must not be unpickled in the API process")
+        ),
+    )
+    result = load_face_valence_model(
+        model_path,
+        expected_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    assert result == model_path
+
+
+def test_affec_worker_receives_exact_float32_feature_row(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    from backend.face_valence import _predict_with_affec_worker
+
+    fake_python = tmp_path / "fake-affec-python"
+    fake_python.write_text(
+        "#!/bin/sh\\n"
+        "cat >/dev/null\\n"
+        "printf '{\\"felt_valence\\":0.375}'\\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    model_path = tmp_path / "face_valence.joblib"
+    model_path.write_bytes(b"artifact")
+
+    observed = {}
+    import backend.face_valence as face_valence
+    real_run = face_valence.subprocess.run
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["payload"] = json.loads(kwargs["input"])
+        return real_run(command, **kwargs)
+
+    monkeypatch.setenv("NEUROSENSE_AFFEC_PYTHON", str(fake_python))
+    monkeypatch.setattr(face_valence.subprocess, "run", fake_run)
+
+    frame, _, reason = build_live_feature_frame(make_rows(45))
+    assert reason is None
+    result = _predict_with_affec_worker(model_path, frame)
+
+    assert result == 0.375
+    assert observed["command"][0] == str(fake_python)
+    assert len(observed["payload"]["feature_names"]) == 50
+    assert len(observed["payload"]["features"]) == 50
+    assert observed["payload"]["features"]["face__gaze_angle_x__mean"] == 22.0
 
 
 def test_openface_timeout_is_reported_as_a_feature_extraction_timeout(tmp_path, monkeypatch):
