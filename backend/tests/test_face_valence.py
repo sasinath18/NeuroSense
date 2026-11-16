@@ -108,9 +108,6 @@ def test_valid_rows_are_passed_to_model_as_50_float32_features():
 
 
 def test_model_download_is_not_published_when_sha256_is_wrong(tmp_path, monkeypatch):
-    import hashlib
-    from types import SimpleNamespace
-
     from backend.face_valence import load_face_valence_model
 
     model_path = tmp_path / "face_valence.joblib"
