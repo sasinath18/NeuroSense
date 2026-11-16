@@ -156,3 +156,37 @@ def test_model_download_publishes_only_after_minimum_size_check(tmp_path, monkey
 
     assert not model_path.exists()
     assert not model_path.with_suffix(model_path.suffix + ".download").exists()
+
+
+
+def test_openface_timeout_is_reported_as_a_feature_extraction_timeout(tmp_path, monkeypatch):
+    import subprocess
+    import pytest
+    from backend.face_valence import predict_from_video_bytes
+
+    executable = tmp_path / "FeatureExtraction"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    openface_root = tmp_path / "OpenFace"
+    openface_root.mkdir()
+
+    def fake_probe(_path):
+        return 5.0
+
+    def fake_run(command, **kwargs):
+        if command[0] == "ffmpeg":
+            from pathlib import Path
+            Path(command[-1]).write_bytes(b"fake-mp4")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        raise subprocess.TimeoutExpired(command, timeout=120)
+
+    monkeypatch.setattr("backend.face_valence._probe_duration", fake_probe)
+    monkeypatch.setattr("backend.face_valence.subprocess.run", fake_run)
+
+    with pytest.raises(TimeoutError, match="processing time limit"):
+        predict_from_video_bytes(
+            object(),
+            b"fake-webm",
+            executable,
+            openface_root,
+        )
