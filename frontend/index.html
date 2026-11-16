@@ -3272,7 +3272,7 @@
                     </div>
 
                     <div class="notice face-stress-notice">
-                        The 120-second scan reports an experimental camera pulse estimate (rPPG) and blink metrics. A separate AFFEC research model can estimate felt valence from a 4.8-second clip; it does not estimate stress. Only when you explicitly start that test is the short clip uploaded to the backend for processing, then deleted.
+                        The 120-second scan reports an experimental camera pulse estimate (rPPG) and blink metrics. The separate AFFEC felt-valence model is currently disabled for ordinary webcam selfies: it was trained on stimulus-locked video-phase windows, not arbitrary 4.8-second clips. Numerical feature parity and new-user validation are pending. It does not estimate stress.
                     </div>
 
                     <div class="face-scan-metrics">
@@ -3337,12 +3337,12 @@
 
                     <div class="face-actions" style="margin-top:14px">
                         <button id="runFaceValenceBtn" class="secondary-btn" type="button" disabled>
-                            Run 4.8-second Felt Valence Test
+                            AFFEC Felt-Valence Test · Validation Pending
                         </button>
-                        <span id="faceValenceStatus" class="badge" role="status">Checking model</span>
+                        <span id="faceValenceStatus" class="badge" role="status">Validation pending</span>
                     </div>
                     <p id="faceValenceMessage" class="muted small" role="status" aria-live="polite">
-                        This test requires an active camera, a signed-in account, the AFFEC model and the OpenFace feature extractor.
+                        The webcam inference test stays disabled until the model's stimulus-window feature parity and new-user validation are complete. Browser-local rPPG and blink analysis remain available.
                     </p>
                     <p id="faceValenceFrameCount" class="muted small">Valid frames: -- / 40 required</p>
 
@@ -7214,15 +7214,19 @@ async function refreshFaceValenceBackendStatus() {
     try {
         const status = await apiRequest("/api/face/valence/status");
         faceValenceBackendReady = Boolean(
-            status.model_loaded && status.openface_available
+            status.webcam_experiment_enabled &&
+            status.model_loaded &&
+            status.openface_available
         );
 
         if (badge) {
-            badge.textContent = faceValenceBackendReady
-                ? "Model ready"
-                : (!status.model_loaded
-                    ? "Model not configured"
-                    : "OpenFace unavailable");
+            badge.textContent = !status.webcam_experiment_enabled
+                ? "Validation pending"
+                : (faceValenceBackendReady
+                    ? "Model ready · research only"
+                    : (!status.model_loaded
+                        ? "Model not configured"
+                        : "OpenFace unavailable"));
         }
 
         if (button) {
@@ -7230,9 +7234,11 @@ async function refreshFaceValenceBackendStatus() {
         }
 
         if (!faceValenceBackendReady && $("faceValenceMessage")) {
-            $("faceValenceMessage").textContent = !status.model_loaded
-                ? "The backend has no AFFEC model loaded yet. Configure the model URL in Render."
-                : "OpenFace is not available on the backend. The existing camera scan is unaffected.";
+            $("faceValenceMessage").textContent = !status.webcam_experiment_enabled
+                ? "AFFEC webcam inference is disabled. Its training data used stimulus-locked video-phase windows, not an arbitrary webcam selfie. Complete numerical feature parity and new-user validation first. The browser-local rPPG/blink scan is unaffected."
+                : (!status.model_loaded
+                    ? "The backend has no AFFEC model loaded yet. Configure the model URL in Render."
+                    : "OpenFace is not available on the backend. The existing camera scan is unaffected.");
         }
     } catch (error) {
         faceValenceBackendReady = false;
