@@ -26,28 +26,24 @@ services:
         sync: false
       - key: FIREBASE_STORAGE_BUCKET
         sync: false
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_WHATSAPP_FROM
-        sync: false
       - key: NEUROSENSE_MUSIC_DIR
         value: /tmp/neurosense-music
       - key: GOOGLE_DRIVE_API_KEY
         sync: false
       - key: GOOGLE_DRIVE_APP_ID
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_BOT_USERNAME
         value: NeuroSense_Wellness_Alert_Bot
-        sync: false
       - key: NEUROSENSE_FACE_VALENCE_MODEL_URL
         sync: false
       - key: NEUROSENSE_FACE_VALENCE_MODEL_SHA256
         sync: false
       - key: NEUROSENSE_FACE_VALENCE_MODEL_PATH
         value: /app/ml_model/face_valence/neurosense_face_valence_rf.joblib
+      - key: NEUROSENSE_FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED
+        value: "false"
       - key: OPENFACE_ROOT
         value: /opt/OpenFace
       - key: OPENFACE_FEATURE_EXTRACTION_PATH
