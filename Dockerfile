@@ -9,7 +9,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OPENBLAS_NUM_THREADS=1 \
     OPENFACE_ROOT=/opt/OpenFace \
     OPENFACE_FEATURE_EXTRACTION_PATH=/opt/OpenFace/build/bin/FeatureExtraction \
-    NEUROSENSE_FACE_VALENCE_MODEL_PATH=/app/ml_model/face_valence/neurosense_face_valence_rf.joblib
+    NEUROSENSE_FACE_VALENCE_MODEL_PATH=/app/ml_model/face_valence/neurosense_face_valence_rf.joblib \
+    NEUROSENSE_AFFEC_PYTHON=/opt/affec-venv/bin/python
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git pkg-config wget ca-certificates ffmpeg \
@@ -49,8 +50,12 @@ RUN git clone --depth 1 https://github.com/TadasBaltrusaitis/OpenFace.git OpenFa
 
 WORKDIR /app
 COPY requirements-render.txt ./requirements-render.txt
+COPY requirements-affec-worker.txt ./requirements-affec-worker.txt
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir -r requirements-render.txt
+    && python -m pip install --no-cache-dir -r requirements-render.txt \
+    && python -m venv /opt/affec-venv \
+    && /opt/affec-venv/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && /opt/affec-venv/bin/python -m pip install --no-cache-dir -r requirements-affec-worker.txt
 
 COPY . .
 
