@@ -90,17 +90,24 @@ jobs:
             test -f /app/ml_model/neurosense_stress_model.joblib
           '
 
-      - name: Run OpenFace on its bundled sample video
+      - name: Run OpenFace sample extraction with diagnostics
         run: |
           docker run --rm --entrypoint /bin/bash neurosense-openface:ci -lc '
             set -euo pipefail
+            ulimit -c 0
             mkdir -p /tmp/openface-smoke
             cd "$(dirname "$OPENFACE_FEATURE_EXTRACTION_PATH")"
+
+            export OMP_NUM_THREADS=1
+            export OPENBLAS_NUM_THREADS=1
+            export MKL_NUM_THREADS=1
+            export OPENCV_FOR_THREADS_NUM=1
+
             ./FeatureExtraction \
               -f "$OPENFACE_ROOT/samples/2015-10-15-15-14.avi" \
               -aus -gaze -pose \
-              -out_dir /tmp/openface-smoke \
-              -q
+              -out_dir /tmp/openface-smoke
+
             csv="$(find /tmp/openface-smoke -maxdepth 1 -type f -name "*.csv" -size +0c -print -quit)"
             test -n "$csv"
             python -c "import csv,sys; fields=next(csv.reader(open(sys.argv[1], newline=\"\", encoding=\"utf-8-sig\"))); required={\"timestamp\",\"success\",\"confidence\",\"gaze_angle_x\",\"pose_Tx\",\"AU01_r\"}; missing=sorted(required.difference(fields)); assert not missing, f\"OpenFace CSV missing expected fields: {missing}\"" "$csv"
