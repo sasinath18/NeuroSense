@@ -37,6 +37,10 @@ services:
       - key: GOOGLE_DRIVE_API_KEY
         sync: false
       - key: GOOGLE_DRIVE_APP_ID
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        value: NeuroSense_Wellness_Alert_Bot
         sync: false
       - key: NEUROSENSE_FACE_VALENCE_MODEL_URL
         sync: false
