@@ -35,6 +35,12 @@ import joblib
 import numpy as np
 
 from dotenv import load_dotenv
+
+from backend.face_valence import (
+    MAX_VIDEO_BYTES as FACE_VALENCE_MAX_VIDEO_BYTES,
+    load_face_valence_model,
+    predict_from_video_bytes,
+)
 from fastapi import (
     Depends, FastAPI, Header, HTTPException, Query, status
 )
@@ -145,6 +151,7 @@ logger = logging.getLogger("neurosense")
 FIREBASE_APP = None
 FIRESTORE_CLIENT = None
 STRESS_MODEL = None
+FACE_VALENCE_MODEL = None
 
 
 # ============================================================
@@ -630,6 +637,37 @@ def initialize_ml_model() -> None:
         )
 
         STRESS_MODEL = None
+
+
+def initialize_face_valence_model() -> None:
+    """Load the separate AFFEC felt-valence model when its artifact is configured."""
+    global FACE_VALENCE_MODEL
+
+    model_path = Path(os.getenv(
+        "NEUROSENSE_FACE_VALENCE_MODEL_PATH",
+        str(BASE_DIR / "ml_model" / "face_valence" / "neurosense_face_valence_rf.joblib")
+    ))
+    model_url = os.getenv("NEUROSENSE_FACE_VALENCE_MODEL_URL", "").strip() or None
+    expected_sha256 = os.getenv(
+        "NEUROSENSE_FACE_VALENCE_MODEL_SHA256", ""
+    ).strip() or None
+
+    try:
+        FACE_VALENCE_MODEL = load_face_valence_model(
+            model_path=model_path,
+            model_url=model_url,
+            expected_sha256=expected_sha256,
+        )
+        logger.info("AFFEC felt-valence model loaded from %s", model_path)
+    except FileNotFoundError:
+        FACE_VALENCE_MODEL = None
+        logger.warning(
+            "AFFEC felt-valence model is not configured. "
+            "Set NEUROSENSE_FACE_VALENCE_MODEL_URL or provide the model file."
+        )
+    except Exception:
+        FACE_VALENCE_MODEL = None
+        logger.exception("Could not load the AFFEC felt-valence model.")
 
 
 # ============================================================
@@ -2578,6 +2616,7 @@ async def lifespan(app: FastAPI):
     initialize_database()
     initialize_firebase()
     initialize_ml_model()
+    initialize_face_valence_model()
     configure_telegram_webhook()
 
     task = asyncio.create_task(
@@ -2734,6 +2773,7 @@ def health():
         "database": database_status,
         "firebase_configured": FIREBASE_APP is not None,
         "ml_model_loaded": STRESS_MODEL is not None,
+        "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
         "timestamp": iso()
     }
 
@@ -2797,7 +2837,8 @@ def system_status():
             STRESS_MODEL is not None
         ),
 
-        "face_scan_analysis": "browser_local_landmark_detection_only",
+        "face_scan_analysis": "browser_local_landmarks_with_optional_server_side_felt_valence",
+        "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
         "timestamp": iso()
     }
 
@@ -5510,27 +5551,137 @@ def test_emergency_contact_push(user_id: str = Depends(current_user_id)):
 
 @app.get("/api/face-scan/status")
 def face_scan_status():
+    openface_executable = Path(os.getenv(
+        "OPENFACE_FEATURE_EXTRACTION_PATH",
+        "/opt/OpenFace/build/bin/FeatureExtraction",
+    ))
 
     return {
         "available": True,
-        "status": "browser_local_landmark_detection_only",
-        "processing": "on_device_browser",
+        "status": "browser_local_scan_with_optional_felt_valence",
+        "processing": "browser_local_rppg_and_backend_openface_valence",
         "camera_policy": (
-            "Camera remains browser-side, "
-            "user-triggered and OFF by default."
+            "Camera remains user-triggered and OFF by default. "
+            "Only the explicit felt-valence action uploads a short clip."
         ),
-        "raw_frames_uploaded": False,
-        "image_storage": False,
+        "rppg_frames_uploaded": False,
+        "valence_clip_uploaded_on_explicit_action": True,
+        "valence_clip_retained": False,
+        "openface_available": openface_executable.is_file(),
+        "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
         "blink_count_available": True,
         "derived_blink_metrics_can_be_saved_per_user": True,
-        "emotion_inference": False,
+        "felt_valence_inference": FACE_VALENCE_MODEL is not None,
         "stress_inference": False,
         "message": (
-            "Face landmarks and mesh overlays are processed "
-            "locally in the browser. Webcam frames are not "
-            "uploaded to the NeuroSense backend or stored. "
-            "Emotion and stress inference are not included."
+            "The existing rPPG and blink scan remains browser-local. "
+            "The separate felt-valence action uploads only a user-triggered "
+            "4.8-second clip for temporary OpenFace processing; the clip and "
+            "derived CSV are deleted after the request. This is not a stress "
+            "score or medical assessment."
         )
+    }
+
+
+@app.get("/api/face/valence/status")
+def face_valence_status():
+    openface_executable = Path(os.getenv(
+        "OPENFACE_FEATURE_EXTRACTION_PATH",
+        "/opt/OpenFace/build/bin/FeatureExtraction",
+    ))
+    return {
+        "model_loaded": FACE_VALENCE_MODEL is not None,
+        "openface_available": openface_executable.is_file(),
+        "window_seconds": 4.8,
+        "minimum_valid_frames": 40,
+        "confidence_threshold": 0.8,
+        "feature_count": 50,
+        "target": "beh_f_emotion_v",
+        "interpretation": "felt_valence_only_not_stress",
+        "new_user_validation": False,
+        "cross_validation_mean_fold_r2": 0.08,
+        "high_low_valence_balanced_accuracy": 0.60,
+    }
+
+
+@app.post("/api/face/valence/predict")
+async def predict_face_valence(
+    video: UploadFile = File(...),
+    user_id: str = Depends(current_user_id),
+):
+    """Run explicit 4.8-second OpenFace felt-valence inference for one user."""
+    del user_id  # Authentication gates access; no raw video or identity is persisted.
+
+    if FACE_VALENCE_MODEL is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The felt-valence model is not loaded. Configure "
+                "NEUROSENSE_FACE_VALENCE_MODEL_URL in the deployment environment."
+            ),
+        )
+
+    content_type = (video.content_type or "").lower()
+    if not content_type.startswith("video/"):
+        raise HTTPException(
+            status_code=415,
+            detail="Upload a browser-recorded video clip.",
+        )
+
+    payload = await video.read(FACE_VALENCE_MAX_VIDEO_BYTES + 1)
+    await video.close()
+    if len(payload) > FACE_VALENCE_MAX_VIDEO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="The camera clip exceeds the 12 MB upload limit.",
+        )
+
+    openface_executable = Path(os.getenv(
+        "OPENFACE_FEATURE_EXTRACTION_PATH",
+        "/opt/OpenFace/build/bin/FeatureExtraction",
+    ))
+    openface_root = Path(os.getenv("OPENFACE_ROOT", "/opt/OpenFace"))
+
+    if not openface_executable.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail="OpenFace FeatureExtraction is unavailable on this backend.",
+        )
+
+    try:
+        result = await asyncio.to_thread(
+            predict_from_video_bytes,
+            FACE_VALENCE_MODEL,
+            payload,
+            openface_executable,
+            openface_root,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except subprocess.TimeoutExpired as error:
+        raise HTTPException(
+            status_code=504,
+            detail="OpenFace processing timed out. Please retry with a clear, short clip.",
+        ) from error
+    except Exception as error:
+        logger.exception("AFFEC felt-valence inference failed.")
+        raise HTTPException(
+            status_code=502,
+            detail="Face-valence feature extraction or inference failed.",
+        ) from error
+
+    return {
+        **result,
+        "target": "beh_f_emotion_v",
+        "label": "felt_valence",
+        "research_only": True,
+        "model_warning": (
+            "Experimental felt-valence estimate only; not a stress score, "
+            "diagnosis, or validated emotion classification. CV mean-fold "
+            "R2 is approximately 0.08; new-user validation has not been performed."
+        ),
     }
 
 
