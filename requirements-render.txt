@@ -1,13 +1,14 @@
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30,<1.0
-numpy
+# Exact versions recorded in the AFFEC joblib artifact metadata.
+numpy==2.4.6
 scipy
-scikit-learn
+scikit-learn==1.6.1
 python-dotenv
 pydantic>=2,<3
 firebase-admin>=7.5.0
-joblib
+joblib==1.6.0
 requests
 python-multipart
-pandas>=2.2,<3.0
+pandas==2.2.3
 gdown>=5.2,<6.0
