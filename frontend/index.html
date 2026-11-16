@@ -3272,7 +3272,7 @@
                     </div>
 
                     <div class="notice face-stress-notice">
-                        This scan uses only the camera. It reports an experimental pulse estimate from facial colour changes (rPPG) and blink metrics. A face-only stress score is not enabled in this release because its separate model has not yet been trained, validated and integrated. The wearable-based stress estimate is shown separately on Dashboard.
+                        The 120-second scan reports an experimental camera pulse estimate (rPPG) and blink metrics. A separate AFFEC research model can estimate felt valence from a 4.8-second clip; it does not estimate stress. Only when you explicitly start that test is the short clip uploaded to the backend for processing, then deleted.
                     </div>
 
                     <div class="face-scan-metrics">
@@ -3293,9 +3293,9 @@
                             <strong id="blinkRateValue">0 <small>/ min</small></strong>
                         </div>
                         <div class="face-scan-metric">
-                            <span class="muted small">Face-only stress score</span>
-                            <strong>Not available</strong>
-                            <span class="muted small">Dedicated model not integrated</span>
+                            <span class="muted small">Felt valence estimate</span>
+                            <strong id="faceValenceValue">--</strong>
+                            <span class="muted small">AFFEC research output · not stress</span>
                         </div>
                         <div class="face-scan-metric">
                             <span class="muted small">Scan duration</span>
@@ -3335,9 +3335,20 @@
                         Start the camera first, then begin the face-only scan. The camera can remain on for preview after analysis.
                     </p>
 
+                    <div class="face-actions" style="margin-top:14px">
+                        <button id="runFaceValenceBtn" class="secondary-btn" type="button" disabled>
+                            Run 4.8-second Felt Valence Test
+                        </button>
+                        <span id="faceValenceStatus" class="badge" role="status">Checking model</span>
+                    </div>
+                    <p id="faceValenceMessage" class="muted small" role="status" aria-live="polite">
+                        This test requires an active camera, a signed-in account, the AFFEC model and the OpenFace feature extractor.
+                    </p>
+                    <p id="faceValenceFrameCount" class="muted small">Valid frames: -- / 40 required</p>
+
                     <div class="privacy-list" style="margin-top:14px">
                         <div class="privacy-item"><span class="check">✓</span><span>Face landmarks and blink measurements are processed in this browser.</span></div>
-                        <div class="privacy-item"><span class="check">✓</span><span>No webcam video or frames are uploaded or stored by this scan.</span></div>
+                        <div class="privacy-item"><span class="check">✓</span><span>The 120-second rPPG/blink scan stays in this browser. Only the separate, explicitly started 4.8-second felt-valence test uploads a clip; its temporary video and OpenFace CSV are deleted after processing.</span></div>
                         <div class="privacy-item"><span class="check">✓</span><span>Stop Analysis ends the 120-second measurement; Stop Camera switches the webcam off.</span></div>
                     </div>
 
@@ -3955,6 +3966,7 @@ async function apiRequest(path, options = {}) {
 
     if (
         options.body !== undefined &&
+        !(typeof FormData !== "undefined" && options.body instanceof FormData) &&
         !headers["Content-Type"] &&
         !headers["content-type"]
     ) {
@@ -5990,6 +6002,8 @@ let faceOnlyScanActive = false;
 let faceOnlyScanStartedAt = 0;
 let faceOnlyScanTimer = null;
 let faceLastRppgEstimateAt = 0;
+let faceValenceBusy = false;
+let faceValenceBackendReady = false;
 
 
 const FACE_LANDMARKER_VERSION = "1.2.2";
@@ -7193,6 +7207,156 @@ function stopFaceOnlyScan() {
     setFaceRppgStatus("Stopped", "neutral");
 }
 
+async function refreshFaceValenceBackendStatus() {
+    const button = $("runFaceValenceBtn");
+    const badge = $("faceValenceStatus");
+
+    try {
+        const status = await apiRequest("/api/face/valence/status");
+        faceValenceBackendReady = Boolean(
+            status.model_loaded && status.openface_available
+        );
+
+        if (badge) {
+            badge.textContent = faceValenceBackendReady
+                ? "Model ready"
+                : (!status.model_loaded
+                    ? "Model not configured"
+                    : "OpenFace unavailable");
+        }
+
+        if (button) {
+            button.disabled = !cameraStream || !faceValenceBackendReady || faceValenceBusy;
+        }
+
+        if (!faceValenceBackendReady && $("faceValenceMessage")) {
+            $("faceValenceMessage").textContent = !status.model_loaded
+                ? "The backend has no AFFEC model loaded yet. Configure the model URL in Render."
+                : "OpenFace is not available on the backend. The existing camera scan is unaffected.";
+        }
+    } catch (error) {
+        faceValenceBackendReady = false;
+        if (badge) badge.textContent = "Backend unavailable";
+        if (button) button.disabled = true;
+        if ($("faceValenceMessage")) {
+            $("faceValenceMessage").textContent =
+                "Could not check Face Valence availability: " + error.message;
+        }
+    }
+}
+
+
+async function runFaceValenceScan() {
+    const button = $("runFaceValenceBtn");
+    const message = $("faceValenceMessage");
+
+    if (faceValenceBusy) return;
+
+    if (!cameraStream || !$("cameraVideo") ||
+        $("cameraVideo").readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        message.textContent = "Start the camera and wait until the face preview is active.";
+        return;
+    }
+
+    if (!hasPrivateApiAccess()) {
+        message.textContent = "Sign in with your Google account before running the felt-valence test.";
+        return;
+    }
+
+    if (!faceValenceBackendReady) {
+        await refreshFaceValenceBackendStatus();
+        if (!faceValenceBackendReady) return;
+    }
+
+    if (typeof MediaRecorder === "undefined") {
+        message.textContent = "This browser does not support recording a short camera clip.";
+        return;
+    }
+
+    const mimeType = [
+        "video/webm;codecs=vp9",
+        "video/webm;codecs=vp8",
+        "video/webm"
+    ].find(type => MediaRecorder.isTypeSupported(type));
+
+    if (!mimeType) {
+        message.textContent = "This browser cannot create a supported WebM camera clip.";
+        return;
+    }
+
+    faceValenceBusy = true;
+    button.disabled = true;
+    $("faceValenceValue").textContent = "--";
+    $("faceValenceFrameCount").textContent = "Valid frames: collecting...";
+    $("faceValenceStatus").textContent = "Recording";
+    message.textContent =
+        "Recording the first 4.8 seconds for the felt-valence test. The clip will be uploaded only for this request.";
+
+    try {
+        const chunks = [];
+        const recorder = new MediaRecorder(cameraStream, { mimeType });
+
+        const recordingStopped = new Promise((resolve, reject) => {
+            recorder.ondataavailable = event => {
+                if (event.data && event.data.size > 0) chunks.push(event.data);
+            };
+            recorder.onerror = event => reject(
+                event.error || new Error("Camera recording failed.")
+            );
+            recorder.onstop = resolve;
+        });
+
+        recorder.start();
+        await new Promise(resolve => setTimeout(resolve, 4800));
+        if (recorder.state !== "inactive") recorder.stop();
+        await recordingStopped;
+
+        const clip = new Blob(chunks, { type: mimeType });
+        if (!clip.size) {
+            throw new Error("The camera did not produce a video clip.");
+        }
+
+        $("faceValenceStatus").textContent = "Analyzing";
+        message.textContent =
+            "Uploading the 4.8-second clip and extracting OpenFace AU, gaze and pose features...";
+
+        const form = new FormData();
+        form.append("video", clip, "neurosense-face-valence.webm");
+
+        const result = await apiRequest("/api/face/valence/predict", {
+            method: "POST",
+            body: form
+        });
+
+        $("faceValenceFrameCount").textContent =
+            "Valid frames: " + result.valid_frames + " / 40 required";
+
+        if (result.status !== "prediction_available") {
+            $("faceValenceValue").textContent = "--";
+            $("faceValenceStatus").textContent = "No prediction";
+            message.textContent = result.reason || "Not enough valid face frames.";
+            return;
+        }
+
+        $("faceValenceValue").textContent =
+            Number(result.felt_valence).toFixed(3);
+        $("faceValenceStatus").textContent = "Research estimate";
+        message.textContent =
+            "Felt-valence estimate returned from " + result.features_used +
+            " features. " + result.model_warning;
+    } catch (error) {
+        $("faceValenceStatus").textContent = "Test failed";
+        message.textContent = error.message || "Face-valence analysis failed.";
+        console.error("Face-valence test failed:", error);
+    } finally {
+        faceValenceBusy = false;
+        if (button) {
+            button.disabled = !cameraStream || !faceValenceBackendReady;
+        }
+    }
+}
+
+
 async function startCamera() {
 
     if (cameraStream) return;
@@ -7266,6 +7430,7 @@ async function startCamera() {
             faceAnimationFrame =
                 requestAnimationFrame(runFaceDetectionLoop);
 
+            await refreshFaceValenceBackendStatus();
             showToast("Face Mesh is ready.");
 
         } catch (modelError) {
@@ -7311,6 +7476,10 @@ async function startCamera() {
 function stopCamera() {
 
     stopFaceOnlyScan();
+    faceValenceBusy = false;
+    faceValenceBackendReady = false;
+    if ($("runFaceValenceBtn")) $("runFaceValenceBtn").disabled = true;
+    if ($("faceValenceStatus")) $("faceValenceStatus").textContent = "Camera off";
     cameraRequestId += 1;
     faceProcessingActive = false;
     resetFaceLightingCheck();
@@ -7359,6 +7528,7 @@ function stopCamera() {
 
 
 $("startCameraBtn").addEventListener("click", startCamera);
+$("runFaceValenceBtn").addEventListener("click", runFaceValenceScan);
 $("startFaceOnlyScanBtn").addEventListener("click", startFaceOnlyScan);
 $("stopFaceOnlyScanBtn").addEventListener("click", stopFaceOnlyScan);
 
