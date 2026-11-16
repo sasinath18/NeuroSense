@@ -240,29 +240,24 @@ def test_affec_artifact_is_verified_without_unpickling_in_main_process(tmp_path,
 
 def test_affec_worker_receives_exact_float32_feature_row(tmp_path, monkeypatch):
     import json
-    from pathlib import Path
+    import subprocess
     from backend.face_valence import _predict_with_affec_worker
 
     fake_python = tmp_path / "fake-affec-python"
-    fake_python.write_text(
-        "#!/bin/sh\\n"
-        "cat >/dev/null\\n"
-        "printf '{\\"felt_valence\\":0.375}'\\n",
-        encoding="utf-8",
-    )
-    fake_python.chmod(0o755)
+    fake_python.write_text("test interpreter placeholder", encoding="utf-8")
     model_path = tmp_path / "face_valence.joblib"
     model_path.write_bytes(b"artifact")
 
     observed = {}
-    import backend.face_valence as face_valence
-    real_run = face_valence.subprocess.run
 
     def fake_run(command, **kwargs):
         observed["command"] = command
         observed["payload"] = json.loads(kwargs["input"])
-        return real_run(command, **kwargs)
+        return subprocess.CompletedProcess(
+            command, 0, '{"felt_valence":0.375}', ""
+        )
 
+    import backend.face_valence as face_valence
     monkeypatch.setenv("NEUROSENSE_AFFEC_PYTHON", str(fake_python))
     monkeypatch.setattr(face_valence.subprocess, "run", fake_run)
 
