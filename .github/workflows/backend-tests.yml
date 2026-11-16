@@ -75,6 +75,25 @@ jobs:
         run: |
           docker buildx build --load --tag neurosense-openface:ci .
 
+      - name: Verify existing wearable stress model loads with pinned production dependencies
+        run: |
+          docker run --rm --entrypoint python neurosense-openface:ci -c '
+          import warnings
+          import joblib
+          import sklearn
+          from sklearn.exceptions import InconsistentVersionWarning
+          path = "/app/ml_model/neurosense_stress_model.joblib"
+          with warnings.catch_warnings(record=True) as captured:
+              warnings.simplefilter("always")
+              model = joblib.load(path)
+          version_warnings = [w for w in captured if issubclass(w.category, InconsistentVersionWarning)]
+          if version_warnings:
+              raise SystemExit("Wearable stress model was serialized with a different scikit-learn version: " + str(version_warnings[0].message))
+          if not hasattr(model, "predict"):
+              raise SystemExit("Wearable stress artifact is not a directly usable estimator; backend inference expects predict().")
+          print("Wearable stress model loaded:", type(model).__name__, "scikit-learn:", sklearn.__version__)
+          '
+
       - name: Verify OpenFace executable, dependencies and model assets
         run: |
           docker run --rm --entrypoint /bin/bash neurosense-openface:ci -lc '
