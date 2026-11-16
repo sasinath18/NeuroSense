@@ -32,7 +32,7 @@ RUN git clone --depth 1 https://github.com/TadasBaltrusaitis/OpenFace.git OpenFa
            wget -q --https-only --max-redirect=20 --timeout=60 --tries=3 -O "$file" "$url"; \
            actual_size="$(stat -c "%s" "$file")"; \
            test "$actual_size" = "$expected_size"; \
-           printf "%s  %s\\n" "$expected_sha" "$file" | sha256sum -c -; \
+           printf "%s  %s\n" "$expected_sha" "$file" | sha256sum -c -; \
          }; \
          fetch_cen_model cen_patches_0.25_of.dat 60602360 99d3df9888115428075de7b8f1bc86176881de640c2fdf47e2ab0cee556661bf; \
          fetch_cen_model cen_patches_0.35_of.dat 60602360 1070bff51b077ee6a18ce8e1ebbc6f568e1a7a469f6911a8263413878b3df469; \
