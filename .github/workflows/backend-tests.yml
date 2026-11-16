@@ -43,7 +43,7 @@ jobs:
           html = Path("frontend/index.html").read_text(encoding="utf-8")
           invite = Path("frontend/emergency-invite.html").read_text(encoding="utf-8")
           scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL | re.IGNORECASE)
-          invite_scripts = re.findall(r"<script\b[^>]*>(.*?)</script>", invite, flags=re.DOTALL | re.IGNORECASE)
+          invite_scripts = re.findall(r"<script\\b[^>]*>(.*?)</script>", invite, flags=re.DOTALL | re.IGNORECASE)
           if len(scripts) != 1:
               raise SystemExit(f"Expected one inline application script, found {len(scripts)}")
           if len(invite_scripts) != 1:
@@ -75,18 +75,26 @@ jobs:
         run: |
           docker buildx build --load --tag neurosense-openface:ci .
 
-      - name: Verify OpenFace executable and linked libraries
+      - name: Verify OpenFace executable, dependencies and model assets
         run: |
           docker run --rm --entrypoint /bin/bash neurosense-openface:ci -lc '
             set -euo pipefail
             test -x "$OPENFACE_FEATURE_EXTRACTION_PATH"
             missing="$(ldd "$OPENFACE_FEATURE_EXTRACTION_PATH" | grep "not found" || true)"
             if [ -n "$missing" ]; then
-              printf "%s\n" "$missing"
+              printf "%s\\n" "$missing"
               exit 1
             fi
+            model_dir="$OPENFACE_ROOT/build/bin/model/patch_experts"
+            cd "$model_dir"
+            echo "OpenFace patch-expert asset sizes and SHA-256:"
+            stat -c "%n %s bytes" cen_patches_*.dat
+            sha256sum cen_patches_*.dat
+            echo "99d3df9888115428075de7b8f1bc86176881de640c2fdf47e2ab0cee556661bf  cen_patches_0.25_of.dat" | sha256sum -c -
+            echo "1070bff51b077ee6a18ce8e1ebbc6f568e1a7a469f6911a8263413878b3df469  cen_patches_0.35_of.dat" | sha256sum -c -
+            echo "3f08124067e326e83e3261a55c79493e745b01138c9c1b59713dd9b17424168e  cen_patches_0.50_of.dat" | sha256sum -c -
+            echo "bed961bbfa2cc41a709d44c1d1d8a92b2537bc46f2fd6ab430c137fedd0e21b0  cen_patches_1.00_of.dat" | sha256sum -c -
             test -f "$OPENFACE_ROOT/build/bin/model/main_clm_general.txt"
-            test -s "$OPENFACE_ROOT/build/bin/model/patch_experts/cen_patches_0.25_of.dat"
             test -f /app/ml_model/neurosense_stress_model.joblib
           '
 
@@ -103,20 +111,19 @@ jobs:
             export MKL_NUM_THREADS=1
             export OPENCV_FOR_THREADS_NUM=1
 
-            # Use FFmpeg to normalise the bundled clip into a short, modest
-            # resolution fixture. This checks the same OpenFace AU/gaze/pose
-            # pipeline without requiring a long/high-resolution video.
-            ffmpeg -y -v error \
-              -i "$OPENFACE_ROOT/samples/2015-10-15-15-14.avi" \
-              -t 5 -vf "scale=640:-2,fps=15" -an \
+            ffmpeg -y -v error \\
+              -i "$OPENFACE_ROOT/samples/2015-10-15-15-14.avi" \\
+              -t 5 -vf "scale=640:-2,fps=15" -an \\
               -c:v mjpeg -q:v 5 /tmp/openface-smoke/fixture.avi
 
-            ./FeatureExtraction \
-              -f /tmp/openface-smoke/fixture.avi \
-              -aus -gaze -pose \
-              -out_dir /tmp/openface-smoke
+            echo "Container memory:"
+            free -h
+            ./FeatureExtraction \\
+              -f /tmp/openface-smoke/fixture.avi \\
+              -aus -gaze -pose \\
+              -out_dir /tmp/openface-smoke -q
 
             csv="$(find /tmp/openface-smoke -maxdepth 1 -type f -name "fixture.csv" -size +0c -print -quit)"
             test -n "$csv"
-            python -c "import csv,sys; fields=next(csv.reader(open(sys.argv[1], newline=\"\", encoding=\"utf-8-sig\"))); required={\"timestamp\",\"success\",\"confidence\",\"gaze_angle_x\",\"pose_Tx\",\"AU01_r\"}; missing=sorted(required.difference(fields)); assert not missing, f\"OpenFace CSV missing expected fields: {missing}\"" "$csv"
+            python -c "import csv,sys; fields=next(csv.reader(open(sys.argv[1], newline=\\"\\", encoding=\\"utf-8-sig\\"))); required={\\"timestamp\\",\\"success\\",\\"confidence\\",\\"gaze_angle_x\\",\\"pose_Tx\\",\\"AU01_r\\"}; missing=sorted(required.difference(fields)); assert not missing, f\\"OpenFace CSV missing expected fields: {missing}\\"" "$csv"
           '
