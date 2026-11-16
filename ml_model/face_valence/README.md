@@ -8,31 +8,31 @@ Random Forest model.
 The binary model is intentionally not committed to Git because it is a private
 research artifact and is supplied separately:
 
-- \`neurosense_face_valence_rf.joblib\` (approximately 7.5 MB)
+- `neurosense_face_valence_rf.joblib` (approximately 7.5 MB)
 
 The backend downloads it at startup from the optional
-\`NEUROSENSE_FACE_VALENCE_MODEL_URL\` environment variable. For a Google Drive
+`NEUROSENSE_FACE_VALENCE_MODEL_URL` environment variable. For a Google Drive
 source, set the file sharing permission to **Anyone with the link – Viewer**,
 then set that variable in Render. The URL is used only server-side.
 
 Optional integrity check:
 
-- \`NEUROSENSE_FACE_VALENCE_MODEL_SHA256\`
+- `NEUROSENSE_FACE_VALENCE_MODEL_SHA256`
 
-The original \`ClipQ\` and \`KB\` definitions are reproduced in
-\`backend/face_valence.py\` and registered under \`__main__\` before \`joblib.load\`,
-because the Colab artifact serialized those classes with \`__module__="__main__"\`.
+The original `ClipQ` and `KB` definitions are reproduced in
+`backend/face_valence.py` and registered under `__main__` before `joblib.load`,
+because the Colab artifact serialized those classes with `__module__="__main__"`.
 
 ## Locked inference contract
 
-- Target: \`beh_f_emotion_v\` (felt valence), not stress or perceived valence.
+- Target: `beh_f_emotion_v` (felt valence), not stress or perceived valence.
 - Window: first 4.8 seconds from video onset.
-- Valid frames: \`success == 1\` and \`confidence >= 0.8\`.
+- Valid frames: `success == 1` and `confidence >= 0.8`.
 - Minimum valid frames: 40; otherwise return no prediction.
 - Frame feature values: float32 before aggregation.
-- Aggregation: mean and standard deviation (\`ddof=0\`) for each of 25 OpenFace
-  columns, in the exact 50-feature order defined in \`backend/face_valence.py\`.
-- Inputs: 8 gaze/head-pose measurements and 17 AU intensity (\`AU*_r\`) values.
+- Aggregation: mean and standard deviation (`ddof=0`) for each of 25 OpenFace
+  columns, in the exact 50-feature order defined in `backend/face_valence.py`.
+- Inputs: 8 gaze/head-pose measurements and 17 AU intensity (`AU*_r`) values.
 - Pupil and GSR are not inputs to this face-only model.
 
 ## Limitations and privacy
