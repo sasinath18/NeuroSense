@@ -104,3 +104,58 @@ def test_valid_rows_are_passed_to_model_as_50_float32_features():
     assert result["valid_frames"] == 45
     assert result["features_used"] == 50
     assert result["numeric_type"] == "float32"
+
+
+
+def test_model_download_is_not_published_when_sha256_is_wrong(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+
+    from backend.face_valence import load_face_valence_model
+
+    model_path = tmp_path / "face_valence.joblib"
+    payload = b"x" * 1_100_000
+
+    class FakeGdown:
+        @staticmethod
+        def download(url, output, quiet, fuzzy):
+            from pathlib import Path
+            Path(output).write_bytes(payload)
+            return output
+
+    monkeypatch.setitem(__import__("sys").modules, "gdown", FakeGdown)
+    import pytest
+
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        load_face_valence_model(
+            model_path,
+            model_url="https://drive.google.com/uc?id=test",
+            expected_sha256="0" * 64,
+        )
+
+    assert not model_path.exists()
+    assert not model_path.with_suffix(model_path.suffix + ".download").exists()
+
+
+def test_model_download_publishes_only_after_minimum_size_check(tmp_path, monkeypatch):
+    from backend.face_valence import load_face_valence_model
+    import pytest
+
+    class FakeGdown:
+        @staticmethod
+        def download(url, output, quiet, fuzzy):
+            from pathlib import Path
+            Path(output).write_bytes(b"too small")
+            return output
+
+    monkeypatch.setitem(__import__("sys").modules, "gdown", FakeGdown)
+    model_path = tmp_path / "face_valence.joblib"
+
+    with pytest.raises(RuntimeError, match="unexpectedly small"):
+        load_face_valence_model(
+            model_path,
+            model_url="https://drive.google.com/uc?id=test",
+        )
+
+    assert not model_path.exists()
+    assert not model_path.with_suffix(model_path.suffix + ".download").exists()
