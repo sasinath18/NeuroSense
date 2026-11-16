@@ -20,6 +20,7 @@ data
 *.sqlite3
 *.db
 *.joblib
+!ml_model/neurosense_stress_model.joblib
 *.pkl
 *.zip
 *.7z
