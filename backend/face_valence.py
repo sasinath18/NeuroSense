@@ -348,7 +348,7 @@ def predict_from_video_bytes(
         ]
         process = subprocess.run(
             command,
-            cwd=str(root),
+            # OpenFace resolves its bundled model files relative to the executable directory.\n            cwd=str(executable.parent),
             check=False,
             capture_output=True,
             text=True,
