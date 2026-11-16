@@ -1,5 +1,11 @@
 name: NeuroSense Backend Tests
 
+# Do not let old OpenFace builds consume runners while newer commits arrive.
+# One CI run per PR/branch keeps the heavy native Docker build from overlapping.
+concurrency:
+  group: neurosense-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 on:
   # The feature branch is validated by its pull request; running both push
   # and pull_request for every commit caused duplicate multi-minute Docker builds.
