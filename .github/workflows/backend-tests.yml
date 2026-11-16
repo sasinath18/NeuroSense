@@ -90,7 +90,7 @@ jobs:
             test -f /app/ml_model/neurosense_stress_model.joblib
           '
 
-      - name: Run OpenFace sample extraction with diagnostics
+      - name: Run OpenFace extraction on a short fixture with diagnostics
         run: |
           docker run --rm --entrypoint /bin/bash neurosense-openface:ci -lc '
             set -euo pipefail
@@ -103,12 +103,20 @@ jobs:
             export MKL_NUM_THREADS=1
             export OPENCV_FOR_THREADS_NUM=1
 
+            # Use FFmpeg to normalise the bundled clip into a short, modest
+            # resolution fixture. This checks the same OpenFace AU/gaze/pose
+            # pipeline without requiring a long/high-resolution video.
+            ffmpeg -y -v error \
+              -i "$OPENFACE_ROOT/samples/2015-10-15-15-14.avi" \
+              -t 5 -vf "scale=640:-2,fps=15" -an \
+              -c:v mjpeg -q:v 5 /tmp/openface-smoke/fixture.avi
+
             ./FeatureExtraction \
-              -f "$OPENFACE_ROOT/samples/2015-10-15-15-14.avi" \
+              -f /tmp/openface-smoke/fixture.avi \
               -aus -gaze -pose \
               -out_dir /tmp/openface-smoke
 
-            csv="$(find /tmp/openface-smoke -maxdepth 1 -type f -name "*.csv" -size +0c -print -quit)"
+            csv="$(find /tmp/openface-smoke -maxdepth 1 -type f -name "fixture.csv" -size +0c -print -quit)"
             test -n "$csv"
             python -c "import csv,sys; fields=next(csv.reader(open(sys.argv[1], newline=\"\", encoding=\"utf-8-sig\"))); required={\"timestamp\",\"success\",\"confidence\",\"gaze_angle_x\",\"pose_Tx\",\"AU01_r\"}; missing=sorted(required.difference(fields)); assert not missing, f\"OpenFace CSV missing expected fields: {missing}\"" "$csv"
           '
