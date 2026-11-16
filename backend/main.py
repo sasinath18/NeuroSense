@@ -153,6 +153,15 @@ FIREBASE_APP = None
 FIRESTORE_CLIENT = None
 STRESS_MODEL = None
 FACE_VALENCE_MODEL = None
+# This AFFEC model was trained on stimulus-locked video-phase windows, not
+# arbitrary webcam selfies. Keep live webcam inference disabled until
+# numerical parity and new-user validation have been completed.
+FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED = (
+    os.getenv("NEUROSENSE_FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED", "false")
+    .strip()
+    .lower()
+    in {"1", "true", "yes", "on"}
+)
 
 
 # ============================================================
@@ -2838,8 +2847,9 @@ def system_status():
             STRESS_MODEL is not None
         ),
 
-        "face_scan_analysis": "browser_local_landmarks_with_optional_server_side_felt_valence",
+        "face_scan_analysis": "browser_local_landmarks; AFFEC_webcam_inference_validation_pending",
         "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
+        "face_valence_webcam_experiment_enabled": FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED,
         "timestamp": iso()
     }
 
@@ -5556,29 +5566,45 @@ def face_scan_status():
         "OPENFACE_FEATURE_EXTRACTION_PATH",
         "/opt/OpenFace/build/bin/FeatureExtraction",
     ))
+    webcam_inference_available = (
+        FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED
+        and FACE_VALENCE_MODEL is not None
+        and openface_executable.is_file()
+    )
 
     return {
         "available": True,
-        "status": "browser_local_scan_with_optional_felt_valence",
-        "processing": "browser_local_rppg_and_backend_openface_valence",
+        "status": (
+            "browser_local_scan_with_research_valence_opt_in"
+            if webcam_inference_available
+            else "browser_local_scan_affec_validation_pending"
+        ),
+        "processing": (
+            "browser_local_rppg_blink_and_explicit_research_valence"
+            if webcam_inference_available
+            else "browser_local_rppg_and_blink_only"
+        ),
         "camera_policy": (
-            "Camera remains user-triggered and OFF by default. "
-            "Only the explicit felt-valence action uploads a short clip."
+            "Camera remains user-triggered and OFF by default. Raw frames are "
+            "not uploaded by the browser-local rPPG/blink scan. AFFEC webcam "
+            "inference is disabled until its stimulus-window feature parity "
+            "and new-user validation are completed."
         ),
         "rppg_frames_uploaded": False,
-        "valence_clip_uploaded_on_explicit_action": True,
+        "valence_clip_uploaded_on_explicit_action": webcam_inference_available,
         "valence_clip_retained": False,
         "openface_available": openface_executable.is_file(),
         "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
         "blink_count_available": True,
         "derived_blink_metrics_can_be_saved_per_user": True,
-        "felt_valence_inference": FACE_VALENCE_MODEL is not None,
+        "felt_valence_inference": webcam_inference_available,
         "stress_inference": False,
         "message": (
-            "The existing rPPG and blink scan remains browser-local. "
-            "The separate felt-valence action uploads only a user-triggered "
-            "4.8-second clip for temporary OpenFace processing; the clip and "
-            "derived CSV are deleted after the request. This is not a stress "
+            "The rPPG and blink scan remains browser-local. AFFEC was trained "
+            "on stimulus-locked video-phase windows (variable duration; "
+            "median 4.61 seconds), not arbitrary 4.8-second webcam selfies. "
+            "Its live webcam output is disabled until numerical feature parity "
+            "and new-user validation are completed. This is not a stress "
             "score or medical assessment."
         )
     }
@@ -5593,7 +5619,11 @@ def face_valence_status():
     return {
         "model_loaded": FACE_VALENCE_MODEL is not None,
         "openface_available": openface_executable.is_file(),
-        "window_seconds": 4.8,
+        "webcam_experiment_enabled": FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED,
+        "requested_capture_seconds": 4.8,
+        "training_window_context": (
+            "stimulus-locked video phase; variable duration, median 4.61 seconds"
+        ),
         "minimum_valid_frames": 40,
         "confidence_threshold": 0.8,
         "feature_count": 50,
@@ -5612,6 +5642,18 @@ async def predict_face_valence(
 ):
     """Run explicit 4.8-second OpenFace felt-valence inference for one user."""
     del user_id  # Authentication gates access; no raw video or identity is persisted.
+
+    if not FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "AFFEC webcam inference is disabled pending validation. The "
+                "training data used stimulus-locked video-phase windows with "
+                "variable duration, not arbitrary 4.8-second webcam selfies. "
+                "Complete numerical feature parity and new-user validation "
+                "before enabling this research experiment."
+            ),
+        )
 
     if FACE_VALENCE_MODEL is None:
         raise HTTPException(
