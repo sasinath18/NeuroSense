@@ -357,14 +357,20 @@ def predict_from_video_bytes(
             "-out_dir", str(output_dir),
             "-q",
         ]
-        process = subprocess.run(
-            command,
-            # OpenFace resolves its bundled model files relative to the executable directory.\n            cwd=str(executable.parent),
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=OPENFACE_TIMEOUT_SECONDS,
-        )
+        try:
+            process = subprocess.run(
+                command,
+                # OpenFace resolves its bundled model files relative to this directory.
+                cwd=str(executable.parent),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=OPENFACE_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise TimeoutError(
+                "OpenFace feature extraction exceeded its processing time limit."
+            ) from error
         if process.returncode != 0:
             detail = (process.stderr or process.stdout or "")[-1800:]
             raise RuntimeError(
