@@ -126,6 +126,7 @@ def test_predict_from_video_bytes_keeps_uploaded_video_inside_tempdir(tmp_path, 
     def fake_run(command, **kwargs):
         if command[0] == "ffmpeg":
             Path(command[-1]).write_bytes(b"fake-mp4")
+            return subprocess.CompletedProcess(command, 0, "", "")
         else:
             out_dir = Path(command[command.index("-out_dir") + 1])
             (out_dir / "camera_capture.csv").write_text(
