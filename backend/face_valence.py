@@ -21,6 +21,7 @@ from typing import Any, Iterable, Mapping
 import joblib
 import numpy as np
 import pandas as pd
+import sklearn
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_selection import SelectKBest, f_regression
 
@@ -33,6 +34,7 @@ MAX_VIDEO_BYTES = 12 * 1024 * 1024
 MIN_VIDEO_SECONDS = 4.70
 MAX_VIDEO_SECONDS = 8.0
 OPENFACE_TIMEOUT_SECONDS = 90
+EXPECTED_SKLEARN_VERSION = "1.6.1"  # Version recorded when the AFFEC joblib artifact was trained.
 
 RAW_FEATURES = (
     "gaze_angle_x",
@@ -154,6 +156,16 @@ def load_face_valence_model(
         digest = hashlib.sha256(model_path.read_bytes()).hexdigest()
         if digest.lower() != expected_sha256.strip().lower():
             raise RuntimeError("Face-valence model SHA-256 does not match.")
+
+    # scikit-learn does not guarantee joblib compatibility across versions.
+    # Fail before unpickling rather than returning a plausible but broken prediction.
+    runtime_sklearn_version = sklearn.__version__
+    if runtime_sklearn_version != EXPECTED_SKLEARN_VERSION:
+        raise RuntimeError(
+            "The AFFEC model was serialized with scikit-learn "
+            f"{EXPECTED_SKLEARN_VERSION}, but the runtime has "
+            f"{runtime_sklearn_version}. Install the pinned NeuroSense requirements."
+        )
 
     main_module = sys.modules["__main__"]
     setattr(main_module, "ClipQ", ClipQ)
