@@ -1,17 +1,17 @@
-
-fastapi
-uvicorn
-numpy
-pandas
+fastapi>=0.115,<1.0
+uvicorn>=0.30,<1.0
+# Match the serialized AFFEC model training environment.
+numpy==2.4.6
+pandas==2.2.3
 scipy
-scikit-learn
+scikit-learn==1.6.1
 matplotlib
 plotly
 python-dotenv
-pydantic
+pydantic>=2,<3
 firebase-admin>=7.5.0
 requests
-joblib
+joblib==1.6.0
 opencv-contrib-python
 mediapipe
 python-multipart
