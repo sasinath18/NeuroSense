@@ -519,3 +519,155 @@ def test_firebase_music_delete_after_sqlite_reset_removes_cloud_metadata_and_aud
     remaining = client.get("/api/music")
     assert remaining.status_code == 200
     assert all(item["track_id"] != track_id for item in remaining.json()["tracks"])
+
+
+
+def test_cloud_music_delete_keeps_firestore_record_when_storage_delete_fails(
+    client,
+    monkeypatch,
+):
+    """A failed blob delete must leave cloud metadata available so deletion can be retried."""
+    user_id = "firebase-music-storage-delete-retry-user"
+    firebase_app = object()
+    bucket = FakeStorageBucket()
+    cloud_documents = {}
+    delete_calls = []
+    original_delete = FakeStorageBlob.delete
+
+    monkeypatch.setattr(api, "APP_ENV", "production")
+    monkeypatch.setattr(api, "FIREBASE_APP", firebase_app)
+    monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "neurosense-test.firebasestorage.app")
+    monkeypatch.setattr(
+        api.firebase_storage,
+        "bucket",
+        lambda name, app: bucket if name == api.FIREBASE_STORAGE_BUCKET and app is firebase_app else None,
+    )
+    monkeypatch.setattr(api, "firestore_read_collection", lambda path, **kwargs: [])
+    monkeypatch.setattr(
+        api,
+        "firestore_write",
+        lambda path, document_id, payload: cloud_documents.setdefault(
+            document_id, dict(payload)
+        ) and "synced",
+    )
+    monkeypatch.setattr(
+        api,
+        "firestore_read_document",
+        lambda path, document_id: (
+            dict(cloud_documents[document_id])
+            if path == ("users", user_id, "music_tracks") and document_id in cloud_documents
+            else None
+        ),
+    )
+
+    def delete_cloud_document(path, document_id):
+        delete_calls.append((path, document_id))
+        cloud_documents.pop(document_id, None)
+        return "synced"
+
+    monkeypatch.setattr(api, "firestore_delete_document", delete_cloud_document)
+    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
+
+    uploaded = client.post(
+        "/api/music/upload",
+        files={"file": ("retry-storage.mp3", b"retry-storage-audio", "audio/mpeg")},
+    )
+    assert uploaded.status_code == 201
+    track_id = uploaded.json()["track"]["track_id"]
+    storage_path = cloud_documents[track_id]["storage_path"]
+
+    # Model an ephemeral SQLite reset: deletion must now rely on Firestore.
+    with api.db_connection() as db:
+        db.execute("DELETE FROM music_tracks WHERE track_id = ?", (track_id,))
+
+    def fail_blob_delete(self):
+        raise OSError("simulated Firebase Storage delete failure")
+
+    monkeypatch.setattr(FakeStorageBlob, "delete", fail_blob_delete)
+    failed = client.delete(f"/api/music/{track_id}")
+    assert failed.status_code == 503
+    assert track_id in cloud_documents
+    assert storage_path in bucket.objects
+    assert delete_calls == []
+
+    # Once Storage recovers, the same cloud-only item can be deleted cleanly.
+    monkeypatch.setattr(FakeStorageBlob, "delete", original_delete)
+    retried = client.delete(f"/api/music/{track_id}")
+    assert retried.status_code == 200
+    assert track_id not in cloud_documents
+    assert bucket.objects == {}
+    assert delete_calls == [
+        (("users", user_id, "music_tracks"), track_id)
+    ]
+
+
+def test_cloud_music_delete_keeps_firestore_metadata_when_metadata_delete_fails(
+    client,
+    monkeypatch,
+):
+    """If Firestore fails after blob deletion, a retry can finish metadata cleanup."""
+    user_id = "firebase-music-metadata-delete-retry-user"
+    firebase_app = object()
+    bucket = FakeStorageBucket()
+    cloud_documents = {}
+    delete_attempts = 0
+
+    monkeypatch.setattr(api, "APP_ENV", "production")
+    monkeypatch.setattr(api, "FIREBASE_APP", firebase_app)
+    monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "neurosense-test.firebasestorage.app")
+    monkeypatch.setattr(
+        api.firebase_storage,
+        "bucket",
+        lambda name, app: bucket if name == api.FIREBASE_STORAGE_BUCKET and app is firebase_app else None,
+    )
+    monkeypatch.setattr(api, "firestore_read_collection", lambda path, **kwargs: [])
+    monkeypatch.setattr(
+        api,
+        "firestore_write",
+        lambda path, document_id, payload: cloud_documents.setdefault(
+            document_id, dict(payload)
+        ) and "synced",
+    )
+    monkeypatch.setattr(
+        api,
+        "firestore_read_document",
+        lambda path, document_id: (
+            dict(cloud_documents[document_id])
+            if path == ("users", user_id, "music_tracks") and document_id in cloud_documents
+            else None
+        ),
+    )
+
+    def flaky_cloud_delete(path, document_id):
+        nonlocal delete_attempts
+        delete_attempts += 1
+        if delete_attempts == 1:
+            return "failed"
+        cloud_documents.pop(document_id, None)
+        return "synced"
+
+    monkeypatch.setattr(api, "firestore_delete_document", flaky_cloud_delete)
+    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
+
+    uploaded = client.post(
+        "/api/music/upload",
+        files={"file": ("retry-metadata.mp3", b"retry-metadata-audio", "audio/mpeg")},
+    )
+    assert uploaded.status_code == 201
+    track_id = uploaded.json()["track"]["track_id"]
+    storage_path = cloud_documents[track_id]["storage_path"]
+
+    with api.db_connection() as db:
+        db.execute("DELETE FROM music_tracks WHERE track_id = ?", (track_id,))
+
+    failed = client.delete(f"/api/music/{track_id}")
+    assert failed.status_code == 503
+    assert track_id in cloud_documents
+    assert storage_path not in bucket.objects
+
+    # The missing blob is treated as already deleted; retry removes metadata.
+    retried = client.delete(f"/api/music/{track_id}")
+    assert retried.status_code == 200
+    assert track_id not in cloud_documents
+    assert bucket.objects == {}
+    assert delete_attempts == 2
