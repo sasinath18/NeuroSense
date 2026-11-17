@@ -2798,6 +2798,8 @@ def public_config():
         "firebase_web_configured": web_ready,
         "firebase_auth_backend_ready": admin_ready,
         "firebase_sign_in_ready": web_ready and admin_ready,
+        # Safe capability flag only; never expose the bucket name or credentials.
+        "firebase_storage_configured": configured_music_bucket() is not None,
         "firebase_push_configured": firebase_push_configured(),
         "firebase_vapid_key": FIREBASE_WEB_VAPID_KEY or None,
         "telegram_alerts_configured": telegram_configured(),
@@ -4435,9 +4437,19 @@ async def upload_music_track(
     storage_path = f"users/{safe_user}/music/{track_id}/{safe_name}"
     bucket = configured_music_bucket()
 
+    if bucket is None and APP_ENV == "production":
+        # Render's local filesystem is ephemeral. Do not report a successful
+        # production upload when the file would disappear on the next restart.
+        raise HTTPException(
+            status_code=503,
+            detail="Durable music storage is not configured. Set FIREBASE_STORAGE_BUCKET and enable Firebase Storage.",
+        )
+
+    storage_blob = None
     if bucket is not None:
         try:
-            bucket.blob(storage_path).upload_from_string(
+            storage_blob = bucket.blob(storage_path)
+            storage_blob.upload_from_string(
                 content, content_type=content_type
             )
             storage_backend = "firebase_storage"
@@ -4450,7 +4462,7 @@ async def upload_music_track(
         local_path = user_dir / f"{track_id}{extension}"
         local_path.write_bytes(content)
         storage_path = str(local_path)
-        storage_backend = "local_ephemeral" if APP_ENV == "production" else "local"
+        storage_backend = "local"
 
     track = {
         "track_id": track_id,
@@ -4463,6 +4475,26 @@ async def upload_music_track(
         "is_default": False,
         "created_at": iso(),
     }
+
+    # Cloud audio without durable Firestore metadata is an orphan waiting to
+    # happen: require the UID-scoped metadata write before acknowledging it.
+    cloud_sync = "not_configured"
+    if storage_backend == "firebase_storage":
+        cloud_sync = firestore_write(
+            ("users", user_id, "music_tracks"), track_id, track
+        )
+        if cloud_sync != "synced":
+            try:
+                storage_blob.delete()
+            except Exception:
+                logger.exception(
+                    "Could not clean up Firebase Storage object after metadata sync failure."
+                )
+            raise HTTPException(
+                status_code=503,
+                detail="Music metadata could not be backed up to Firestore. The upload was not saved; please retry.",
+            )
+
     with db_connection() as db:
         db.execute(
             """
@@ -4476,9 +4508,11 @@ async def upload_music_track(
                 storage_backend, storage_path, track["created_at"],
             ),
         )
-    cloud_sync = firestore_write(
-        ("users", user_id, "music_tracks"), track_id, track
-    )
+
+    if storage_backend != "firebase_storage":
+        cloud_sync = firestore_write(
+            ("users", user_id, "music_tracks"), track_id, track
+        )
     return {
         "success": True,
         "track": {
