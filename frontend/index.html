@@ -4723,7 +4723,7 @@ async function refreshExtendedFeatures() {
     if (results[0].status === "fulfilled") {
         const item = results[0].value;
         setText("personalLearningBadge", item.recommended_profile_ready ? "3-day profile" : item.ready_for_preliminary_profile ? "Preliminary" : "Collecting");
-        setText("personalLearningStatus", item.days_observed + " distinct day(s) · " + item.reading_count + " reliable wearable readings in the last 72 hours.");
+        setText("personalLearningStatus", item.days_observed + " distinct day(s) · " + item.reading_count + " reliable wearable readings · " + Number(item.labeled_readings || 0) + " user-labelled readings in the last 72 hours.");
         personalMonitoringProfile = item;
         setText("personalLearningDetails", item.notice);
         updateMonitoringLearning();
