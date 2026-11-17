@@ -184,6 +184,89 @@ def test_sensor_history_restores_firestore_backup_when_sqlite_is_empty(
     assert ("collection", "sensor_readings") in fake_client.operations
 
 
+def test_sensor_cloud_backup_is_scoped_to_each_authenticated_user(client, monkeypatch):
+    """Sensor writes must use the authenticated UID as the Firestore parent document."""
+    writes = []
+
+    def record_write(collection_path, document_id, payload):
+        writes.append((collection_path, document_id, dict(payload)))
+        return "synced"
+
+    monkeypatch.setattr(api, "firestore_write", record_write)
+    users = ("firebase-user-a", "firebase-user-b")
+
+    for index, user_id in enumerate(users):
+        response = client.post(
+            "/api/sensors",
+            json={
+                "heart_rate_bpm": 72 + index,
+                "hrv_ms": 40 + index,
+                "gsr_raw": 1800 + index,
+                "skin_temperature_c": 33.0,
+                "signal_quality": "moderate",
+                "source": "simulated",
+            },
+            headers={"X-Demo-User": user_id},
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["cloud_sync"] == "synced"
+        assert body["reading"]["user_id"] == user_id
+
+    assert [entry[0] for entry in writes] == [
+        ("users", "firebase-user-a", "sensor_readings"),
+        ("users", "firebase-user-b", "sensor_readings"),
+    ]
+    assert all(
+        write[1] == write[2]["id"] and write[2]["user_id"] == user_id
+        for write, user_id in zip(writes, users)
+    )
+
+
+def test_sensor_history_reads_only_the_matching_users_firestore_subcollection(
+    client,
+    monkeypatch,
+):
+    """Cloud history reads must remain isolated to the requesting Firebase UID."""
+    queried_paths = []
+
+    def read_user_collection(collection_path, **kwargs):
+        queried_paths.append(collection_path)
+        user_id = collection_path[1]
+        return [{
+            "id": f"{user_id}-cloud-reading",
+            "timestamp": api.iso(),
+            "received_at": api.iso(),
+            "source": "wearable",
+            "signal_quality": "good",
+            "heart_rate_bpm": 74.0,
+            "hrv_ms": 42.0,
+            "gsr_raw": 1750,
+            "skin_temperature_c": None,
+            "ibi_ms": [810.0, 820.0],
+            "user_id": user_id,
+        }]
+
+    monkeypatch.setattr(api, "firestore_read_collection", read_user_collection)
+    users = ("firebase-history-user-a", "firebase-history-user-b")
+
+    for user_id in users:
+        response = client.get(
+            "/api/sensors/history?limit=10",
+            headers={"X-Demo-User": user_id},
+        )
+        assert response.status_code == 200
+        readings = response.json()["readings"]
+        assert len(readings) == 1
+        assert readings[0]["id"] == f"{user_id}-cloud-reading"
+        assert readings[0]["user_id"] == user_id
+
+    assert queried_paths == [
+        ("users", "firebase-history-user-a", "sensor_readings"),
+        ("users", "firebase-history-user-b", "sensor_readings"),
+    ]
+
+
 def test_public_firebase_config_is_unavailable_without_configuration(client):
     """Public config must not expose unconfigured or private Firebase credentials."""
     response = client.get("/api/public-config")
