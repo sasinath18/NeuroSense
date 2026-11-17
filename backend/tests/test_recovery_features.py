@@ -33,6 +33,32 @@ def auth(user_id="phase-test-user"):
     return {"X-Demo-User": user_id}
 
 
+class FakeStorageBlob:
+    def __init__(self, bucket, path):
+        self.bucket = bucket
+        self.path = path
+
+    def upload_from_string(self, content, content_type=None):
+        self.bucket.objects[self.path] = (bytes(content), content_type)
+
+    def download_as_bytes(self):
+        return self.bucket.objects[self.path][0]
+
+    def exists(self):
+        return self.path in self.bucket.objects
+
+    def delete(self):
+        self.bucket.objects.pop(self.path, None)
+
+
+class FakeStorageBucket:
+    def __init__(self):
+        self.objects = {}
+
+    def blob(self, path):
+        return FakeStorageBlob(self, path)
+
+
 def test_music_mode_does_not_change_haptic_preference(client):
     enabled = client.put(
         "/api/settings/haptic",
@@ -235,3 +261,109 @@ def test_personalization_profile_uses_distinct_days_and_is_preliminary(client):
     assert profile.json()["days_observed"] == 2
     assert profile.json()["ready_for_preliminary_profile"] is True
     assert profile.json()["recommended_profile_ready"] is False
+
+
+def test_production_music_upload_refuses_ephemeral_storage(client, monkeypatch):
+    """Production must not accept music that would vanish with Render's filesystem."""
+    monkeypatch.setattr(api, "APP_ENV", "production")
+    monkeypatch.setattr(api, "FIREBASE_APP", None)
+    monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "")
+    client.app.dependency_overrides[api.current_user_id] = lambda: "production-music-user"
+
+    response = client.post(
+        "/api/music/upload",
+        files={"file": ("calm.mp3", b"test-audio", "audio/mpeg")},
+    )
+
+    assert response.status_code == 503
+    assert "Durable music storage is not configured" in response.json()["detail"]
+    with api.db_connection() as db:
+        assert db.execute("SELECT COUNT(*) FROM music_tracks").fetchone()[0] == 0
+
+
+def test_firebase_storage_music_upload_download_delete_round_trip(client, monkeypatch):
+    """Cloud audio and its per-UID Firestore metadata must both persist."""
+    bucket = FakeStorageBucket()
+    firebase_app = object()
+    writes = []
+    monkeypatch.setattr(api, "APP_ENV", "production")
+    monkeypatch.setattr(api, "FIREBASE_APP", firebase_app)
+    monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "neurosense-test.firebasestorage.app")
+    monkeypatch.setattr(
+        api.firebase_storage,
+        "bucket",
+        lambda name, app: bucket if name == api.FIREBASE_STORAGE_BUCKET and app is firebase_app else None,
+    )
+    monkeypatch.setattr(
+        api,
+        "firestore_write",
+        lambda path, document_id, payload: writes.append((path, document_id, dict(payload))) or "synced",
+    )
+    monkeypatch.setattr(api, "firestore_read_collection", lambda *args, **kwargs: [])
+    monkeypatch.setattr(api, "firestore_delete_document", lambda *args, **kwargs: "synced")
+    client.app.dependency_overrides[api.current_user_id] = lambda: "firebase-music-owner"
+
+    uploaded = client.post(
+        "/api/music/upload",
+        files={"file": ("calm.mp3", b"firebase-audio-bytes", "audio/mpeg")},
+    )
+    assert uploaded.status_code == 201
+    track = uploaded.json()["track"]
+    assert track["storage_backend"] == "firebase_storage"
+    assert len(bucket.objects) == 1
+    assert len(writes) == 1
+    assert writes[0][0] == ("users", "firebase-music-owner", "music_tracks")
+    assert writes[0][2]["storage_path"] in bucket.objects
+
+    playback = client.get(f"/api/music/{track['track_id']}/audio")
+    assert playback.status_code == 200
+    assert playback.content == b"firebase-audio-bytes"
+
+    client.app.dependency_overrides[api.current_user_id] = lambda: "different-music-user"
+    forbidden = client.get(f"/api/music/{track['track_id']}/audio")
+    assert forbidden.status_code == 404
+
+    client.app.dependency_overrides[api.current_user_id] = lambda: "firebase-music-owner"
+    deleted = client.delete(f"/api/music/{track['track_id']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_track_id"] == track["track_id"]
+    assert bucket.objects == {}
+
+
+def test_firebase_storage_upload_rolls_back_when_firestore_metadata_fails(client, monkeypatch):
+    """An audio blob must be removed when its durable UID-scoped metadata write fails."""
+    bucket = FakeStorageBucket()
+    monkeypatch.setattr(api, "APP_ENV", "production")
+    monkeypatch.setattr(api, "FIREBASE_APP", object())
+    monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "neurosense-test.firebasestorage.app")
+    monkeypatch.setattr(api.firebase_storage, "bucket", lambda name, app: bucket)
+    monkeypatch.setattr(api, "firestore_write", lambda *args, **kwargs: "failed")
+    client.app.dependency_overrides[api.current_user_id] = lambda: "firebase-metadata-failure-user"
+
+    response = client.post(
+        "/api/music/upload",
+        files={"file": ("calm.mp3", b"test-audio", "audio/mpeg")},
+    )
+
+    assert response.status_code == 503
+    assert "metadata could not be backed up" in response.json()["detail"]
+    assert bucket.objects == {}
+    with api.db_connection() as db:
+        assert db.execute("SELECT COUNT(*) FROM music_tracks").fetchone()[0] == 0
+
+
+def test_public_firebase_config_reports_storage_readiness_without_bucket_name(client, monkeypatch):
+    """Public configuration may expose a readiness boolean but never bucket or Admin secrets."""
+    bucket = FakeStorageBucket()
+    firebase_app = object()
+    monkeypatch.setattr(api, "FIREBASE_APP", firebase_app)
+    monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "private-bucket-name")
+    monkeypatch.setattr(api.firebase_storage, "bucket", lambda name, app: bucket)
+
+    response = client.get("/api/public-config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["firebase_storage_configured"] is True
+    assert "private-bucket-name" not in response.text
+    assert "FIREBASE_SERVICE_ACCOUNT_JSON" not in response.text
