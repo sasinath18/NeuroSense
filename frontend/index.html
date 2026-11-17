@@ -3301,6 +3301,21 @@
                             <span class="muted small">Scan duration</span>
                             <strong id="faceScanElapsed">0 / 120 sec</strong>
                         </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Left eye EAR</span>
+                            <strong id="leftEyeEarValue">--</strong>
+                            <span class="muted small">Eye aspect ratio</span>
+                        </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Right eye EAR</span>
+                            <strong id="rightEyeEarValue">--</strong>
+                            <span class="muted small">Eye aspect ratio</span>
+                        </div>
+                        <div class="face-scan-metric">
+                            <span class="muted small">Eye tracking quality</span>
+                            <strong id="eyeTrackingQualityValue">--</strong>
+                            <span class="muted small">Valid tracked time / scan time</span>
+                        </div>
                     </div>
 
                     <div class="face-scan-progress" aria-label="Face scan progress">
@@ -6489,8 +6504,13 @@ function updateBlinkCounter(landmarks, now) {
         !Number.isFinite(left) || !Number.isFinite(right)
     ) {
         resetBlinkFrameContinuity();
+        setText("leftEyeEarValue", "--");
+        setText("rightEyeEarValue", "--");
         return;
     }
+
+    setText("leftEyeEarValue", left.toFixed(3));
+    setText("rightEyeEarValue", right.toFixed(3));
 
     // Count only time between consecutive valid face/eye frames.
     // Long gaps are not treated as observed time and cannot create a blink.
@@ -7041,6 +7061,9 @@ function resetFaceOnlyScanUI() {
     $("faceSignalQuality").textContent = "Not measured";
     $("blinkCountValue").textContent = "0";
     $("blinkRateValue").innerHTML = '0 <small>/ min</small>';
+    setText("leftEyeEarValue", "--");
+    setText("rightEyeEarValue", "--");
+    setText("eyeTrackingQualityValue", "--");
     $("faceScanElapsed").textContent = "0 / 120 sec";
     $("faceScanProgressBar").style.width = "0%";
     $("faceScanProgressText").textContent = "Ready to start a 120-second scan.";
@@ -7067,6 +7090,11 @@ function updateFaceOnlyProgress() {
     $("blinkRateValue").innerHTML = trackedSeconds >= 10
         ? rate.toFixed(1) + ' <small>/ tracked min</small>'
         : '-- <small>/ min</small>';
+    const coverage = elapsed > 0 ? Math.min(1, trackedSeconds / elapsed) : 0;
+    const quality = coverage >= 0.80 ? "Good" : coverage >= 0.55 ? "Moderate" : "Low";
+    setText("eyeTrackingQualityValue", trackedSeconds >= 3
+        ? quality + " · " + Math.round(coverage * 100) + "%"
+        : "Calibrating");
 }
 
 function displayFacePulseEstimate(result) {
