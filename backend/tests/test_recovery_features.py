@@ -367,3 +367,79 @@ def test_public_firebase_config_reports_storage_readiness_without_bucket_name(cl
     assert body["firebase_storage_configured"] is True
     assert "private-bucket-name" not in response.text
     assert "FIREBASE_SERVICE_ACCOUNT_JSON" not in response.text
+
+
+
+def test_firebase_music_metadata_and_playback_restore_after_sqlite_reset(
+    client,
+    monkeypatch,
+):
+    """A refreshed library must recover its Firestore metadata and Storage audio."""
+    user_id = "firebase-music-refresh-user"
+    firebase_app = object()
+    bucket = FakeStorageBucket()
+    cloud_documents = {}
+
+    monkeypatch.setattr(api, "APP_ENV", "production")
+    monkeypatch.setattr(api, "FIREBASE_APP", firebase_app)
+    monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "neurosense-test.firebasestorage.app")
+    monkeypatch.setattr(
+        api.firebase_storage,
+        "bucket",
+        lambda name, app: bucket if name == api.FIREBASE_STORAGE_BUCKET and app is firebase_app else None,
+    )
+
+    def write_cloud_document(path, document_id, payload):
+        if path == ("users", user_id, "music_tracks"):
+            cloud_documents[document_id] = dict(payload)
+        return "synced"
+
+    def read_cloud_collection(path, **kwargs):
+        if path == ("users", user_id, "music_tracks"):
+            return [dict(item) for item in cloud_documents.values()]
+        return []
+
+    monkeypatch.setattr(api, "firestore_write", write_cloud_document)
+    monkeypatch.setattr(api, "firestore_read_collection", read_cloud_collection)
+    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
+
+    uploaded = client.post(
+        "/api/music/upload",
+        files={"file": ("after-refresh.mp3", b"persistent-firebase-audio", "audio/mpeg")},
+    )
+    assert uploaded.status_code == 201
+    track_id = uploaded.json()["track"]["track_id"]
+    assert track_id in cloud_documents
+    storage_path = cloud_documents[track_id]["storage_path"]
+    assert bucket.objects[storage_path][0] == b"persistent-firebase-audio"
+
+    # Simulate Render's ephemeral SQLite metadata disappearing on restart.
+    with api.db_connection() as db:
+        db.execute(
+            "DELETE FROM music_tracks WHERE track_id = ? AND user_id = ?",
+            (track_id, user_id),
+        )
+        assert db.execute(
+            "SELECT COUNT(*) FROM music_tracks WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0] == 0
+
+    refreshed_library = client.get("/api/music")
+    assert refreshed_library.status_code == 200
+    recovered = next(
+        item for item in refreshed_library.json()["tracks"]
+        if item["track_id"] == track_id
+    )
+    assert recovered["storage_backend"] == "firebase_storage"
+
+    with api.db_connection() as db:
+        restored = db.execute(
+            "SELECT storage_path FROM music_tracks WHERE track_id = ? AND user_id = ?",
+            (track_id, user_id),
+        ).fetchone()
+    assert restored is not None
+    assert restored["storage_path"] == storage_path
+
+    playback = client.get(f"/api/music/{track_id}/audio")
+    assert playback.status_code == 200
+    assert playback.content == b"persistent-firebase-audio"
