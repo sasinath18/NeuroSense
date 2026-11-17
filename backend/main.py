@@ -4764,8 +4764,18 @@ def get_personal_feedback(
             (user_id, limit),
         ).fetchall()
     items = [dict(row) for row in rows]
+    merged = {str(item["reading_id"]): item for item in items}
+    for item in firestore_read_collection(
+        ("users", user_id, "reading_feedback"), limit=limit, order_by="created_at"
+    ):
+        reading_id = str(item.get("reading_id") or item.get("document_id") or "")
+        if reading_id:
+            merged.setdefault(reading_id, item)
+    items = sorted(
+        merged.values(), key=lambda item: str(item.get("created_at") or ""), reverse=True
+    )[:limit]
     return {"total": len(items), "labels": items,
-            "counts": {key: sum(1 for item in items if item["label"] == key)
+            "counts": {key: sum(1 for item in items if item.get("label") == key)
                        for key in ("calm", "stressed", "active", "uncertain")}}
 
 
@@ -4798,6 +4808,23 @@ def personalization_profile(
             (user_id,),
         ).fetchall()
     label_counts = {str(row["label"]): int(row["total"]) for row in label_rows}
+    cloud_feedback = firestore_read_collection(
+        ("users", user_id, "reading_feedback"), limit=200, order_by="created_at"
+    )
+    local_feedback_ids = set()
+    with db_connection() as db:
+        local_feedback_ids = {
+            str(row["reading_id"])
+            for row in db.execute(
+                "SELECT reading_id FROM reading_feedback WHERE user_id = ?", (user_id,)
+            ).fetchall()
+        }
+    for item in cloud_feedback:
+        if str(item.get("reading_id") or "") in local_feedback_ids:
+            continue
+        label = str(item.get("label") or "")
+        if label in {"calm", "stressed", "active", "uncertain"}:
+            label_counts[label] = label_counts.get(label, 0) + 1
     labeled_total = sum(label_counts.values())
     return {
         "days_observed": days,
