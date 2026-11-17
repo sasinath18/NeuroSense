@@ -361,14 +361,21 @@ def test_production_music_upload_fails_closed_without_firebase_storage(
     monkeypatch,
 ):
     """Production must not report durable upload success using ephemeral local disk."""
+    user_id = "music-storage-user-c"
     monkeypatch.setattr(api, "APP_ENV", "production")
+    monkeypatch.setattr(api, "FIREBASE_APP", object())
+    monkeypatch.setattr(
+        api.firebase_auth,
+        "verify_id_token",
+        lambda *args, **kwargs: {"uid": user_id},
+    )
     monkeypatch.setattr(api, "configured_music_bucket", lambda: None)
     monkeypatch.setattr(api, "firestore_read_collection", lambda *args, **kwargs: [])
 
     response = client.post(
         "/api/music/upload",
         files={"file": ("no-cloud.mp3", b"audio", "audio/mpeg")},
-        headers={"X-Demo-User": "music-storage-user-c"},
+        headers={"Authorization": "Bearer valid-mocked-firebase-token"},
     )
 
     assert response.status_code == 503
