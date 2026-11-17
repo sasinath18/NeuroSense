@@ -285,6 +285,20 @@ def initialize_database() -> None:
         ON sensor_readings(device_id, timestamp);
 
 
+
+        CREATE TABLE IF NOT EXISTS reading_feedback (
+            feedback_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            reading_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            context_note TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(user_id, reading_id),
+            FOREIGN KEY(reading_id) REFERENCES sensor_readings(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_user_time
+        ON reading_feedback(user_id, created_at);
+
         CREATE TABLE IF NOT EXISTS baselines (
             user_id TEXT PRIMARY KEY,
             calibrated_at TEXT NOT NULL,
@@ -1357,6 +1371,13 @@ class RecoveryPreferencesIn(StrictModel):
 class BlinkSummaryIn(StrictModel):
     blink_count: int = Field(ge=0, le=2000)
     duration_seconds: int = Field(ge=10, le=3600)
+
+
+
+class PersonalFeedbackIn(StrictModel):
+    reading_id: str = Field(min_length=1, max_length=80)
+    label: Literal["calm", "stressed", "active", "uncertain"]
+    context_note: str | None = Field(default=None, max_length=300)
 
 
 class MonitoringIntervalIn(StrictModel):
@@ -4676,6 +4697,78 @@ def stream_music_track(
     )
 
 
+
+@app.post("/api/personalization/labels", status_code=status.HTTP_201_CREATED)
+def save_personal_feedback(
+    payload: PersonalFeedbackIn,
+    user_id: str = Depends(current_user_id),
+):
+    """Store a user's own context label for one reliable wearable reading."""
+    with db_connection() as db:
+        reading = db.execute(
+            """
+            SELECT id, timestamp, heart_rate_bpm, hrv_ms, gsr_raw,
+                   skin_temperature_c, signal_quality, source
+            FROM sensor_readings
+            WHERE id = ? AND user_id = ?
+            """,
+            (payload.reading_id, user_id),
+        ).fetchone()
+        if reading is None:
+            raise HTTPException(status_code=404, detail="Reading not found for this account.")
+        if reading["source"] != "wearable" or reading["signal_quality"] == "poor":
+            raise HTTPException(status_code=422, detail="Feedback requires a good/moderate wearable reading.")
+        feedback_id = str(uuid.uuid4())
+        created_at = iso()
+        db.execute(
+            """
+            INSERT INTO reading_feedback (
+                feedback_id, user_id, reading_id, label, context_note, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, reading_id) DO UPDATE SET
+                label=excluded.label,
+                context_note=excluded.context_note,
+                created_at=excluded.created_at
+            """,
+            (feedback_id, user_id, payload.reading_id, payload.label,
+             payload.context_note, created_at),
+        )
+        saved = db.execute(
+            """
+            SELECT feedback_id, user_id, reading_id, label, context_note, created_at
+            FROM reading_feedback WHERE user_id = ? AND reading_id = ?
+            """,
+            (user_id, payload.reading_id),
+        ).fetchone()
+    item = dict(saved)
+    firestore_write(("users", user_id, "reading_feedback"), item["reading_id"], item)
+    return {"success": True, "feedback": item,
+            "notice": "This is user-provided context, not a clinical ground-truth label."}
+
+
+@app.get("/api/personalization/labels")
+def get_personal_feedback(
+    limit: int = Query(default=50, ge=1, le=200),
+    user_id: str = Depends(current_user_id),
+):
+    with db_connection() as db:
+        rows = db.execute(
+            """
+            SELECT feedback_id, reading_id, label, context_note, created_at
+            FROM reading_feedback
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+    items = [dict(row) for row in rows]
+    return {"total": len(items), "labels": items,
+            "counts": {key: sum(1 for item in items if item["label"] == key)
+                       for key in ("calm", "stressed", "active", "uncertain")}}
+
+
 @app.get("/api/personalization/profile")
 def personalization_profile(
     user_id: str = Depends(current_user_id),
@@ -4699,8 +4792,19 @@ def personalization_profile(
             float(row[field]) for row in rows if row[field] is not None
         ])
     days = len(day_keys)
+    with db_connection() as db:
+        label_rows = db.execute(
+            "SELECT label, COUNT(*) AS total FROM reading_feedback WHERE user_id = ? GROUP BY label",
+            (user_id,),
+        ).fetchall()
+    label_counts = {str(row["label"]): int(row["total"]) for row in label_rows}
+    labeled_total = sum(label_counts.values())
     return {
         "days_observed": days,
+        "labeled_readings": labeled_total,
+        "label_counts": label_counts,
+        "personalized_model_status": "data_collection_only",
+        "personalized_model_ready": False,
         "reading_count": len(rows),
         "minimum_days": 2,
         "recommended_days": 3,
