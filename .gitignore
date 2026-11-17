@@ -49,6 +49,8 @@ data/face_stress_windows.csv
 ml_model/assets/*.task
 ml_model/face_stress_model.joblib
 ml_model/face_stress_evaluation.json
+ml_model/face_valence/*.joblib
+ml_model/face_valence/*.download
 *.db
 *.sqlite
 *.sqlite3

@@ -20,11 +20,11 @@ This repository includes a Render Blueprint at `render.yaml`.
 4. Review the service settings from `render.yaml`, then apply the Blueprint.
 5. When the service is live, open the service URL followed by `/dashboard`.
 
-The Blueprint uses the free web-service plan, the Singapore region, Python 3.13.14, and the lightweight production dependency list in `requirements-render.txt`.
+The Blueprint uses the free web-service plan, the Singapore region, and the repository Dockerfile. The image builds OpenFace and installs the pinned production Python dependencies from `requirements-render.txt`.
 
 ## Configure Firebase Authentication
 
-The application code supports Firebase Google Sign-In, but Firebase must be configured in your own Firebase project before the sign-in button becomes active.
+The application code supports Firebase Google Sign-In. Configure the Firebase project and deploy credentials before enabling the production sign-in flow.
 
 1. Create a Firebase project in the [Firebase Console](https://console.firebase.google.com/).
 2. Add a Web App to that project. Copy its web configuration values.
@@ -53,13 +53,15 @@ The application code supports Firebase Google Sign-In, but Firebase must be conf
 | `FIREBASE_WEB_PROJECT_ID` | Web app `projectId` |
 | `FIREBASE_WEB_APP_ID` | Web app `appId` |
 | `FIREBASE_WEB_MESSAGING_SENDER_ID` | Web app `messagingSenderId` |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | Complete service-account JSON, pasted as compact JSON; mark as secret |
-| `FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket name for persistent per-user music uploads; mark as non-public configuration |
-| `TWILIO_ACCOUNT_SID` | Twilio account SID; mark as secret |
-| `TWILIO_AUTH_TOKEN` | Twilio auth token; mark as secret |
-| `TWILIO_WHATSAPP_FROM` | Approved WhatsApp sender in `whatsapp:+...` format |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Complete service-account JSON, stored as a secret |
+| `FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket name for persistent per-user music uploads |
 | `GOOGLE_DRIVE_API_KEY` | Google Picker API key; restrict it to your dashboard domains |
 | `GOOGLE_DRIVE_APP_ID` | Google Cloud project number used by Google Picker |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token, stored as a secret |
+| `TELEGRAM_BOT_USERNAME` | Telegram bot username without `@` |
+| `NEUROSENSE_FACE_VALENCE_MODEL_URL` | Optional Google Drive share URL for the model artifact (Viewer access) |
+| `NEUROSENSE_FACE_VALENCE_MODEL_SHA256` | Optional model SHA-256 checksum |
+| `NEUROSENSE_FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED` | Keep `false`; the AFFEC selfie inference path is disabled pending validation |
 
 The web configuration is browser-visible by design. The service-account JSON is a private Admin credential and must remain only in Render's secret environment. Never commit it to GitHub or paste it into chat.
 
@@ -67,16 +69,16 @@ The backend exposes only the public Firebase Web App configuration from `/api/pu
 
 ## Current prototype limitations
 
-- The dashboard reads backend health and, after secure authentication is configured, loads dashboard overview, wearable history, settings and recovery history from FastAPI. It does not generate sample sensor values.
-- Face Scan uses MediaPipe Face Landmarker in the browser to draw facial landmarks and a mesh when the user explicitly starts the camera.
-- The optional 120-second Face-only scan samples small forehead/cheek skin regions locally and applies a POS-style remote photoplethysmography (rPPG) signal pipeline. A camera-estimated pulse rate is displayed only when the 30-second signal window passes basic continuity, brightness and spectral-peak checks.
-- Webcam frames and extracted RGB traces remain in browser memory for the scan; they are not uploaded to the NeuroSense backend or persisted by this feature.
-- Face-only pulse estimates are experimental and non-medical. Webcam lighting, motion, frame rate, skin reflectance and device characteristics can reduce accuracy. The browser brightness indicator is not a lux measurement and cannot guarantee rPPG quality.
-- A face-only stress score is intentionally not displayed yet. It requires a separately trained and independently validated model; facial expression alone is not treated as a stress measurement.
-- ESP32 hardware integration and live sensor validation are not yet complete.
-- Firebase project credentials must be configured before production sign-in and private account data can be used.
-- The SQLite database is configured at `/tmp/neurosense.db` on the free preview service. This filesystem is ephemeral, so stored records can be lost when the service restarts or redeploys.
-- The WESAD-trained model is an experimental research prototype, not clinically validated and not intended for diagnosis or treatment.
+- The dashboard uses the FastAPI backend and does not fabricate sensor readings.
+- Face Scan provides browser-local facial landmarks, blink metrics and an experimental camera rPPG pulse estimate. These are wellness research outputs, not medical measurements.
+- The separate AFFEC research model targets **felt valence**, not stress. Its training data used stimulus-locked video-phase windows (variable duration; median 4.61 seconds, observed 3.53–about 5.3 seconds). An arbitrary 4.8-second webcam selfie is not the same input context. Therefore the live webcam inference endpoint is OFF by default and must remain disabled until numerical feature parity and new-user validation are completed. The existing browser-local rPPG/blink scan is independent and remains available. If an explicitly approved research experiment is enabled later, its clip and derived OpenFace CSV are handled in a temporary directory and deleted after processing.
+- The main API keeps scikit-learn 1.9.1 for the existing wearable model. AFFEC runs in a separate `/opt/affec-venv` environment pinned to the model's serialized scikit-learn 1.6.1, NumPy 2.4.6, pandas 2.2.3 and joblib 1.6.0. The model is loaded only by this isolated worker, not by the wearable inference process.
+- The AFFEC model's reported subject-wise cross-validation is weak (mean-fold R² around 0.08; high/low-valence balanced accuracy around 0.60). The metadata explicitly says numerical feature parity is still required, and new-user validation has not been performed. Do not interpret its output as a reliable emotion classification, stress score, diagnosis or treatment recommendation.
+- ESP32 firmware includes authenticated one-time pairing and verified HTTPS transport. Physical sensor accuracy and end-to-end hardware operation remain to be validated on the actual device.
+- The wearable stress model is experimental. Raw ESP32 GSR ADC counts are not calibrated EDA units from WESAD; MAX30102 signal quality, HR/HRV extraction, GSR calibration, temperature sensing, motor-driver wiring and live cloud operation require hardware validation.
+- Firebase Google Sign-In and Firestore cloud persistence require the project's Firebase Web App configuration and a valid server-side Firebase Admin service account.
+- The free Render service currently uses SQLite and local music storage under `/tmp`; this filesystem is ephemeral. Configure Firebase Storage for durable per-user music uploads and cloud data backup.
+- Telegram emergency alerts require a configured Telegram bot token and a contact who explicitly accepts the invite. This is a check-in feature, not an emergency-response service.
 
 ## Local development
 
@@ -120,19 +122,17 @@ Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi crede
 
 ## NeuroSense recovery and personalization updates
 
-- The existing Google Sign-In Firebase UID remains the sole account key. Sensor readings, baselines, recovery history, blink summaries, music metadata and emergency-contact settings are isolated by that UID; the app does not create a second profile.
-- ESP32 pairing remains Wi-Fi based, using the existing one-time device token and verified HTTPS firmware path.
-- Wearable sensor acquisition runs continuously on the ESP32, with readings uploaded to the backend on its existing five-second cadence. My Monitoring lets each Google account choose a summary interval from 5 seconds to 24 hours (seconds, minutes or hours; default 10 minutes). Each completed interval records available sensor averages, average and peak experimental stress estimates, the peak timestamp and the number of elevated-stress events. High-stress alerts are checked independently of the summary interval. The personal reference endpoint evaluates the most recent 72 hours: two distinct days and at least ten reliable readings allow a preliminary reference; three days and at least twenty readings are recommended. This is not a new ML model or a clinical validation.
-- Face Scan calibrates separate left/right eye-aspect-ratio baselines at the start of each scan, validates bilateral close/reopen transitions by duration, and calculates blink rate from valid face-visible tracking time rather than total scan time. This improves webcam consistency but remains an estimate, not a clinical measurement. Only derived count, observed tracking duration and blink rate can be saved; camera frames remain in the browser.
-- Haptic vibration remains independently enabled/disabled. Manual/Automatic mode applies only to music: Manual lets the user select a single track or playlist; Automatic attempts the one saved default track after breathing.
-- Each Google UID can keep up to 10 saved music tracks in NeuroSense (20 MB maximum per file). The Recovery player supports tap-to-play, a queue, Play next and automatic next-track playback. Additional Google Drive tracks can be browsed and streamed in the current browser session without using the 10 saved slots; select them again after refreshing the page. For durable hosted playback of saved tracks, configure `FIREBASE_STORAGE_BUCKET`; without it, local fallback files may be lost on Render restarts/redeploys.
-- Warning sound and browser notifications are separate preferences. Browser notifications require browser permission.
-- WhatsApp check-in alerts require an opted-in emergency contact plus Twilio WhatsApp credentials. The backend sends only after three elevated model readings within 30 minutes and applies a six-hour cooldown. The model remains experimental; this is not an emergency service.
+- The existing Google Sign-In Firebase UID remains the sole account key. Sensor readings, baselines, recovery history, blink summaries, music metadata and emergency-contact settings are isolated by that UID.
+- ESP32 pairing uses the one-time device token and verified HTTPS firmware path.
+- Wearable sensor acquisition uploads readings on its existing cadence. My Monitoring supports per-user summaries and alert checks; the personal reference is preliminary and is not clinical validation.
+- Face Scan calibrates left/right eye-aspect-ratio baselines and stores derived blink summaries only. Camera frames remain in the browser for the local rPPG/blink scan.
+- Haptic vibration remains independently enabled/disabled. Manual/Automatic mode applies only to music.
+- Each Google UID can keep up to 10 saved music tracks (20 MB maximum per file). Durable hosted playback requires Firebase Storage. Drive tracks are streamed in the browser and must be selected again after refresh.
+- Telegram replaces the legacy WhatsApp emergency-alert flow. Contacts must explicitly opt in through the invite flow, and the app exposes test-send and `/stop` controls.
 
-### WhatsApp setup
+### Telegram emergency-alert setup
 
-Configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and an approved `TWILIO_WHATSAPP_FROM` sender in the hosting provider's secret environment. The user must save and explicitly enable an E.164-format emergency contact in Settings. Use the in-app test message before relying on alerts. Never commit Twilio credentials.
-
+Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_BOT_USERNAME` in Render's secret environment. The backend registers its HTTPS webhook at startup. Each emergency contact must open the invite link and press Start before receiving check-in alerts. Use the in-app test message and explain the experimental nature of the underlying stress signal; this is not an emergency service.
 
 ### Google Drive music browsing
 
