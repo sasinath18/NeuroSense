@@ -2369,7 +2369,6 @@ def maybe_queue_personal_haptic_nudge(
         except Exception:
             return {"queued": False, "reason": "cooldown_timestamp_invalid"}
 
-    device = authenticated_device_for_user = None
     with db_connection() as db:
         device = db.execute(
             """
