@@ -2475,3 +2475,80 @@ def test_face_valence_webcam_inference_requires_explicit_opt_in(client, monkeypa
     assert response.status_code == 503
     assert "stimulus-locked video-phase windows" in response.json()["detail"]
     assert "new-user validation" in response.json()["detail"]
+
+
+def seed_personal_haptic_deviation(user_id, device_id):
+    """Seed a personal baseline and three sustained, high-quality HR/HRV readings."""
+    now = api.utc_now()
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO baselines (
+                user_id, calibrated_at, sample_count,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c
+            ) VALUES (?, ?, 20, 70, 50, NULL, NULL)
+            """,
+            (user_id, api.iso(now - timedelta(minutes=5))),
+        )
+        for offset in (120, 60, 0):
+            timestamp = api.iso(now - timedelta(seconds=offset))
+            db.execute(
+                """
+                INSERT INTO sensor_readings (
+                    id, user_id, device_id, timestamp, received_at,
+                    heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                    signal_quality, source, ibi_ms_json
+                ) VALUES (?, ?, ?, ?, ?, 90, 35, NULL, NULL, 'good', 'wearable', NULL)
+                """,
+                (f"reading-{user_id}-{offset}", user_id, device_id, timestamp, timestamp),
+            )
+
+
+def test_personal_haptic_nudge_requires_opt_in_and_sustained_personal_deviation(client, monkeypatch):
+    user_id = "neurosense-personal-haptic-user"
+    device_id = "neurosense-personal-haptic-device"
+    paired = pair_test_device(client, user_id, device_id)
+    headers = {"X-Demo-User": user_id}
+    enabled = client.put("/api/settings/haptic", json={"haptic_enabled": True}, headers=headers)
+    assert enabled.status_code == 200
+
+    seed_personal_haptic_deviation(user_id, device_id)
+    monkeypatch.setattr(api, "firestore_write", lambda *args, **kwargs: "synced")
+    result = api.maybe_queue_personal_haptic_nudge(
+        user_id, device_id,
+        {"source": "wearable", "signal_quality": "good"},
+    )
+    assert result["queued"] is True
+    assert result["duration_ms"] == 300
+
+    # The just-created command starts the 15-minute cooldown.
+    second = api.maybe_queue_personal_haptic_nudge(
+        user_id, device_id,
+        {"source": "wearable", "signal_quality": "good"},
+    )
+    assert second == {"queued": False, "reason": "cooldown"}
+
+    polled = client.get(
+        f"/api/devices/{device_id}/commands",
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+    assert polled.status_code == 200
+    assert len(polled.json()["commands"]) == 1
+    assert polled.json()["commands"][0]["duration_ms"] == 300
+
+
+def test_personal_haptic_nudge_rejects_poor_quality_and_haptic_opt_out(client, monkeypatch):
+    user_id = "neurosense-personal-haptic-optout"
+    monkeypatch.setattr(api, "get_settings", lambda _user: {"haptic_enabled": False})
+    poor = api.maybe_queue_personal_haptic_nudge(
+        user_id, "not-used",
+        {"source": "wearable", "signal_quality": "poor"},
+    )
+    assert poor == {"queued": False, "reason": "signal_quality"}
+
+    opted_out = api.maybe_queue_personal_haptic_nudge(
+        user_id, "not-used",
+        {"source": "wearable", "signal_quality": "good"},
+    )
+    assert opted_out == {"queued": False, "reason": "haptic_opt_out"}
+
