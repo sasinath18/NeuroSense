@@ -443,3 +443,79 @@ def test_firebase_music_metadata_and_playback_restore_after_sqlite_reset(
     playback = client.get(f"/api/music/{track_id}/audio")
     assert playback.status_code == 200
     assert playback.content == b"persistent-firebase-audio"
+
+
+
+def test_firebase_music_delete_after_sqlite_reset_removes_cloud_metadata_and_audio(
+    client,
+    monkeypatch,
+):
+    """Delete must find and remove a user's cloud-only song after an SQLite reset."""
+    user_id = "firebase-music-delete-reset-user"
+    firebase_app = object()
+    bucket = FakeStorageBucket()
+    cloud_documents = {}
+    delete_paths = []
+
+    monkeypatch.setattr(api, "APP_ENV", "production")
+    monkeypatch.setattr(api, "FIREBASE_APP", firebase_app)
+    monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "neurosense-test.firebasestorage.app")
+    monkeypatch.setattr(
+        api.firebase_storage,
+        "bucket",
+        lambda name, app: bucket if name == api.FIREBASE_STORAGE_BUCKET and app is firebase_app else None,
+    )
+    monkeypatch.setattr(api, "firestore_read_collection", lambda path, **kwargs: (
+        [dict(item) for item in cloud_documents.values()]
+        if path == ("users", user_id, "music_tracks") else []
+    ))
+
+    def write_cloud_document(path, document_id, payload):
+        if path == ("users", user_id, "music_tracks"):
+            cloud_documents[document_id] = dict(payload)
+        return "synced"
+
+    def read_cloud_document(path, document_id):
+        if path == ("users", user_id, "music_tracks"):
+            return dict(cloud_documents[document_id]) if document_id in cloud_documents else None
+        return None
+
+    def delete_cloud_document(path, document_id):
+        delete_paths.append((path, document_id))
+        cloud_documents.pop(document_id, None)
+        return "synced"
+
+    monkeypatch.setattr(api, "firestore_write", write_cloud_document)
+    monkeypatch.setattr(api, "firestore_read_document", read_cloud_document)
+    monkeypatch.setattr(api, "firestore_delete_document", delete_cloud_document)
+    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
+
+    uploaded = client.post(
+        "/api/music/upload",
+        files={"file": ("remove-after-reset.mp3", b"delete-cloud-audio", "audio/mpeg")},
+    )
+    assert uploaded.status_code == 201
+    track_id = uploaded.json()["track"]["track_id"]
+    storage_path = cloud_documents[track_id]["storage_path"]
+    assert storage_path in bucket.objects
+
+    # Simulate a Render restart that removed only the ephemeral SQLite metadata.
+    with api.db_connection() as db:
+        db.execute(
+            "DELETE FROM music_tracks WHERE track_id = ? AND user_id = ?",
+            (track_id, user_id),
+        )
+
+    deleted = client.delete(f"/api/music/{track_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_track_id"] == track_id
+    assert deleted.json()["cloud_sync"] == "synced"
+    assert delete_paths == [
+        (("users", user_id, "music_tracks"), track_id)
+    ]
+    assert track_id not in cloud_documents
+    assert bucket.objects == {}
+
+    remaining = client.get("/api/music")
+    assert remaining.status_code == 200
+    assert all(item["track_id"] != track_id for item in remaining.json()["tracks"])
