@@ -4700,8 +4700,7 @@ async function submitPersonalReadingLabel(label) {
             method: "POST",
             body: JSON.stringify({ reading_id: latest.id, label })
         });
-        const counts = result.feedback ? label : label;
-        setText("personalLabelStatus", "Saved your '" + counts + "' context label for the latest reliable wearable reading. This is personal feedback, not clinical ground truth.");
+        setText("personalLabelStatus", "Saved your '" + label + "' context label for the latest reliable wearable reading. This is personal feedback, not clinical ground truth.");
         showToast("Personal context label saved.");
         refreshExtendedFeatures();
     } catch (error) {
