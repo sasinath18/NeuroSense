@@ -584,13 +584,33 @@ def initialize_firebase() -> None:
 
     try:
 
+        admin_credential = credentials.Certificate(certificate_source)
+        admin_project_id = str(
+            getattr(admin_credential, "project_id", "") or ""
+        ).strip()
+        web_project_id = str(
+            FIREBASE_WEB_CONFIG.get("projectId") or ""
+        ).strip()
+
+        if (
+            admin_project_id
+            and web_project_id
+            and admin_project_id != web_project_id
+        ):
+            FIREBASE_APP = None
+            FIRESTORE_CLIENT = None
+            logger.error(
+                "Firebase Web project ID does not match the Admin service-account "
+                "project ID; refusing to initialize Firebase."
+            )
+            return
+
         try:
             FIREBASE_APP = firebase_admin.get_app()
 
         except ValueError:
-
             FIREBASE_APP = firebase_admin.initialize_app(
-                credentials.Certificate(certificate_source)
+                admin_credential
             )
 
         FIRESTORE_CLIENT = firestore.client(
