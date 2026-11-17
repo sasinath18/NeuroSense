@@ -4742,19 +4742,12 @@ def delete_music_track(
     if not track:
         raise HTTPException(status_code=404, detail="Music track not found.")
 
-    # Remove metadata from cloud storage before deleting local metadata, so a
-    # failed cloud operation leaves the track visible and retryable.
-    cloud_delete = firestore_delete_document(
-        ("users", user_id, "music_tracks"), track_id
-    )
-    if cloud_delete == "failed":
-        raise HTTPException(
-            status_code=503,
-            detail="Could not remove the song from your cloud library. Please retry.",
-        )
-
     storage_backend = track.get("storage_backend", "local")
     storage_path = str(track.get("storage_path") or "")
+
+    # Delete the audio object before its cloud metadata. If Storage deletion
+    # fails, the Firestore document remains available for a safe retry after
+    # an ephemeral SQLite database reset.
     try:
         if storage_backend == "firebase_storage":
             bucket = configured_music_bucket()
@@ -4775,6 +4768,20 @@ def delete_music_track(
         raise HTTPException(
             status_code=503,
             detail="The audio file could not be removed. Please retry.",
+        )
+
+    # If Firestore fails after the blob is removed, keep its metadata so the
+    # song remains discoverable and a retry can finish cleanup. A missing blob
+    # is harmless on retry because Storage deletion is idempotent here.
+    cloud_delete = firestore_delete_document(
+        ("users", user_id, "music_tracks"), track_id
+    )
+    if cloud_delete == "failed" or (
+        storage_backend == "firebase_storage" and cloud_delete != "synced"
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Could not remove the song from your cloud library. Please retry.",
         )
 
     with db_connection() as db:
