@@ -67,6 +67,24 @@ The web configuration is browser-visible by design. The service-account JSON is 
 
 The backend exposes only the public Firebase Web App configuration from `/api/public-config`. It never returns the Admin service-account JSON. Google Sign-In activates only when both browser configuration and backend Firebase Admin verification are ready. The backend verifies the Firebase ID token on protected API routes.
 
+
+## Firebase Security Rules
+
+The browser does not access Firestore or Firebase Storage directly. It authenticates with Firebase
+and calls the NeuroSense API with a Firebase ID token; the server uses Firebase Admin SDK and
+service-account IAM. The repository therefore ships restrictive client rules that deny all direct
+browser reads and writes while preserving server-side Admin SDK access.
+
+Before applying rules, confirm the target Firebase project is `neurosense-d7f69`. Deploy both
+rule sets with Firebase CLI:
+
+```bash
+firebase deploy --project neurosense-d7f69 --only firestore:rules,storage
+```
+
+These rules are intentionally deny-all for untrusted clients. Do not add direct client access
+unless the product architecture is deliberately changed and the rules are reviewed separately.
+
 ## Current prototype limitations
 
 - The dashboard uses the FastAPI backend and does not fabricate sensor readings.
