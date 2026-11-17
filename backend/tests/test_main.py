@@ -64,6 +64,35 @@ class FakeFirestoreClient:
         )
 
 
+class FakeStorageBlob:
+    def __init__(self, bucket, path):
+        self.bucket = bucket
+        self.path = path
+
+    def upload_from_string(self, content, content_type=None):
+        self.bucket.objects[self.path] = {
+            "content": bytes(content),
+            "content_type": content_type,
+        }
+
+    def exists(self):
+        return self.path in self.bucket.objects
+
+    def delete(self):
+        self.bucket.objects.pop(self.path, None)
+
+    def download_as_bytes(self):
+        return self.bucket.objects[self.path]["content"]
+
+
+class FakeStorageBucket:
+    def __init__(self):
+        self.objects = {}
+
+    def blob(self, path):
+        return FakeStorageBlob(self, path)
+
+
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     """Start the API with an isolated test database and no cloud services."""
@@ -265,6 +294,85 @@ def test_sensor_history_reads_only_the_matching_users_firestore_subcollection(
         ("users", "firebase-history-user-a", "sensor_readings"),
         ("users", "firebase-history-user-b", "sensor_readings"),
     ]
+
+
+def test_firebase_storage_upload_saves_audio_and_uid_scoped_metadata(client, monkeypatch):
+    """A cloud upload must store the audio object and metadata under the caller UID."""
+    user_id = "music-storage-user-a"
+    bucket = FakeStorageBucket()
+    writes = []
+
+    monkeypatch.setattr(api, "configured_music_bucket", lambda: bucket)
+    monkeypatch.setattr(api, "firestore_read_collection", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        api,
+        "firestore_write",
+        lambda path, document_id, payload: (
+            writes.append((path, document_id, dict(payload))) or "synced"
+        ),
+    )
+
+    response = client.post(
+        "/api/music/upload",
+        files={"file": ("demo-song.mp3", b"neurosense-audio-bytes", "audio/mpeg")},
+        headers={"X-Demo-User": user_id},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    track = body["track"]
+    assert track["storage_backend"] == "firebase_storage"
+    assert body["cloud_sync"] == "synced"
+    assert len(bucket.objects) == 1
+    assert writes[0][0] == ("users", user_id, "music_tracks")
+    assert writes[0][1] == track["track_id"]
+    assert writes[0][2]["storage_path"] in bucket.objects
+    assert bucket.objects[writes[0][2]["storage_path"]]["content"] == (
+        b"neurosense-audio-bytes"
+    )
+
+
+def test_firebase_storage_upload_cleans_orphan_when_firestore_metadata_fails(
+    client,
+    monkeypatch,
+):
+    """A cloud audio object must be removed if its Firestore metadata cannot sync."""
+    bucket = FakeStorageBucket()
+    monkeypatch.setattr(api, "configured_music_bucket", lambda: bucket)
+    monkeypatch.setattr(api, "firestore_read_collection", lambda *args, **kwargs: [])
+    monkeypatch.setattr(api, "firestore_write", lambda *args, **kwargs: "failed")
+
+    response = client.post(
+        "/api/music/upload",
+        files={"file": ("orphan-test.mp3", b"temporary-audio", "audio/mpeg")},
+        headers={"X-Demo-User": "music-storage-user-b"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Music metadata could not be backed up to Firestore. "
+        "The upload was not saved; please retry."
+    )
+    assert bucket.objects == {}
+
+
+def test_production_music_upload_fails_closed_without_firebase_storage(
+    client,
+    monkeypatch,
+):
+    """Production must not report durable upload success using ephemeral local disk."""
+    monkeypatch.setattr(api, "APP_ENV", "production")
+    monkeypatch.setattr(api, "configured_music_bucket", lambda: None)
+    monkeypatch.setattr(api, "firestore_read_collection", lambda *args, **kwargs: [])
+
+    response = client.post(
+        "/api/music/upload",
+        files={"file": ("no-cloud.mp3", b"audio", "audio/mpeg")},
+        headers={"X-Demo-User": "music-storage-user-c"},
+    )
+
+    assert response.status_code == 503
+    assert "Durable music storage is not configured" in response.json()["detail"]
 
 
 def test_public_firebase_config_is_unavailable_without_configuration(client):
