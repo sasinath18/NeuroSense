@@ -3027,6 +3027,16 @@
                     <p id="monitorLearningNotice" class="muted small">
                         Preliminary analysis is a personal reference, not a diagnosis or a newly trained ML model.
                     </p>
+                    <div class="feedback-label-controls">
+                        <p class="muted small">Label your latest reliable wearable reading (optional):</p>
+                        <div class="button-row">
+                            <button type="button" class="secondary-btn personal-label-btn" data-personal-label="calm">Calm</button>
+                            <button type="button" class="secondary-btn personal-label-btn" data-personal-label="stressed">Stressed</button>
+                            <button type="button" class="secondary-btn personal-label-btn" data-personal-label="active">Physically active</button>
+                            <button type="button" class="secondary-btn personal-label-btn" data-personal-label="uncertain">Not sure</button>
+                        </div>
+                        <p id="personalLabelStatus" class="muted small">Labels help collect your own context; they do not train or activate a stress model automatically.</p>
+                    </div>
                 </article>
             </div>
 
@@ -4667,6 +4677,42 @@ async function loadTelegramContacts() {
         setText("pushContactStatus", "Could not load Telegram contacts: " + error.message);
     }
 }
+
+
+async function submitPersonalReadingLabel(label) {
+    if (!hasPrivateApiAccess()) {
+        showToast("Sign in before adding a personal label.");
+        return;
+    }
+    const latest = sensorHistory[sensorHistory.length - 1] || null;
+    if (!latest?.id) {
+        showToast("No wearable reading is available to label yet.");
+        return;
+    }
+    if (!["good", "moderate"].includes(String(latest.signal_quality || "").toLowerCase())) {
+        showToast("Only good/moderate wearable readings can be labelled.");
+        return;
+    }
+    const buttons = document.querySelectorAll(".personal-label-btn");
+    buttons.forEach(button => button.disabled = true);
+    try {
+        const result = await apiRequest("/api/personalization/labels", {
+            method: "POST",
+            body: JSON.stringify({ reading_id: latest.id, label })
+        });
+        const counts = result.feedback ? label : label;
+        setText("personalLabelStatus", "Saved your '" + counts + "' context label for the latest reliable wearable reading. This is personal feedback, not clinical ground truth.");
+        showToast("Personal context label saved.");
+        refreshExtendedFeatures();
+    } catch (error) {
+        showToast("Could not save label: " + error.message);
+    } finally {
+        buttons.forEach(button => button.disabled = false);
+    }
+}
+document.querySelectorAll(".personal-label-btn").forEach(button => {
+    button.addEventListener("click", () => submitPersonalReadingLabel(button.dataset.personalLabel));
+});
 
 async function refreshExtendedFeatures() {
     const results = await Promise.allSettled([
