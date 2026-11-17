@@ -1,6 +1,7 @@
 """Tests for the nine-phase NeuroSense recovery and personalization features."""
 
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -57,6 +58,42 @@ class FakeStorageBucket:
 
     def blob(self, path):
         return FakeStorageBlob(self, path)
+
+
+def test_firebase_cli_config_uses_deny_by_default_rules_for_client_sdks():
+    """Firestore and Storage browser clients must remain denied; backend uses Admin SDK."""
+    project_config_path = api.BASE_DIR / "firebase.json"
+    assert project_config_path.is_file()
+    project_config = json.loads(project_config_path.read_text(encoding="utf-8"))
+    assert project_config["firestore"]["rules"] == "firestore.rules"
+    assert project_config["storage"]["rules"] == "storage.rules"
+
+    expected_rules = {
+        "firestore.rules": (
+            "service cloud.firestore {",
+            "match /databases/{database}/documents {",
+            "match /{document=**} {",
+        ),
+        "storage.rules": (
+            "service firebase.storage {",
+            "match /b/{bucket}/o {",
+            "match /{allPaths=**} {",
+        ),
+    }
+
+    for filename, required_fragments in expected_rules.items():
+        rules_path = api.BASE_DIR / filename
+        assert rules_path.is_file()
+        rules = rules_path.read_text(encoding="utf-8")
+        assert "rules_version = '2';" in rules
+        for fragment in required_fragments:
+            assert fragment in rules
+        allow_statements = [
+            line.strip()
+            for line in rules.splitlines()
+            if line.strip().startswith("allow ")
+        ]
+        assert allow_statements == ["allow read, write: if false;"]
 
 
 def test_music_mode_does_not_change_haptic_preference(client):
