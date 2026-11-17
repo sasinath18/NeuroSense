@@ -1695,6 +1695,48 @@ def test_demo_authentication_is_disabled_outside_development(client, monkeypatch
     assert "Firebase authentication" in response.json()["detail"]
 
 
+def test_firebase_initialization_rejects_web_admin_project_mismatch(monkeypatch):
+    """Do not wire browser sign-in to an Admin SDK for a different Firebase project."""
+    admin_project_id = "neurosense-admin-project"
+    web_project_id = "different-web-project"
+
+    monkeypatch.setattr(
+        api,
+        "FIREBASE_SERVICE_ACCOUNT_JSON",
+        '{"project_id": "neurosense-admin-project"}',
+    )
+    monkeypatch.setattr(api, "FIREBASE_SERVICE_ACCOUNT_PATH", "")
+    monkeypatch.setattr(
+        api,
+        "FIREBASE_WEB_CONFIG",
+        {"projectId": web_project_id},
+    )
+    monkeypatch.setattr(api, "FIREBASE_APP", None)
+    monkeypatch.setattr(api, "FIRESTORE_CLIENT", None)
+    monkeypatch.setattr(
+        api.credentials,
+        "Certificate",
+        lambda source: type("FakeCredential", (), {"project_id": admin_project_id})(),
+    )
+
+    def no_existing_app():
+        raise ValueError("No Firebase app exists.")
+
+    initialize_calls = []
+    monkeypatch.setattr(api.firebase_admin, "get_app", no_existing_app)
+    monkeypatch.setattr(
+        api.firebase_admin,
+        "initialize_app",
+        lambda credential: initialize_calls.append(credential),
+    )
+
+    api.initialize_firebase()
+
+    assert api.FIREBASE_APP is None
+    assert api.FIRESTORE_CLIENT is None
+    assert initialize_calls == []
+
+
 def test_firebase_bearer_token_uses_verified_uid(client, monkeypatch):
     """API Test 7b: Firebase Bearer auth maps verified claims to the user ID."""
     fake_firebase_app = object()
