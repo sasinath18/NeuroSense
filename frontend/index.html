@@ -6251,106 +6251,107 @@ function setFaceLightingState(state, message) {
 }
 
 
-function checkFaceLighting(video, now) {
+function checkFaceLighting(video, now, landmarks) {
 
-    // Sample at a low rate to avoid unnecessary CPU work.
+    // Check the detected face, not a fixed centre crop that may include the room.
     if (now - faceLastLightingCheckAt < 800) return;
     faceLastLightingCheckAt = now;
 
-    if (!video.videoWidth || !video.videoHeight) return;
+    if (!video.videoWidth || !video.videoHeight || !landmarks || landmarks.length < 455) return;
 
     try {
-
         if (!faceLightingCanvas) {
             faceLightingCanvas = document.createElement("canvas");
-            faceLightingCanvas.width = 80;
-            faceLightingCanvas.height = 60;
-            faceLightingContext = faceLightingCanvas.getContext(
-                "2d",
-                { willReadFrequently: true }
-            );
+            faceLightingCanvas.width = 96;
+            faceLightingCanvas.height = 72;
+            faceLightingContext = faceLightingCanvas.getContext("2d", { willReadFrequently: true });
         }
-
         if (!faceLightingContext) return;
 
-        // Inspect the centre of the camera frame where the face is normally positioned.
-        const cropWidth = video.videoWidth * 0.48;
-        const cropHeight = video.videoHeight * 0.68;
-        const cropX = (video.videoWidth - cropWidth) / 2;
-        const cropY = (video.videoHeight - cropHeight) / 2;
+        const xs = landmarks.map(point => point.x);
+        const ys = landmarks.map(point => point.y);
+        const minX = Math.max(0, Math.min(...xs));
+        const maxX = Math.min(1, Math.max(...xs));
+        const minY = Math.max(0, Math.min(...ys));
+        const maxY = Math.min(1, Math.max(...ys));
+        const faceWidth = maxX - minX;
+        const faceHeight = maxY - minY;
+        if (faceWidth < 0.08 || faceHeight < 0.08) return;
 
-        faceLightingContext.drawImage(
-            video,
-            cropX,
-            cropY,
-            cropWidth,
-            cropHeight,
-            0,
-            0,
-            faceLightingCanvas.width,
-            faceLightingCanvas.height
-        );
+        // Trim the silhouette edge to reduce background, hair and clothing pixels.
+        const insetX = faceWidth * 0.13;
+        const insetTop = faceHeight * 0.12;
+        const insetBottom = faceHeight * 0.10;
+        const sourceX = (minX + insetX) * video.videoWidth;
+        const sourceY = (minY + insetTop) * video.videoHeight;
+        const sourceWidth = Math.max(1, (faceWidth - insetX * 2) * video.videoWidth);
+        const sourceHeight = Math.max(1, (faceHeight - insetTop - insetBottom) * video.videoHeight);
 
-        const pixels = faceLightingContext.getImageData(
-            0,
-            0,
-            faceLightingCanvas.width,
-            faceLightingCanvas.height
-        ).data;
+        faceLightingContext.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight,
+            0, 0, faceLightingCanvas.width, faceLightingCanvas.height);
 
-        let luminanceTotal = 0;
-        let darkPixelCount = 0;
-        let pixelCount = 0;
+        const pixels = faceLightingContext.getImageData(0, 0,
+            faceLightingCanvas.width, faceLightingCanvas.height).data;
+        let total = 0;
+        let dark = 0;
+        let clipped = 0;
+        let count = 0;
+        const regions = [[], [], [], []];
 
-        for (let index = 0; index < pixels.length; index += 16) {
-            const luminance =
-                0.2126 * pixels[index] +
-                0.7152 * pixels[index + 1] +
-                0.0722 * pixels[index + 2];
-
-            luminanceTotal += luminance;
-            if (luminance < 38) darkPixelCount++;
-            pixelCount++;
+        for (let y = 5; y < faceLightingCanvas.height - 5; y += 2) {
+            for (let x = 5; x < faceLightingCanvas.width - 5; x += 2) {
+                const index = (y * faceLightingCanvas.width + x) * 4;
+                const luminance = 0.2126 * pixels[index] +
+                    0.7152 * pixels[index + 1] + 0.0722 * pixels[index + 2];
+                total += luminance;
+                if (luminance < 42) dark++;
+                if (luminance > 245) clipped++;
+                const region = (y < faceLightingCanvas.height / 2 ? 0 : 2) +
+                    (x < faceLightingCanvas.width / 2 ? 0 : 1);
+                regions[region].push(luminance);
+                count++;
+            }
         }
+        if (!count) return;
 
-        if (!pixelCount) return;
+        const average = total / count;
+        const darkRatio = dark / count;
+        const clippedRatio = clipped / count;
+        const regionMeans = regions.map(values =>
+            values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : average
+        );
+        const unevenness = Math.max(...regionMeans) - Math.min(...regionMeans);
 
-        const averageLuminance = luminanceTotal / pixelCount;
-        const darkPixelRatio = darkPixelCount / pixelCount;
+        const lowLight = average < 76 || darkRatio > 0.42;
+        const overexposed = clippedRatio > 0.22 || average > 225;
+        const uneven = unevenness > 58;
+        const acceptable = average >= 76 && average <= 225 &&
+            darkRatio < 0.42 && clippedRatio <= 0.22 && unevenness <= 58;
 
-        // This is a rough image-brightness indicator, not a lux meter.
-        const lowLight = averageLuminance < 68 || darkPixelRatio > 0.58;
-        const brighter = averageLuminance > 92 && darkPixelRatio < 0.38;
-
-        if (lowLight) {
+        if (lowLight || overexposed || uneven) {
             faceLowLightSamples++;
             faceGoodLightSamples = 0;
-        } else if (brighter) {
+        } else if (acceptable) {
             faceGoodLightSamples++;
             faceLowLightSamples = 0;
-        } else {
-            faceLowLightSamples = Math.max(0, faceLowLightSamples - 1);
-            faceGoodLightSamples = Math.max(0, faceGoodLightSamples - 1);
         }
 
-        if (faceLowLightSamples >= 2 && faceLightingState !== "dim") {
-            setFaceLightingState(
-                "dim",
-                "Low light detected. Move to a brighter place and avoid strong backlighting; face landmarks may become less reliable."
-            );
+        if (faceLowLightSamples >= 2) {
+            const message = overexposed
+                ? "Strong glare or overexposure on the face. Turn away from direct flash and use soft, even room light."
+                : uneven
+                    ? "Uneven face lighting detected. Face the light source and reduce shadows across both cheeks."
+                    : "Face appears under-lit. Move a light source in front of you, near camera height; avoid backlighting.";
+            if (faceLightingState !== "dim") setFaceLightingState("dim", message);
+            else setFaceLightingState("dim", message);
         } else if (faceGoodLightSamples >= 2 && faceLightingState !== "ok") {
-            setFaceLightingState(
-                "ok",
-                "Brightness appears sufficient. Keep your face evenly lit for more stable tracking."
-            );
+            setFaceLightingState("ok",
+                "Face lighting looks usable. Keep both cheeks evenly lit and avoid moving during the scan.");
         }
-
     } catch (error) {
         console.warn("Face lighting check could not run:", error);
     }
-
 }
-
 
 function resetFaceLightingCheck() {
 
@@ -6584,8 +6585,6 @@ function runFaceDetectionLoop() {
     const video = $("cameraVideo");
     const now = performance.now();
 
-    checkFaceLighting(video, now);
-
     if (
         faceLandmarker &&
         video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
@@ -6615,6 +6614,7 @@ function runFaceDetectionLoop() {
             if (faces.length > 0) {
 
                 const landmarks = faces[0];
+                checkFaceLighting(video, now, landmarks);
                 drawFaceLandmarks(landmarks);
                 if (faceOnlyScanActive) updateBlinkCounter(landmarks, now);
 
@@ -6645,6 +6645,12 @@ function runFaceDetectionLoop() {
 
             } else {
 
+                if (now - faceLastLightingCheckAt >= 800) {
+                    faceLastLightingCheckAt = now;
+                    faceLowLightSamples = 0;
+                    faceGoodLightSamples = 0;
+                    setFaceLightingState("idle", "No face found for lighting analysis. Move into the camera frame.");
+                }
                 clearFaceOverlay();
                 if (faceOnlyScanActive) resetBlinkFrameContinuity();
 
@@ -7387,7 +7393,8 @@ async function startCamera() {
             video: {
                 facingMode: "user",
                 width: { ideal: 640 },
-                height: { ideal: 480 }
+                height: { ideal: 480 },
+                frameRate: { ideal: 30, min: 20 }
             },
             audio: false
         });
