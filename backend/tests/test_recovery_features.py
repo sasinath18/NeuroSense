@@ -96,6 +96,24 @@ def test_firebase_cli_config_uses_deny_by_default_rules_for_client_sdks():
         assert allow_statements == ["allow read, write: if false;"]
 
 
+def test_firebase_rules_deploy_workflow_is_manual_and_project_scoped():
+    """A normal source push must never auto-publish production Firebase rules."""
+    workflow_path = (
+        api.BASE_DIR / ".github" / "workflows" / "deploy-firebase-rules.yml"
+    )
+    assert workflow_path.is_file()
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "push:" not in workflow
+    assert "pull_request:" not in workflow
+    assert "if: github.ref == 'refs/heads/main'" in workflow
+    assert "project_id: neurosense-d7f69" in workflow
+    assert "--project neurosense-d7f69" in workflow
+    assert "--only firestore:rules,storage" in workflow
+    assert "NEUROSENSE_FIREBASE_RULES_DEPLOY_CREDENTIALS_JSON" in workflow
+
+
 def test_music_mode_does_not_change_haptic_preference(client):
     enabled = client.put(
         "/api/settings/haptic",
