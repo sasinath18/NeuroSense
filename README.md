@@ -82,6 +82,29 @@ rule sets with Firebase CLI:
 firebase deploy --project neurosense-d7f69 --only firestore:rules,storage
 ```
 
+### Publish rules through GitHub Actions
+
+The repository also has a manual-only workflow at
+`.github/workflows/deploy-firebase-rules.yml`. It deploys only the two rules files above;
+ordinary pushes and pull requests do not publish Firebase security policy.
+
+1. In Google Cloud IAM for project `neurosense-d7f69`, create a dedicated service account for
+   rules deployment. Grant it **Firebase Rules Admin** (`roles/firebaserules.admin`) only.
+   This role manages Firebase Rules releases and rulesets; it is separate from the app's
+   runtime Firebase Admin service account.
+2. Create a service-account JSON key for that dedicated account. Treat it like a password.
+   Prefer Workload Identity Federation instead of a long-lived key where that is already set up.
+3. In GitHub, open **Settings → Secrets and variables → Actions** for this repository and add
+   repository secret `NEUROSENSE_FIREBASE_RULES_DEPLOY_CREDENTIALS_JSON` with the full JSON
+   contents. Never commit the key or paste it into chat.
+4. Open **Actions → Deploy Firebase Security Rules → Run workflow** and select `main`.
+   The workflow validates that the credential is for `neurosense-d7f69` before deploying.
+
+Do not reuse the Render runtime service-account key for this workflow. The dedicated deploy
+account should have only the Firebase Rules permissions it needs. Firebase CLI deployment
+overwrites the corresponding rules currently published in the Firebase Console, so keep the
+repository rule files as the source of truth.
+
 These rules are intentionally deny-all for untrusted clients. Do not add direct client access
 unless the product architecture is deliberately changed and the rules are reviewed separately.
 
