@@ -1,0 +1,77 @@
+name: Deploy Firebase Security Rules
+
+on:
+  workflow_dispatch:
+
+# Rules are production security policy. Deploy only when explicitly launched.
+concurrency:
+  group: neurosense-firebase-rules-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-rules:
+    name: Publish Firestore and Storage rules
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Validate dedicated Firebase rules deploy credential
+        env:
+          FIREBASE_DEPLOY_CREDENTIALS: ${{ secrets.NEUROSENSE_FIREBASE_RULES_DEPLOY_CREDENTIALS_JSON }}
+        run: |
+          node <<'NODE'
+          const raw = process.env.FIREBASE_DEPLOY_CREDENTIALS;
+          if (!raw) {
+            throw new Error(
+              "Missing GitHub Actions secret NEUROSENSE_FIREBASE_RULES_DEPLOY_CREDENTIALS_JSON."
+            );
+          }
+
+          let credential;
+          try {
+            credential = JSON.parse(raw);
+          } catch {
+            throw new Error("Firebase rules deploy credential is not valid JSON.");
+          }
+
+          if (credential.type !== "service_account") {
+            throw new Error("Firebase rules deploy credential must be a service-account JSON.");
+          }
+
+          if (credential.project_id !== "neurosense-d7f69") {
+            throw new Error(
+              "Firebase rules deploy credential project_id does not match neurosense-d7f69."
+            );
+          }
+
+          if (!credential.client_email || !credential.private_key) {
+            throw new Error("Firebase rules deploy service-account JSON is incomplete.");
+          }
+
+          console.log("Dedicated rules deploy credential is valid for the target project.");
+          NODE
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: neurosense-d7f69
+          credentials_json: ${{ secrets.NEUROSENSE_FIREBASE_RULES_DEPLOY_CREDENTIALS_JSON }}
+
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools
+
+      - name: Deploy only Firestore and Storage security rules
+        run: |
+          firebase deploy \
+            --project neurosense-d7f69 \
+            --only firestore:rules,storage \
+            --non-interactive
