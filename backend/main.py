@@ -2279,6 +2279,137 @@ def stored_or_predicted_stress(user_id: str, reading: dict) -> dict:
     return predict_stress(user_id, reading)
 
 
+
+def maybe_queue_personal_haptic_nudge(
+    user_id: str,
+    device_id: str,
+    reading: dict,
+) -> dict:
+    """Queue a short opt-in haptic nudge only after sustained personal HR/HRV deviation.
+
+    This is a conservative wellness cue, not stress detection. It requires a
+    calibrated personal reference, three consecutive good-quality readings
+    spanning at least 60 seconds, explicit haptic opt-in, and a 15-minute
+    cooldown. GSR is intentionally excluded until sensor polarity/calibration
+    is established for each hardware build.
+    """
+    if reading.get("source") != "wearable" or reading.get("signal_quality") != "good":
+        return {"queued": False, "reason": "signal_quality"}
+    settings = get_settings(user_id)
+    if not settings.get("haptic_enabled"):
+        return {"queued": False, "reason": "haptic_opt_out"}
+
+    baseline = baseline_for_user(user_id)
+    if not baseline or not baseline.get("heart_rate_bpm") or not baseline.get("hrv_ms"):
+        return {"queued": False, "reason": "personal_baseline_required"}
+
+    base_hr = float(baseline["heart_rate_bpm"])
+    base_hrv = float(baseline["hrv_ms"])
+    if base_hr <= 0 or base_hrv <= 0:
+        return {"queued": False, "reason": "invalid_baseline"}
+
+    with db_connection() as db:
+        rows = db.execute(
+            """
+            SELECT id, timestamp, heart_rate_bpm, hrv_ms, signal_quality
+            FROM sensor_readings
+            WHERE user_id = ? AND source = 'wearable'
+            ORDER BY timestamp DESC
+            LIMIT 3
+            """,
+            (user_id,),
+        ).fetchall()
+        last_command = db.execute(
+            """
+            SELECT created_at FROM haptic_commands
+            WHERE user_id = ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        active_label = db.execute(
+            """
+            SELECT rf.label, rf.created_at
+            FROM reading_feedback rf
+            WHERE rf.user_id = ?
+            ORDER BY rf.created_at DESC LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+
+    if len(rows) < 3 or any(row["signal_quality"] != "good" for row in rows):
+        return {"queued": False, "reason": "not_enough_consecutive_good_readings"}
+
+    ordered = sorted(rows, key=lambda row: str(row["timestamp"] or ""))
+    try:
+        span = (parse_iso(ordered[-1]["timestamp"]) - parse_iso(ordered[0]["timestamp"])).total_seconds()
+    except Exception:
+        return {"queued": False, "reason": "invalid_reading_timestamps"}
+    if span < 60:
+        return {"queued": False, "reason": "change_not_sustained"}
+
+    for row in ordered:
+        hr, hrv = row["heart_rate_bpm"], row["hrv_ms"]
+        if hr is None or hrv is None:
+            return {"queued": False, "reason": "missing_hr_or_hrv"}
+        if float(hr) < base_hr * 1.15 or float(hrv) > base_hrv * 0.80:
+            return {"queued": False, "reason": "personal_deviation_not_met"}
+
+    if active_label and active_label["label"] == "active":
+        try:
+            if (utc_now() - parse_iso(active_label["created_at"])).total_seconds() < 1800:
+                return {"queued": False, "reason": "recent_activity_label"}
+        except Exception:
+            pass
+
+    if last_command:
+        try:
+            if (utc_now() - parse_iso(last_command["created_at"])).total_seconds() < 900:
+                return {"queued": False, "reason": "cooldown"}
+        except Exception:
+            return {"queued": False, "reason": "cooldown_timestamp_invalid"}
+
+    device = authenticated_device_for_user = None
+    with db_connection() as db:
+        device = db.execute(
+            """
+            SELECT device_id FROM devices
+            WHERE device_id = ? AND user_id = ? AND active = 1
+            """,
+            (device_id, user_id),
+        ).fetchone()
+    if device is None:
+        return {"queued": False, "reason": "no_active_paired_device"}
+
+    command_id = str(uuid.uuid4())
+    created_at = iso()
+    command = {
+        "command_id": command_id,
+        "user_id": user_id,
+        "device_id": device_id,
+        "duration_ms": 300,
+        "command_status": "pending",
+        "created_at": created_at,
+        "delivered_at": None,
+        "acknowledged_at": None,
+        "trigger": "sustained_personal_hr_hrv_deviation",
+    }
+    with db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO haptic_commands (
+                command_id, user_id, device_id, duration_ms,
+                command_status, created_at, delivered_at, acknowledged_at
+            )
+            VALUES (?, ?, ?, 300, 'pending', ?, NULL, NULL)
+            """,
+            (command_id, user_id, device_id, created_at),
+        )
+    firestore_write(("users", user_id, "haptic_commands"), command_id, command)
+    return {"queued": True, "command_id": command_id, "duration_ms": 300,
+            "reason": "sustained_personal_hr_hrv_deviation"}
+
+
 def store_sensor_reading(
     user_id: str,
     device_id: str,
@@ -2398,10 +2529,17 @@ def store_sensor_reading(
         stored
     )
 
+    haptic_nudge = (
+        maybe_queue_personal_haptic_nudge(user_id, device_id, stored)
+        if payload["source"] == "wearable"
+        else {"queued": False, "reason": "not_wearable"}
+    )
+
     return {
         "reading": stored,
         "cloud_sync": cloud_status,
-        "stress": prediction
+        "stress": prediction,
+        "haptic_nudge": haptic_nudge,
     }
 
 
