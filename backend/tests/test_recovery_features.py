@@ -506,6 +506,14 @@ def test_firebase_music_delete_after_sqlite_reset_removes_cloud_metadata_and_aud
             (track_id, user_id),
         )
 
+    # A different authenticated user must not see or delete a cloud-only track.
+    client.app.dependency_overrides[api.current_user_id] = lambda: "different-cloud-music-user"
+    forbidden = client.delete(f"/api/music/{track_id}")
+    assert forbidden.status_code == 404
+    assert track_id in cloud_documents
+    assert storage_path in bucket.objects
+
+    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
     deleted = client.delete(f"/api/music/{track_id}")
     assert deleted.status_code == 200
     assert deleted.json()["deleted_track_id"] == track_id
