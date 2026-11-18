@@ -1173,3 +1173,142 @@ def test_latest_dashboard_and_stress_endpoints_prefer_newer_cloud_readings(clien
     assert dashboard.json()["latest_reading"]["id"] == "cloud-newest-simulated"
     assert dashboard.json()["latest_reading"]["heart_rate_bpm"] == 90.0
     assert dashboard.json()["stress"]["status"] == "waiting_for_wearable_data"
+
+
+def test_summary_scheduler_rebuilds_periods_from_cloud_history_after_restart(client, monkeypatch):
+    """A fresh local row should rehydrate and summarize the user's older cloud history."""
+    user_id = "cloud-summary-recovery-user"
+    now = datetime.now(timezone.utc)
+    first_at = now - timedelta(hours=2, minutes=20)
+    second_at = now - timedelta(hours=2, minutes=10)
+    third_at = now - timedelta(hours=1, minutes=10)
+    local_at = now - timedelta(minutes=2)
+
+    # This new post-restart row lets the scheduler discover the UID; the older
+    # readings are deliberately cloud-only to simulate Render's lost SQLite file.
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "fresh-local-reading", user_id, "device-1",
+                local_at.isoformat(), local_at.isoformat(),
+                72.0, 45.0, 1600, 33.0, "good", "wearable",
+            ),
+        )
+
+    cloud_sensor_rows = [
+        {
+            "id": "cloud-reading-1",
+            "timestamp": first_at.isoformat(),
+            "heart_rate_bpm": 80.0,
+            "hrv_ms": 35.0,
+            "gsr_raw": 1800,
+            "skin_temperature_c": 33.2,
+            "signal_quality": "good",
+            "source": "wearable",
+            "stress_score": 70.0,
+        },
+        {
+            "id": "cloud-reading-2",
+            "timestamp": second_at.isoformat(),
+            "heart_rate_bpm": 84.0,
+            "hrv_ms": 31.0,
+            "gsr_raw": 1900,
+            "skin_temperature_c": 33.3,
+            "signal_quality": "moderate",
+            "source": "wearable",
+            "stress_score": 80.0,
+        },
+        {
+            "id": "cloud-reading-3",
+            "timestamp": third_at.isoformat(),
+            "heart_rate_bpm": 76.0,
+            "hrv_ms": 42.0,
+            "gsr_raw": 1700,
+            "skin_temperature_c": 33.1,
+            "signal_quality": "good",
+            "source": "wearable",
+            "stress_score": 60.0,
+        },
+    ]
+    cloud_events = [
+        {
+            "event_id": "cloud-high-stress-event",
+            "reading_id": "cloud-reading-2",
+            "stress_probability": 0.8,
+            "occurred_at": second_at.isoformat(),
+        }
+    ]
+    writes = []
+
+    def fake_firestore_read_document(path, document_id):
+        return None
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_sensor_rows
+        if path == ("users", user_id, "high_stress_events"):
+            return cloud_events
+        if path == ("users", user_id, "summaries"):
+            return []
+        return []
+
+    def fake_firestore_write(path, document_id, payload):
+        writes.append((path, document_id, dict(payload)))
+        return "synced"
+
+    monkeypatch.setattr(api, "DEFAULT_MONITORING_INTERVAL_SECONDS", 3600)
+    monkeypatch.setattr(api, "MAX_SUMMARY_WINDOWS_PER_PASS", 10)
+    monkeypatch.setattr(api, "firestore_read_document", fake_firestore_read_document)
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(api, "firestore_write", fake_firestore_write)
+
+    created = api.create_due_summaries()
+    assert created == 3
+
+    with api.db_connection() as db:
+        summaries = [
+            dict(row) for row in db.execute(
+                """
+                SELECT * FROM summaries
+                WHERE user_id = ?
+                ORDER BY period_start ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        ]
+        checkpoint = db.execute(
+            """
+            SELECT last_period_end
+            FROM monitoring_summary_state
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+    assert len(summaries) == 3
+    first_summary = summaries[0]
+    assert first_summary["reading_count"] == 2
+    assert first_summary["reliable_reading_count"] == 2
+    assert first_summary["avg_heart_rate"] == 82.0
+    assert first_summary["avg_hrv"] == 33.0
+    assert first_summary["avg_gsr"] == 1850.0
+    assert first_summary["avg_stress_score"] == 75.0
+    assert first_summary["peak_stress_score"] == 80.0
+    assert first_summary["high_stress_event_count"] == 1
+    assert checkpoint is not None
+    assert any(path == ("users", user_id, "summaries") for path, _, _ in writes)
+    assert any(
+        path == ("users", user_id, "monitoring_summary_state")
+        for path, _, _ in writes
+    )
+
+    first_write_count = len(writes)
+    assert api.create_due_summaries() == 0
+    assert len(writes) == first_write_count
