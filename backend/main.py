@@ -4302,6 +4302,57 @@ def recovery_history(
     for session in sessions:
         session.setdefault("comparison", None)
 
+    # When Render's ephemeral SQLite database is recreated, both recovery
+    # sessions and sensor readings may exist only in Firestore. Rebuild a
+    # missing before/after comparison from this user's cloud wearable data.
+    if any(session.get("comparison") is None for session in sessions):
+        cloud_sensor_rows = firestore_read_collection(
+            ("users", user_id, "sensor_readings"),
+            limit=500,
+            order_by="timestamp",
+        )
+        cloud_wearable_readings = []
+        for reading in cloud_sensor_rows:
+            if str(reading.get("source") or "") != "wearable":
+                continue
+            timestamp = str(reading.get("timestamp") or "")
+            if not timestamp:
+                continue
+            try:
+                recorded_at = parse_iso(timestamp)
+            except (TypeError, ValueError):
+                continue
+            cloud_wearable_readings.append((recorded_at, {
+                "timestamp": timestamp,
+                "heart_rate_bpm": reading.get("heart_rate_bpm"),
+                "hrv_ms": reading.get("hrv_ms"),
+                "gsr_raw": reading.get("gsr_raw"),
+                "skin_temperature_c": reading.get("skin_temperature_c"),
+            }))
+
+        for session in sessions:
+            if session.get("comparison") is not None:
+                continue
+            try:
+                started_at = parse_iso(str(session.get("started_at") or ""))
+                completed_at = parse_iso(str(session.get("completed_at") or ""))
+            except (TypeError, ValueError):
+                continue
+
+            before_candidates = [
+                (recorded_at, reading)
+                for recorded_at, reading in cloud_wearable_readings
+                if recorded_at <= started_at
+            ]
+            after_candidates = [
+                (recorded_at, reading)
+                for recorded_at, reading in cloud_wearable_readings
+                if recorded_at >= completed_at
+            ]
+            before = max(before_candidates, key=lambda item: item[0])[1] if before_candidates else None
+            after = min(after_candidates, key=lambda item: item[0])[1] if after_candidates else None
+            session["comparison"] = build_recovery_comparison(before, after)
+
     return {
         "total": len(sessions),
         "sessions": sessions
