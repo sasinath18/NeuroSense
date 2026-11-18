@@ -126,6 +126,33 @@ def test_firebase_rules_deploy_workflow_is_manual_and_project_scoped():
     assert "firebasestorage.googleapis.com" in readme
     assert "30-day recovery period" in readme
 
+    firebase_config = json.loads(
+        (api.BASE_DIR / "firebase.json").read_text(encoding="utf-8")
+    )
+    assert firebase_config["emulators"]["firestore"]["port"] == 8080
+    assert firebase_config["emulators"]["storage"]["port"] == 9199
+
+    emulator_workflow = (
+        api.BASE_DIR / ".github" / "workflows" / "backend-tests.yml"
+    ).read_text(encoding="utf-8")
+    assert "firebase-rules-emulator:" in emulator_workflow
+    assert "demo-neurosense-rules" in emulator_workflow
+    assert "emulators:exec" in emulator_workflow
+
+    emulator_package = json.loads(
+        (api.BASE_DIR / "tests" / "firebase-rules" / "package.json")
+        .read_text(encoding="utf-8")
+    )
+    assert emulator_package["devDependencies"]["@firebase/rules-unit-testing"] == "6.0.0"
+    assert emulator_package["devDependencies"]["firebase"] == "13.4.0"
+
+    emulator_test = (
+        api.BASE_DIR / "tests" / "firebase-rules" / "test-rules.mjs"
+    ).read_text(encoding="utf-8")
+    for required in ("unauthenticatedContext", "authenticatedContext", "assertFails",
+                     "uploadBytes", "getBytes", "deleteObject"):
+        assert required in emulator_test
+
 
 def test_dashboard_api_request_paths_are_registered_by_backend():
     """Catch dashboard/backend route drift for literal API paths and URL templates."""
