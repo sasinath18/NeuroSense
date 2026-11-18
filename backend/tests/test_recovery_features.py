@@ -1168,6 +1168,11 @@ def test_latest_dashboard_and_stress_endpoints_prefer_newer_cloud_readings(clien
     assert stress.json()["reading_timestamp"] == cloud_wearable_at
     assert predicted_readings[-1][1]["source"] == "wearable"
 
+    latest = client.get("/api/sensors/latest", headers=headers)
+    assert latest.status_code == 200
+    assert latest.json()["data"]["id"] == "cloud-newest-simulated"
+    assert latest.json()["data"]["heart_rate_bpm"] == 90.0
+
     dashboard = client.get("/api/dashboard/overview", headers=headers)
     assert dashboard.status_code == 200
     assert dashboard.json()["latest_reading"]["id"] == "cloud-newest-simulated"
