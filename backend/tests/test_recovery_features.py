@@ -136,6 +136,8 @@ def test_firebase_rules_deploy_workflow_is_manual_and_project_scoped():
         api.BASE_DIR / ".github" / "workflows" / "backend-tests.yml"
     ).read_text(encoding="utf-8")
     assert "firebase-rules-emulator:" in emulator_workflow
+    assert 'node-version: "24.12.0"' in emulator_workflow
+    assert "--engine-strict" in emulator_workflow
     assert "demo-neurosense-rules" in emulator_workflow
     assert "emulators:exec" in emulator_workflow
 
