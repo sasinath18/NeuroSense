@@ -79,7 +79,7 @@ Before applying rules, confirm the target Firebase project is `neurosense-d7f69`
 rule sets with Firebase CLI:
 
 ```bash
-firebase deploy --project neurosense-d7f69 --only firestore:rules,storage
+npx --yes firebase-tools@15.36.0 deploy --project neurosense-d7f69 --only firestore:rules,storage
 ```
 
 ### Publish rules through GitHub Actions
