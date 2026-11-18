@@ -191,17 +191,17 @@ def test_dashboard_pages_have_mobile_viewports_and_unique_static_ids():
 
     for name, html in (("dashboard", dashboard), ("emergency invite", invite)):
         assert re.search(
-            r'<meta\\s+name=["\\']viewport["\\']',
+            r"""<meta\s+name=["']viewport["']""",
             html,
             flags=re.IGNORECASE,
         ), f"{name} page is missing its mobile viewport declaration."
 
-        ids = re.findall(r'\\bid\\s*=\\s*["\\']([^"\\']+)["\\']', html)
+        ids = re.findall(r"""id\s*=\s*["']([^"']+)["']""", html)
         duplicates = sorted({element_id for element_id in ids if ids.count(element_id) > 1})
         assert not duplicates, f"{name} page has duplicate IDs: {duplicates}"
 
-    assert re.search(r"@media\\s*\\(max-width\\s*:", dashboard)
-    assert re.search(r"width\\s*:\\s*min\\(100%\\s*,\\s*520px\\)", invite)
+    assert re.search(r"@media\s*\(max-width\s*:", dashboard)
+    assert re.search(r"width\s*:\s*min\(100%\s*,\s*520px\)", invite)
 
 
 def test_music_mode_does_not_change_haptic_preference(client):
