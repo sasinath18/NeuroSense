@@ -358,3 +358,20 @@ def test_affec_status_exposes_unverified_live_window_alignment(monkeypatch, tmp_
     assert status["window_alignment_verified"] is False
     assert status["requested_capture_seconds"] == 4.8
     assert "last_frame_video" in status["training_window_context"]
+
+
+
+def test_affec_prediction_endpoint_rejects_opt_in_without_validation(monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(api, "FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED", True)
+    monkeypatch.setattr(api, "FACE_VALENCE_FEATURE_PARITY_VERIFIED", False)
+    monkeypatch.setattr(api, "FACE_VALENCE_NEW_USER_VALIDATION_VERIFIED", False)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(api.predict_face_valence(None, "test-user"))
+
+    assert exc.value.status_code == 503
+    assert "feature parity" in exc.value.detail
+    assert "new-user validation" in exc.value.detail
