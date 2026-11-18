@@ -36,6 +36,23 @@ def auth(user_id="phase-test-user"):
     return {"X-Demo-User": user_id}
 
 
+def test_health_reports_firebase_storage_configuration(client, monkeypatch):
+    """Health exposes config presence without claiming bucket connectivity."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["firebase_storage_configured"] is False
+
+    monkeypatch.setattr(api, "FIREBASE_APP", object())
+    monkeypatch.setattr(api, "FIREBASE_STORAGE_BUCKET", "neurosense-test-bucket")
+
+    response = client.get("/health")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["firebase_storage_configured"] is True
+    assert "neurosense-test-bucket" not in response.text
+
+
 class FakeStorageBlob:
     def __init__(self, bucket, path):
         self.bucket = bucket
