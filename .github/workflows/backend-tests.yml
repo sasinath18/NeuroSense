@@ -175,3 +175,33 @@ jobs:
               esac
             done
           '
+
+  firebase-rules-emulator:
+    name: Test Firebase Security Rules in Emulator Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Java for Firebase emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Firebase rules test dependencies
+        run: npm install --prefix tests/firebase-rules --no-audit --no-fund
+
+      - name: Test Firestore and Storage client rules in demo project
+        run: |
+          npx --yes firebase-tools@15.36.0 emulators:exec \
+            --only firestore,storage \
+            --project demo-neurosense-rules \
+            "npm --prefix tests/firebase-rules test"
