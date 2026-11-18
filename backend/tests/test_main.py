@@ -2647,7 +2647,7 @@ def test_emergency_push_cloud_invite_registration_and_revocation_survive_sqlite_
     fid_link = global_docs[("emergency_push_fid_links", fid_hash)]
     assert fid_link["user_id"] == user_id
     assert fid_link["invite_id"] == invite["id"]
-    assert fid not in json.dumps(global_docs)
+    assert fid not in json.dumps(list(global_docs.items()))
     device = user_docs[(user_id, "emergency_push_devices", fid_hash)]
     assert device["fcm_fid"] == fid
     assert device["active"] is True
