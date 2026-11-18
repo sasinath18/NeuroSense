@@ -1,4 +1,7 @@
 import numpy as np
+import pytest
+
+from backend import main as api
 
 from backend.face_valence import (
     FEATURE_NAMES,
@@ -303,3 +306,55 @@ def test_openface_timeout_is_reported_as_a_feature_extraction_timeout(tmp_path, 
             executable,
             openface_root,
         )
+
+
+
+@pytest.mark.parametrize(
+    ("parity_verified", "new_user_verified"),
+    [
+        (False, False),
+        (True, False),
+        (False, True),
+    ],
+)
+def test_affec_live_inference_requires_both_validation_gates(
+    monkeypatch, parity_verified, new_user_verified
+):
+    monkeypatch.setattr(api, "FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED", True)
+    monkeypatch.setattr(api, "FACE_VALENCE_FEATURE_PARITY_VERIFIED", parity_verified)
+    monkeypatch.setattr(
+        api,
+        "FACE_VALENCE_NEW_USER_VALIDATION_VERIFIED",
+        new_user_verified,
+    )
+    assert api.face_valence_live_inference_enabled() is False
+
+
+def test_affec_live_inference_needs_explicit_opt_in_even_after_validation(monkeypatch):
+    monkeypatch.setattr(api, "FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED", False)
+    monkeypatch.setattr(api, "FACE_VALENCE_FEATURE_PARITY_VERIFIED", True)
+    monkeypatch.setattr(api, "FACE_VALENCE_NEW_USER_VALIDATION_VERIFIED", True)
+    assert api.face_valence_live_inference_enabled() is False
+
+
+def test_affec_status_exposes_unverified_live_window_alignment(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "OPENFACE_FEATURE_EXTRACTION_PATH",
+        str(tmp_path / "FeatureExtraction"),
+    )
+    monkeypatch.setattr(api, "FACE_VALENCE_MODEL", object())
+    monkeypatch.setattr(api, "FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED", True)
+    monkeypatch.setattr(api, "FACE_VALENCE_FEATURE_PARITY_VERIFIED", False)
+    monkeypatch.setattr(api, "FACE_VALENCE_NEW_USER_VALIDATION_VERIFIED", False)
+
+    status = api.face_valence_status()
+
+    assert status["model_loaded"] is True
+    assert status["webcam_experiment_requested"] is True
+    assert status["webcam_experiment_enabled"] is False
+    assert status["inference_available"] is False
+    assert status["feature_parity_verified"] is False
+    assert status["new_user_validation_verified"] is False
+    assert status["window_alignment_verified"] is False
+    assert status["requested_capture_seconds"] == 4.8
+    assert "last_frame_video" in status["training_window_context"]
