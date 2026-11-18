@@ -2577,6 +2577,188 @@ def test_automatic_emergency_push_waits_for_three_events_and_applies_cooldown(cl
 
 
 
+
+def configure_fake_emergency_push_firestore(monkeypatch):
+    """Small in-memory Firestore adapter for cloud persistence regression tests."""
+    user_docs = {}
+    global_docs = {}
+
+    def read_user_document(user_id, collection_name, document_id):
+        value = user_docs.get((str(user_id), collection_name, str(document_id)))
+        return dict(value) if value is not None else None
+
+    def read_user_collection(user_id, collection_name):
+        return [
+            {**dict(value), "document_id": document_id}
+            for (stored_user, stored_collection, document_id), value in user_docs.items()
+            if stored_user == str(user_id) and stored_collection == collection_name
+        ]
+
+    def write_user_document(user_id, collection_name, document_id, payload):
+        user_docs[(str(user_id), collection_name, str(document_id))] = dict(payload)
+
+    def delete_user_document(user_id, collection_name, document_id):
+        user_docs.pop((str(user_id), collection_name, str(document_id)), None)
+
+    def read_global_document(collection_name, document_id):
+        value = global_docs.get((collection_name, str(document_id)))
+        return dict(value) if value is not None else None
+
+    def write_global_document(collection_name, document_id, payload):
+        global_docs[(collection_name, str(document_id))] = dict(payload)
+
+    def delete_global_document(collection_name, document_id):
+        global_docs.pop((collection_name, str(document_id)), None)
+
+    monkeypatch.setattr(api, "FIRESTORE_CLIENT", object())
+    monkeypatch.setattr(api, "emergency_push_firestore_read_user_document", read_user_document)
+    monkeypatch.setattr(api, "emergency_push_firestore_read_user_collection", read_user_collection)
+    monkeypatch.setattr(api, "emergency_push_firestore_write_user_document", write_user_document)
+    monkeypatch.setattr(api, "emergency_push_firestore_delete_user_document", delete_user_document)
+    monkeypatch.setattr(api, "emergency_push_firestore_read_global_document", read_global_document)
+    monkeypatch.setattr(api, "emergency_push_firestore_write_global_document", write_global_document)
+    monkeypatch.setattr(api, "emergency_push_firestore_delete_global_document", delete_global_document)
+    return user_docs, global_docs, write_global_document
+
+
+def test_emergency_push_cloud_invite_registration_and_revocation_survive_sqlite_reset(client, monkeypatch):
+    configure_test_fcm(monkeypatch)
+    user_docs, global_docs, _ = configure_fake_emergency_push_firestore(monkeypatch)
+    user_id = "neurosense-cloud-push-lifecycle"
+    invite = create_test_push_invite(client, user_id, "Trusted contact")
+    token_hash = api.emergency_push_invite_token_hash(invite["invite_token"])
+
+    assert global_docs[("emergency_push_invite_tokens", token_hash)] == {
+        "user_id": user_id,
+        "invite_id": invite["id"],
+    }
+    stored_invite = user_docs[(user_id, "emergency_push_invites", invite["id"])]
+    assert stored_invite["token_hash"] == token_hash
+    assert invite["invite_token"] not in json.dumps(user_docs)
+    assert invite["invite_token"] not in json.dumps(global_docs)
+
+    fid = "firebase-installation-" + ("p" * 24)
+    registered = register_test_push_device(client, invite["invite_token"], fid)
+    assert registered.status_code == 200
+    fid_hash = api.emergency_push_fid_hash(fid)
+    fid_link = global_docs[("emergency_push_fid_links", fid_hash)]
+    assert fid_link["user_id"] == user_id
+    assert fid_link["invite_id"] == invite["id"]
+    assert fid not in json.dumps(global_docs)
+    device = user_docs[(user_id, "emergency_push_devices", fid_hash)]
+    assert device["fcm_fid"] == fid
+    assert device["active"] is True
+
+    # Simulate Render losing its ephemeral local SQLite file.
+    with api.db_connection() as db:
+        db.execute("DELETE FROM emergency_push_devices WHERE user_id = ?", (user_id,))
+        db.execute("DELETE FROM emergency_push_invites WHERE user_id = ?", (user_id,))
+
+    listed = client.get("/api/emergency-contacts", headers={"X-Demo-User": user_id})
+    assert listed.status_code == 200
+    contact = listed.json()["contacts"][0]
+    assert contact["id"] == invite["id"]
+    assert contact["status"] == "connected"
+    assert contact["device_count"] == 1
+
+    sent = []
+    monkeypatch.setattr(
+        api,
+        "send_emergency_push_message",
+        lambda fids, title, body: (sent.extend(fids) or ("sent", len(fids))),
+    )
+    test_push = client.post("/api/emergency-contacts/test", headers={"X-Demo-User": user_id})
+    assert test_push.status_code == 200
+    assert sent == [fid]
+
+    revoked = client.delete(
+        f"/api/emergency-contacts/{invite['id']}",
+        headers={"X-Demo-User": user_id},
+    )
+    assert revoked.status_code == 200
+    assert user_docs[(user_id, "emergency_push_invites", invite["id"])]["revoked_at"]
+    assert ("emergency_push_invite_tokens", token_hash) not in global_docs
+    assert ("emergency_push_fid_links", fid_hash) not in global_docs
+    assert user_docs[(user_id, "emergency_push_devices", fid_hash)]["active"] is False
+    assert client.get("/api/emergency-contacts", headers={"X-Demo-User": user_id}).json()["contacts"] == []
+
+
+def test_emergency_push_cloud_alert_recovers_history_and_six_hour_cooldown(client, monkeypatch):
+    configure_test_fcm(monkeypatch)
+    user_docs, global_docs, _ = configure_fake_emergency_push_firestore(monkeypatch)
+    user_id = "neurosense-cloud-push-alert-recovery"
+    invite = create_test_push_invite(client, user_id, "Trusted contact")
+    fid = "firebase-installation-" + ("q" * 24)
+    assert register_test_push_device(client, invite["invite_token"], fid).status_code == 200
+
+    now = datetime.now(timezone.utc)
+    for index in range(3):
+        occurred_at = (now - timedelta(minutes=index + 1)).isoformat()
+        event_id = f"cloud-high-stress-event-{index}"
+        user_docs[(user_id, "high_stress_events", event_id)] = {
+            "event_id": event_id,
+            "reading_id": f"cloud-reading-{index}",
+            "stress_probability": 0.91,
+            "occurred_at": occurred_at,
+        }
+
+    deliveries = []
+    monkeypatch.setattr(
+        api,
+        "send_emergency_push_message",
+        lambda fids, title, body: (deliveries.append(list(fids)) or ("sent", len(fids))),
+    )
+    result = api.maybe_send_emergency_push_alert(user_id, 0.91)
+    assert result == "sent"
+    assert deliveries == [[fid]]
+    state = user_docs[(user_id, "emergency_push_alert_state", "current")]
+    assert state["last_attempt_at"]
+    assert state["last_alert_at"] == state["last_attempt_at"]
+    assert state["last_attempt_status"] == "sent"
+
+    # SQLite can disappear after delivery; the cloud reservation still blocks a duplicate.
+    with api.db_connection() as db:
+        db.execute("DELETE FROM emergency_push_alert_state WHERE user_id = ?", (user_id,))
+        db.execute("DELETE FROM high_stress_events WHERE user_id = ?", (user_id,))
+        db.execute("DELETE FROM emergency_push_devices WHERE user_id = ?", (user_id,))
+        db.execute("DELETE FROM emergency_push_invites WHERE user_id = ?", (user_id,))
+
+    assert api.maybe_send_emergency_push_alert(user_id, 0.91) == "cooldown"
+    assert deliveries == [[fid]]
+    assert global_docs[("emergency_push_fid_links", api.emergency_push_fid_hash(fid))]["user_id"] == user_id
+
+
+def test_emergency_push_cloud_invite_write_failure_fails_closed(client, monkeypatch):
+    configure_test_fcm(monkeypatch)
+    user_docs, global_docs, write_global = configure_fake_emergency_push_firestore(monkeypatch)
+    user_id = "neurosense-cloud-push-write-failure"
+
+    def fail_invite_index(collection_name, document_id, payload):
+        if collection_name == "emergency_push_invite_tokens":
+            raise RuntimeError("simulated Firestore write failure")
+        write_global(collection_name, document_id, payload)
+
+    monkeypatch.setattr(api, "emergency_push_firestore_write_global_document", fail_invite_index)
+    response = client.post(
+        "/api/emergency-contacts/invites",
+        json={"contact_name": "Contact"},
+        headers={"X-Demo-User": user_id},
+    )
+    assert response.status_code == 503
+    invites = [
+        value for (uid, collection, _), value in user_docs.items()
+        if uid == user_id and collection == "emergency_push_invites"
+    ]
+    assert invites == []
+    assert not any(collection == "emergency_push_invite_tokens" for collection, _ in global_docs)
+    with api.db_connection() as db:
+        local_count = db.execute(
+            "SELECT COUNT(*) AS total FROM emergency_push_invites WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["total"]
+    assert local_count == 0
+
+
 def configure_test_telegram(monkeypatch):
     monkeypatch.setattr(api, "TELEGRAM_BOT_TOKEN", "test-telegram-bot-token")
     monkeypatch.setattr(api, "TELEGRAM_BOT_USERNAME", "NeuroSense_Wellness_Alert_Bot")
