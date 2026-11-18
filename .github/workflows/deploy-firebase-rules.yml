@@ -107,7 +107,7 @@ jobs:
           done
 
       - name: Install Firebase CLI
-        run: npm install --global firebase-tools
+        run: npm install --global firebase-tools@15.36.0
 
       - name: Deploy only Firestore and Storage security rules
         run: |
