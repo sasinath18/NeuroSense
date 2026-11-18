@@ -75,7 +75,7 @@ jobs:
           set -euo pipefail
           echo "::add-mask::$GOOGLE_ACCESS_TOKEN"
 
-          for api in firebaserules.googleapis.com firebasestorage.googleapis.com; do
+          for api in firebaserules.googleapis.com firestore.googleapis.com firebasestorage.googleapis.com; do
             response_file="$(mktemp)"
             status="$(curl --silent --show-error --output "$response_file" --write-out "%{http_code}" \
               --header "Authorization: Bearer $GOOGLE_ACCESS_TOKEN" \
