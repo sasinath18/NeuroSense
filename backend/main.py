@@ -3477,23 +3477,24 @@ def latest_reading(
             (user_id,)
         ).fetchone()
 
-    data = row_dict(row)
+    local_data = row_dict(row)
 
-    if data:
-
-        data["ibi_ms"] = (
-            json.loads(data.pop("ibi_ms_json"))
-            if data.get("ibi_ms_json")
+    if local_data:
+        local_data["ibi_ms"] = (
+            json.loads(local_data.pop("ibi_ms_json"))
+            if local_data.get("ibi_ms_json")
             else None
         )
 
-    else:
-        cloud_rows = firestore_read_collection(
-            ("users", user_id, "sensor_readings"),
-            limit=1,
-            order_by="timestamp"
-        )
-        data = cloud_rows[0] if cloud_rows else None
+    cloud_rows = firestore_read_collection(
+        ("users", user_id, "sensor_readings"),
+        limit=100,
+        order_by="timestamp",
+    )
+    data = select_latest_sensor_reading(
+        local_data,
+        cloud_rows,
+    )
 
     return {
         "data": data
