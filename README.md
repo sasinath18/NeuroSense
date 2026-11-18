@@ -94,10 +94,12 @@ ordinary pushes and pull requests do not publish Firebase security policy.
    - **Service Usage Viewer** (`roles/serviceusage.serviceUsageViewer`) so Firebase CLI can
      check whether required Google APIs are enabled. This is read-only; it cannot enable APIs.
 2. Using a project owner or another principal with API-enablement permission, enable
-   [Firebase Rules API](https://console.cloud.google.com/apis/library/firebaserules.googleapis.com?project=neurosense-d7f69)
+   [Firebase Rules API](https://console.cloud.google.com/apis/library/firebaserules.googleapis.com?project=neurosense-d7f69),
+   [Cloud Firestore API](https://console.cloud.google.com/apis/library/firestore.googleapis.com?project=neurosense-d7f69),
    and [Cloud Storage for Firebase API](https://console.cloud.google.com/apis/library/firebasestorage.googleapis.com?project=neurosense-d7f69)
-   if either is disabled. The deploy service account is deliberately not granted API-enablement
-   privileges.
+   if any is disabled. The deploy service account is deliberately not granted API-enablement
+   privileges. The workflow checks all three APIs before deployment and reports a missing
+   Service Usage Viewer role separately from a disabled API.
 3. Create a service-account JSON key for that dedicated account. Treat it like a password.
    Prefer Workload Identity Federation instead of a long-lived key where that is already set up.
 4. In GitHub, open **Settings → Secrets and variables → Actions** for this repository and add
@@ -106,11 +108,15 @@ ordinary pushes and pull requests do not publish Firebase security policy.
 5. Open **Actions → Deploy Firebase Security Rules → Run workflow** and select `main`.
    The workflow validates that the credential is for `neurosense-d7f69` before deploying.
 
-Cloud Storage for Firebase requires the project's **Blaze** pricing plan as of February 3, 2026.
-A Google Cloud Free Trial may provide $300 credit for 90 days, but when that trial expires or the
-credit is exhausted, trial resources are stopped unless the account is manually upgraded. Check
-the billing status and possible charges before linking a billing account; never assume Storage
-will remain available after the trial without a paid billing arrangement.
+Cloud Storage for Firebase requires the project's **Blaze** pay-as-you-go pricing
+plan as of February 3, 2026; the no-cost Spark plan cannot access Firebase Storage buckets.
+A new Google Cloud customer may qualify for a $300 Free Trial credit for 90 days, and Google says
+usage covered by that trial credit is not billed. However, when the credit is exhausted or the
+90-day trial ends without a manual upgrade to a paid billing account, trial resources are stopped;
+Google provides a 30-day recovery period before trial resources are permanently deleted. A paid
+upgrade can incur charges for usage beyond remaining credits and applicable Free Tier limits.
+Check eligibility, billing status, usage and budget alerts before linking billing. Do not assume
+Firebase Storage will remain available after the trial ends without an active paid billing account.
 
 Do not reuse the Render runtime service-account key for this workflow. Keep the dedicated deploy
 account limited to the two roles above. Firebase CLI deployment overwrites the corresponding
