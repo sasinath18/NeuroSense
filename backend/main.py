@@ -2644,11 +2644,13 @@ def average(
 
 
 def create_due_summaries() -> int:
-    """Create per-user monitoring summaries using each account's chosen interval."""
+    """Create per-user monitoring summaries from local and cloud-backed readings."""
     created = 0
     now = utc_now()
 
     with db_connection() as db:
+        # A user is discovered as soon as their device sends a post-restart
+        # reading. Once discovered, recover that user's older cloud history.
         users = db.execute(
             """
             SELECT DISTINCT user_id
@@ -2658,7 +2660,7 @@ def create_due_summaries() -> int:
         ).fetchall()
 
         for user_row in users:
-            user_id = user_row["user_id"]
+            user_id = str(user_row["user_id"])
 
             settings = db.execute(
                 """
@@ -2687,6 +2689,51 @@ def create_due_summaries() -> int:
             )
             interval = timedelta(seconds=interval_seconds)
 
+            local_sensor_rows = db.execute(
+                """
+                SELECT *
+                FROM sensor_readings
+                WHERE user_id = ? AND source = 'wearable'
+                ORDER BY timestamp ASC
+                """,
+                (user_id,),
+            ).fetchall()
+            cloud_sensor_rows = firestore_read_collection(
+                ("users", user_id, "sensor_readings"),
+                limit=5000,
+                order_by="timestamp",
+            )
+
+            readings_by_id = {}
+            for row in local_sensor_rows:
+                item = dict(row)
+                reading_id = str(item.get("id") or "")
+                if reading_id:
+                    readings_by_id[reading_id] = item
+
+            for item in cloud_sensor_rows:
+                if str(item.get("source") or "") != "wearable":
+                    continue
+                reading_id = str(item.get("id") or item.get("document_id") or "")
+                if reading_id:
+                    readings_by_id.setdefault(reading_id, dict(item))
+
+            readings = []
+            for item in readings_by_id.values():
+                timestamp = str(item.get("timestamp") or "")
+                if not timestamp:
+                    continue
+                try:
+                    recorded_at = parse_iso(timestamp)
+                except (TypeError, ValueError):
+                    continue
+                item["timestamp"] = timestamp
+                readings.append((recorded_at, item))
+            readings.sort(key=lambda pair: pair[0])
+
+            if not readings:
+                continue
+
             state = db.execute(
                 """
                 SELECT last_period_end
@@ -2695,33 +2742,88 @@ def create_due_summaries() -> int:
                 """,
                 (user_id,),
             ).fetchone()
+            cloud_state = firestore_read_document(
+                ("users", user_id, "monitoring_summary_state"), "current"
+            ) or {}
 
+            checkpoints = []
             if state and state["last_period_end"]:
-                period_start = parse_iso(state["last_period_end"])
-            else:
-                last_summary = db.execute(
-                    """
-                    SELECT MAX(period_end) AS end_time
-                    FROM summaries
-                    WHERE user_id = ?
-                    """,
-                    (user_id,),
-                ).fetchone()
+                try:
+                    checkpoints.append(parse_iso(state["last_period_end"]))
+                except (TypeError, ValueError):
+                    pass
+            cloud_checkpoint = cloud_state.get("last_period_end")
+            if cloud_checkpoint:
+                try:
+                    checkpoints.append(parse_iso(str(cloud_checkpoint)))
+                except (TypeError, ValueError):
+                    pass
 
-                if last_summary and last_summary["end_time"]:
-                    period_start = parse_iso(last_summary["end_time"])
-                else:
-                    first = db.execute(
-                        """
-                        SELECT MIN(timestamp) AS start_time
-                        FROM sensor_readings
-                        WHERE user_id = ? AND source = 'wearable'
-                        """,
-                        (user_id,),
-                    ).fetchone()
-                    if not first or not first["start_time"]:
-                        continue
-                    period_start = parse_iso(first["start_time"])
+            local_last_summary = db.execute(
+                """
+                SELECT MAX(period_end) AS end_time
+                FROM summaries
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+            if local_last_summary and local_last_summary["end_time"]:
+                try:
+                    checkpoints.append(parse_iso(local_last_summary["end_time"]))
+                except (TypeError, ValueError):
+                    pass
+
+            cloud_summaries = firestore_read_collection(
+                ("users", user_id, "summaries"),
+                limit=2000,
+                order_by="period_end",
+            )
+            existing_period_ends = set()
+            for item in cloud_summaries:
+                period_end_value = str(item.get("period_end") or "")
+                if not period_end_value:
+                    continue
+                existing_period_ends.add(period_end_value)
+                try:
+                    checkpoints.append(parse_iso(period_end_value))
+                except (TypeError, ValueError):
+                    continue
+
+            period_start = max(checkpoints) if checkpoints else readings[0][0]
+            if period_start > now:
+                period_start = now
+
+            local_events = db.execute(
+                """
+                SELECT event_id, reading_id, stress_probability, occurred_at
+                FROM high_stress_events
+                WHERE user_id = ?
+                ORDER BY occurred_at ASC
+                """,
+                (user_id,),
+            ).fetchall()
+            cloud_events = firestore_read_collection(
+                ("users", user_id, "high_stress_events"),
+                limit=5000,
+                order_by="occurred_at",
+            )
+            events_by_id = {}
+            for row in local_events:
+                item = dict(row)
+                events_by_id[str(item["event_id"])] = item
+            for item in cloud_events:
+                event_id = str(item.get("event_id") or item.get("document_id") or "")
+                if event_id:
+                    events_by_id.setdefault(event_id, dict(item))
+            events = []
+            for item in events_by_id.values():
+                occurred_at = str(item.get("occurred_at") or "")
+                if not occurred_at:
+                    continue
+                try:
+                    events.append((parse_iso(occurred_at), item))
+                except (TypeError, ValueError):
+                    continue
 
             windows = 0
             while now - period_start >= interval and windows < MAX_SUMMARY_WINDOWS_PER_PASS:
@@ -2729,48 +2831,44 @@ def create_due_summaries() -> int:
                 start_iso = iso(period_start)
                 end_iso = iso(period_end)
 
-                rows = db.execute(
-                    """
-                    SELECT *
-                    FROM sensor_readings
-                    WHERE user_id = ?
-                      AND source = 'wearable'
-                      AND timestamp >= ?
-                      AND timestamp < ?
-                    ORDER BY timestamp ASC
-                    """,
-                    (user_id, start_iso, end_iso),
-                ).fetchall()
+                window_rows = [
+                    item
+                    for recorded_at, item in readings
+                    if period_start <= recorded_at < period_end
+                ]
 
-                if rows:
+                if window_rows and end_iso not in existing_period_ends:
                     reliable = [
-                        row for row in rows
-                        if row["signal_quality"] in ("good", "moderate")
+                        row for row in window_rows
+                        if row.get("signal_quality") in ("good", "moderate")
                     ]
                     stress_rows = [
                         row for row in reliable
-                        if row["stress_score"] is not None
+                        if row.get("stress_score") is not None
                     ]
                     peak_row = (
                         max(stress_rows, key=lambda row: float(row["stress_score"]))
                         if stress_rows else None
                     )
-                    event_count = db.execute(
-                        """
-                        SELECT COUNT(*) AS total
-                        FROM high_stress_events
-                        WHERE user_id = ? AND occurred_at >= ? AND occurred_at < ?
-                        """,
-                        (user_id, start_iso, end_iso),
-                    ).fetchone()["total"]
+                    event_count = sum(
+                        1
+                        for occurred_at, _event in events
+                        if period_start <= occurred_at < period_end
+                    )
 
+                    # Stable IDs make retries after a crash idempotent even if
+                    # Firestore acknowledged a write just before the process died.
+                    summary_id = str(uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"neurosense:{user_id}:summary:{end_iso}",
+                    ))
                     summary = {
-                        "summary_id": str(uuid.uuid4()),
+                        "summary_id": summary_id,
                         "user_id": user_id,
                         "period_start": start_iso,
                         "period_end": end_iso,
                         "interval_seconds": interval_seconds,
-                        "reading_count": len(rows),
+                        "reading_count": len(window_rows),
                         "reliable_reading_count": len(reliable),
                         "avg_heart_rate": average(reliable, "heart_rate_bpm"),
                         "avg_hrv": average(reliable, "hrv_ms"),
@@ -2782,7 +2880,7 @@ def create_due_summaries() -> int:
                             if peak_row else None
                         ),
                         "peak_stress_at": peak_row["timestamp"] if peak_row else None,
-                        "high_stress_event_count": int(event_count or 0),
+                        "high_stress_event_count": int(event_count),
                         "created_at": iso(),
                     }
 
@@ -2809,16 +2907,19 @@ def create_due_summaries() -> int:
                             summary["created_at"],
                         ),
                     )
-                    firestore_write(
+                    cloud_sync = firestore_write(
                         ("users", user_id, "summaries"),
-                        summary["summary_id"],
+                        summary_id,
                         summary,
                     )
-                    created += 1
+                    if cloud_sync in {"synced", "not_configured"}:
+                        created += 1
+                        existing_period_ends.add(end_iso)
 
                 period_start = period_end
                 windows += 1
 
+            next_checkpoint = iso(period_start)
             db.execute(
                 """
                 INSERT INTO monitoring_summary_state (user_id, last_period_end)
@@ -2826,10 +2927,16 @@ def create_due_summaries() -> int:
                 ON CONFLICT(user_id) DO UPDATE SET
                     last_period_end = excluded.last_period_end
                 """,
-                (user_id, iso(period_start)),
+                (user_id, next_checkpoint),
+            )
+            firestore_write(
+                ("users", user_id, "monitoring_summary_state"),
+                "current",
+                {"user_id": user_id, "last_period_end": next_checkpoint},
             )
 
     return created
+
 
 async def summary_scheduler():
 
