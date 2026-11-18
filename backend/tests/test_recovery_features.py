@@ -970,3 +970,63 @@ def test_personalization_profile_deduplicates_local_and_cloud_blink_summaries(cl
     assert response.json()["blink_reference"]["days_observed"] == 1
     assert response.json()["blink_reference"]["ready_for_preliminary_reference"] is False
 
+
+
+def test_personalization_profile_deduplicates_local_and_cloud_sensor_readings(client, monkeypatch):
+    """A cloud copy of a SQLite wearable reading must count only once."""
+    now = datetime.now(timezone.utc)
+    timestamp = (now - timedelta(days=1)).isoformat()
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "same-reading-id", "sensor-dedupe-user", "device-1",
+                timestamp, timestamp, 75.0, 42.0, 1700,
+                "good", "wearable",
+            ),
+        )
+
+    cloud_sensor_rows = [
+        {
+            "id": "same-reading-id",
+            "timestamp": timestamp,
+            "heart_rate_bpm": 999.0,
+            "hrv_ms": 999.0,
+            "gsr_raw": 9999,
+            "source": "wearable",
+            "signal_quality": "good",
+        },
+        {
+            "id": "cloud-only-reading",
+            "timestamp": timestamp,
+            "heart_rate_bpm": 80.0,
+            "hrv_ms": 44.0,
+            "gsr_raw": 1800,
+            "source": "wearable",
+            "signal_quality": "moderate",
+        },
+    ]
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", "sensor-dedupe-user", "sensor_readings"):
+            return cloud_sensor_rows
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+
+    response = client.get(
+        "/api/personalization/profile",
+        headers=auth("sensor-dedupe-user"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reading_count"] == 2
+    assert payload["personal_reference"]["heart_rate_bpm"] == 77.5
+    assert payload["days_observed"] == 1
+    assert payload["ready_for_preliminary_profile"] is False
