@@ -61,10 +61,50 @@ jobs:
           NODE
 
       - name: Authenticate to Google Cloud
+        id: google-auth
         uses: google-github-actions/auth@v3
         with:
           project_id: neurosense-d7f69
           credentials_json: ${{ secrets.NEUROSENSE_FIREBASE_RULES_DEPLOY_CREDENTIALS_JSON }}
+          token_format: access_token
+
+      - name: Verify required Google APIs are enabled
+        env:
+          GOOGLE_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$GOOGLE_ACCESS_TOKEN"
+
+          for api in firebaserules.googleapis.com firebasestorage.googleapis.com; do
+            response_file="$(mktemp)"
+            status="$(curl --silent --show-error --output "$response_file" --write-out "%{http_code}" \
+              --header "Authorization: Bearer $GOOGLE_ACCESS_TOKEN" \
+              "https://serviceusage.googleapis.com/v1/projects/neurosense-d7f69/services/$api")"
+
+            if [ "$status" = "403" ]; then
+              echo "::error::$api status cannot be read. Grant the deploy service account Service Usage Viewer (roles/serviceusage.serviceUsageViewer)."
+              cat "$response_file"
+              rm -f "$response_file"
+              exit 1
+            fi
+
+            if [ "$status" != "200" ]; then
+              echo "::error::Could not check $api (HTTP $status)."
+              cat "$response_file"
+              rm -f "$response_file"
+              exit 1
+            fi
+
+            state="$(node -e 'const fs=require("fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).state || "UNKNOWN")' "$response_file")"
+            rm -f "$response_file"
+
+            if [ "$state" != "ENABLED" ]; then
+              echo "::error::$api is $state. A project owner must enable this API before the workflow can deploy rules."
+              exit 1
+            fi
+
+            echo "$api is enabled."
+          done
 
       - name: Install Firebase CLI
         run: npm install --global firebase-tools
