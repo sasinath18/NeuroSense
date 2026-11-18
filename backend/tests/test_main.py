@@ -8,7 +8,9 @@ Run from the project root:
 Tests use an isolated temporary SQLite database. They do not modify
 the developer's local NeuroSense database or require real hardware.
 """
-\nimport json\n
+
+import json
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
