@@ -2320,6 +2320,9 @@ def predict_stress(
                 result["telegram_alert"] = maybe_send_emergency_telegram_alert(
                     user_id, probability
                 )
+                result["push_alert"] = maybe_send_emergency_push_alert(
+                    user_id, probability
+                )
 
             return result
 
