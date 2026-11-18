@@ -4731,7 +4731,7 @@ async function refreshExtendedFeatures() {
         setText("personalLearningDetails", item.notice);
         const blinkReference = item.blink_reference || {};
         const blinkRate = blinkReference.median_blinks_per_minute;
-        const blinkRateText = Number.isFinite(Number(blinkRate))
+        const blinkRateText = blinkRate !== null && blinkRate !== undefined && Number.isFinite(Number(blinkRate))
             ? Number(blinkRate).toFixed(1) + " blinks/min median"
             : "no usable blink-rate median yet";
         const blinkDetail = Number(blinkReference.summary_count || 0) > 0
@@ -4798,7 +4798,7 @@ function updateMonitoringLearning() {
     setText("monitorLearningNotice", profile.notice || "Three days are recommended for a more stable personal reference.");
     const blinkReference = profile.blink_reference || {};
     const blinkRate = blinkReference.median_blinks_per_minute;
-    const blinkRateText = Number.isFinite(Number(blinkRate))
+    const blinkRateText = blinkRate !== null && blinkRate !== undefined && Number.isFinite(Number(blinkRate))
         ? Number(blinkRate).toFixed(1) + " blinks/min median"
         : "no usable rate yet";
     setText("monitorBlinkLearningNotice",
