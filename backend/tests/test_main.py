@@ -1,3 +1,4 @@
+import json
 """
 NeuroSense - Backend API Tests
 
@@ -2732,6 +2733,7 @@ def test_emergency_push_cloud_invite_write_failure_fails_closed(client, monkeypa
     configure_test_fcm(monkeypatch)
     user_docs, global_docs, write_global = configure_fake_emergency_push_firestore(monkeypatch)
     user_id = "neurosense-cloud-push-write-failure"
+    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
 
     def fail_invite_index(collection_name, document_id, payload):
         if collection_name == "emergency_push_invite_tokens":
