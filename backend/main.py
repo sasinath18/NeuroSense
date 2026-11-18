@@ -2960,6 +2960,10 @@ def health():
 
         "database": database_status,
         "firebase_configured": FIREBASE_APP is not None,
+        # Configuration presence only; this does not verify bucket reachability.
+        "firebase_storage_configured": bool(
+            FIREBASE_APP is not None and FIREBASE_STORAGE_BUCKET
+        ),
         "ml_model_loaded": STRESS_MODEL is not None,
         "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
         "timestamp": iso()
