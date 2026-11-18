@@ -2389,7 +2389,7 @@ def maybe_queue_personal_haptic_nudge(
         return {"queued": False, "reason": "invalid_baseline"}
 
     with db_connection() as db:
-        rows = db.execute(
+        local_rows = db.execute(
             """
             SELECT id, timestamp, heart_rate_bpm, hrv_ms, signal_quality
             FROM sensor_readings
@@ -2416,6 +2416,54 @@ def maybe_queue_personal_haptic_nudge(
             """,
             (user_id,),
         ).fetchone()
+
+    rows = [dict(row) for row in local_rows]
+    if len(rows) < 3:
+        # After an ephemeral Render reset, the current upload may be the only
+        # local row. Rehydrate prior wearable samples before evaluating the
+        # consecutive-reading and 60-second persistence gates.
+        cloud_rows = firestore_read_collection(
+            ("users", user_id, "sensor_readings"),
+            limit=100,
+            order_by="timestamp",
+        )
+        readings_by_id = {
+            str(item.get("id") or ""): item
+            for item in rows
+            if item.get("id")
+        }
+        for item in cloud_rows:
+            reading_id = str(item.get("id") or item.get("document_id") or "")
+            if (
+                not reading_id
+                or str(item.get("source") or "") != "wearable"
+                or reading_id in readings_by_id
+            ):
+                continue
+            readings_by_id[reading_id] = dict(item)
+        rows = sorted(
+            readings_by_id.values(),
+            key=lambda item: str(item.get("timestamp") or ""),
+            reverse=True,
+        )[:3]
+
+    if last_command is None:
+        cloud_commands = firestore_read_collection(
+            ("users", user_id, "haptic_commands"),
+            limit=1,
+            order_by="created_at",
+        )
+        if cloud_commands:
+            last_command = cloud_commands[0]
+
+    if active_label is None:
+        cloud_feedback = firestore_read_collection(
+            ("users", user_id, "reading_feedback"),
+            limit=1,
+            order_by="created_at",
+        )
+        if cloud_feedback:
+            active_label = cloud_feedback[0]
 
     if len(rows) < 3 or any(row["signal_quality"] != "good" for row in rows):
         return {"queued": False, "reason": "not_enough_consecutive_good_readings"}
