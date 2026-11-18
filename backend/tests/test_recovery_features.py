@@ -871,3 +871,102 @@ def test_cloud_music_delete_keeps_firestore_metadata_when_metadata_delete_fails(
     assert track_id not in cloud_documents
     assert bucket.objects == {}
     assert delete_attempts == 2
+
+
+def test_personalization_profile_restores_cloud_sensor_and_blink_history(client, monkeypatch):
+    """Personal reference progress must survive an ephemeral SQLite reset."""
+    now = datetime.now(timezone.utc)
+    cloud_sensor_rows = []
+    for day_offset in (1, 2):
+        for index in range(5):
+            timestamp = (now - timedelta(days=day_offset, minutes=index)).isoformat()
+            cloud_sensor_rows.append({
+                "id": f"cloud-reading-{day_offset}-{index}",
+                "timestamp": timestamp,
+                "heart_rate_bpm": 70 + index,
+                "hrv_ms": 40 + index,
+                "gsr_raw": 1700 + index,
+                "source": "wearable",
+                "signal_quality": "good",
+            })
+
+    cloud_blink_rows = [
+        {
+            "summary_id": f"cloud-blink-{day_offset}",
+            "blink_count": 30 + day_offset,
+            "duration_seconds": 120,
+            "blinks_per_minute": 15.0 + day_offset,
+            "recorded_at": (now - timedelta(days=day_offset)).isoformat(),
+        }
+        for day_offset in (1, 2)
+    ]
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", "cloud-learning-user", "sensor_readings"):
+            return cloud_sensor_rows
+        if path == ("users", "cloud-learning-user", "blink_summaries"):
+            return cloud_blink_rows
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+
+    response = client.get(
+        "/api/personalization/profile",
+        headers=auth("cloud-learning-user"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["days_observed"] == 2
+    assert payload["reading_count"] == 10
+    assert payload["ready_for_preliminary_profile"] is True
+    assert payload["recommended_profile_ready"] is False
+    assert payload["personalized_model_ready"] is False
+    assert payload["blink_reference"]["summary_count"] == 2
+    assert payload["blink_reference"]["days_observed"] == 2
+    assert payload["blink_reference"]["median_blinks_per_minute"] == 18.5
+    assert payload["blink_reference"]["ready_for_preliminary_reference"] is True
+    assert payload["blink_reference"]["recommended_reference_ready"] is False
+
+
+def test_personalization_profile_deduplicates_local_and_cloud_blink_summaries(client, monkeypatch):
+    """A Firestore backup of a local scan must not count as a second scan."""
+    now = datetime.now(timezone.utc)
+    recorded_at = (now - timedelta(days=1)).isoformat()
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO blink_summaries (
+                summary_id, user_id, blink_count, duration_seconds,
+                blinks_per_minute, recorded_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("same-blink-id", "dedupe-user", 30, 120, 15.0, recorded_at),
+        )
+
+    monkeypatch.setattr(
+        api,
+        "firestore_read_collection",
+        lambda path, **kwargs: (
+            [{
+                "summary_id": "same-blink-id",
+                "blink_count": 30,
+                "duration_seconds": 120,
+                "blinks_per_minute": 15.0,
+                "recorded_at": recorded_at,
+            }]
+            if path == ("users", "dedupe-user", "blink_summaries")
+            else []
+        ),
+    )
+
+    response = client.get(
+        "/api/personalization/profile",
+        headers=auth("dedupe-user"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["blink_reference"]["summary_count"] == 1
+    assert response.json()["blink_reference"]["days_observed"] == 1
+    assert response.json()["blink_reference"]["ready_for_preliminary_reference"] is False
+
