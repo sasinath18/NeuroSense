@@ -89,21 +89,33 @@ The repository also has a manual-only workflow at
 ordinary pushes and pull requests do not publish Firebase security policy.
 
 1. In Google Cloud IAM for project `neurosense-d7f69`, create a dedicated service account for
-   rules deployment. Grant it **Firebase Rules Admin** (`roles/firebaserules.admin`) only.
-   This role manages Firebase Rules releases and rulesets; it is separate from the app's
-   runtime Firebase Admin service account.
-2. Create a service-account JSON key for that dedicated account. Treat it like a password.
+   rules deployment. Grant it these two roles:
+   - **Firebase Rules Admin** (`roles/firebaserules.admin`) to create and release rulesets.
+   - **Service Usage Viewer** (`roles/serviceusage.serviceUsageViewer`) so Firebase CLI can
+     check whether required Google APIs are enabled. This is read-only; it cannot enable APIs.
+2. Using a project owner or another principal with API-enablement permission, enable
+   [Firebase Rules API](https://console.cloud.google.com/apis/library/firebaserules.googleapis.com?project=neurosense-d7f69)
+   and [Cloud Storage for Firebase API](https://console.cloud.google.com/apis/library/firebasestorage.googleapis.com?project=neurosense-d7f69)
+   if either is disabled. The deploy service account is deliberately not granted API-enablement
+   privileges.
+3. Create a service-account JSON key for that dedicated account. Treat it like a password.
    Prefer Workload Identity Federation instead of a long-lived key where that is already set up.
-3. In GitHub, open **Settings → Secrets and variables → Actions** for this repository and add
+4. In GitHub, open **Settings → Secrets and variables → Actions** for this repository and add
    repository secret `NEUROSENSE_FIREBASE_RULES_DEPLOY_CREDENTIALS_JSON` with the full JSON
    contents. Never commit the key or paste it into chat.
-4. Open **Actions → Deploy Firebase Security Rules → Run workflow** and select `main`.
+5. Open **Actions → Deploy Firebase Security Rules → Run workflow** and select `main`.
    The workflow validates that the credential is for `neurosense-d7f69` before deploying.
 
-Do not reuse the Render runtime service-account key for this workflow. The dedicated deploy
-account should have only the Firebase Rules permissions it needs. Firebase CLI deployment
-overwrites the corresponding rules currently published in the Firebase Console, so keep the
-repository rule files as the source of truth.
+Cloud Storage for Firebase requires the project's **Blaze** pricing plan as of February 3, 2026.
+A Google Cloud Free Trial may provide $300 credit for 90 days, but when that trial expires or the
+credit is exhausted, trial resources are stopped unless the account is manually upgraded. Check
+the billing status and possible charges before linking a billing account; never assume Storage
+will remain available after the trial without a paid billing arrangement.
+
+Do not reuse the Render runtime service-account key for this workflow. Keep the dedicated deploy
+account limited to the two roles above. Firebase CLI deployment overwrites the corresponding
+rules currently published in the Firebase Console, so keep the repository rule files as the
+source of truth.
 
 These rules are intentionally deny-all for untrusted clients. Do not add direct client access
 unless the product architecture is deliberately changed and the rules are reviewed separately.
