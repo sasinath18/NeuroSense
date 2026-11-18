@@ -20,13 +20,21 @@ Optional integrity check:
 - `NEUROSENSE_FACE_VALENCE_MODEL_SHA256`
 
 The original `ClipQ` and `KB` definitions are reproduced in
-`backend/face_valence.py` and registered under `__main__` before `joblib.load`,
+`backend/face_valence_worker.py`. The artifact is unpickled only inside the
+isolated Python 3.13 / scikit-learn 1.6.1 worker, not in the main API process,
 because the Colab artifact serialized those classes with `__module__="__main__"`.
 
 ## Locked inference contract
 
 - Target: `beh_f_emotion_v` (felt valence), not stress or perceived valence.
-- Window: first 4.8 seconds from video onset.
+- **Training window:** onset of the `video` phase through the end of
+  `last_frame_video`. It is variable, not fixed at 4.8 seconds. The supplied
+  artifact metadata reports a median of 4.61 seconds, a minimum of 3.53 seconds,
+  and an observed maximum of approximately 5.3 seconds.
+- **Current live prototype:** truncates a submitted clip to its first 4.8 seconds.
+  This is not the same event-anchored window used during training and numerical
+  parity has not been demonstrated. Treat the current live feature path as
+  unvalidated; do not enable webcam inference on the basis of this prototype.
 - Valid frames: `success == 1` and `confidence >= 0.8`.
 - Minimum valid frames: 40; otherwise return no prediction.
 - Frame feature values: float32 before aggregation.
@@ -37,10 +45,14 @@ because the Colab artifact serialized those classes with `__module__="__main__"`
 
 ## Limitations and privacy
 
-The cross-validation result is modest (mean-fold R² around 0.08; the
-high/low-valence balanced accuracy was around 0.60). New-user validation has
-not been performed. Never label this output as a stress score, diagnosis, or
-reliable emotion classification.
+The supplied artifact metadata reports subject-wise 5-fold cross-validation
+(mean-fold R² 0.0795; high/low-valence balanced accuracy 0.5971). These are
+offline AFFEC results, not live webcam performance. Numerical parity with the
+current live extractor is **not verified**, and new-user validation has **not
+been performed**. The webcam endpoint therefore requires three independent
+conditions: explicit experiment opt-in, confirmed feature/window parity, and
+completed new-user validation. All three default to disabled. Never label this
+output as a stress score, diagnosis, or reliable emotion classification.
 
 The optional valence action sends a user-triggered 4.8-second camera clip to
 the backend. The backend processes it in a temporary directory and deletes the
