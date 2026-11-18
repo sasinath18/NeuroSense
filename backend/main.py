@@ -2649,8 +2649,8 @@ def create_due_summaries() -> int:
     now = utc_now()
 
     with db_connection() as db:
-        # A user is discovered as soon as their device sends a post-restart
-        # reading. Once discovered, recover that user's older cloud history.
+        # A user is discovered once their device sends a post-restart reading.
+        # At that point, old history can be restored from that user's cloud path.
         users = db.execute(
             """
             SELECT DISTINCT user_id
@@ -2689,6 +2689,91 @@ def create_due_summaries() -> int:
             )
             interval = timedelta(seconds=interval_seconds)
 
+            state = db.execute(
+                """
+                SELECT last_period_end
+                FROM monitoring_summary_state
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+            local_last_summary = db.execute(
+                """
+                SELECT MAX(period_end) AS end_time
+                FROM summaries
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+
+            checkpoints = []
+            if state and state["last_period_end"]:
+                try:
+                    checkpoints.append(parse_iso(state["last_period_end"]))
+                except (TypeError, ValueError):
+                    pass
+            if local_last_summary and local_last_summary["end_time"]:
+                try:
+                    checkpoints.append(parse_iso(local_last_summary["end_time"]))
+                except (TypeError, ValueError):
+                    pass
+
+            existing_period_ends = set()
+            # Cloud checkpoint reconciliation is needed only after a local DB
+            # reset (or before the first generated summary). Once restored, the
+            # local checkpoint prevents repeatedly downloading history each second.
+            if state is None:
+                cloud_state = firestore_read_document(
+                    ("users", user_id, "monitoring_summary_state"), "current"
+                ) or {}
+                cloud_checkpoint = cloud_state.get("last_period_end")
+                if cloud_checkpoint:
+                    try:
+                        checkpoints.append(parse_iso(str(cloud_checkpoint)))
+                    except (TypeError, ValueError):
+                        pass
+
+                cloud_summaries = firestore_read_collection(
+                    ("users", user_id, "summaries"),
+                    limit=2000,
+                    order_by="period_end",
+                )
+                for item in cloud_summaries:
+                    raw_period_end = str(item.get("period_end") or "")
+                    if not raw_period_end:
+                        continue
+                    try:
+                        normalized_period_end = iso(parse_iso(raw_period_end))
+                        existing_period_ends.add(normalized_period_end)
+                        checkpoints.append(parse_iso(raw_period_end))
+                    except (TypeError, ValueError):
+                        continue
+
+            period_start = max(checkpoints) if checkpoints else None
+            if period_start is not None and period_start > now:
+                period_start = now
+
+            # Most passes run every second. Do not fetch thousands of cloud
+            # documents until a complete summary interval is actually due.
+            if period_start is not None and now - period_start < interval:
+                next_checkpoint = iso(period_start)
+                db.execute(
+                    """
+                    INSERT INTO monitoring_summary_state (user_id, last_period_end)
+                    VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        last_period_end = excluded.last_period_end
+                    """,
+                    (user_id, next_checkpoint),
+                )
+                if state is None:
+                    firestore_write(
+                        ("users", user_id, "monitoring_summary_state"),
+                        "current",
+                        {"user_id": user_id, "last_period_end": next_checkpoint},
+                    )
+                continue
+
             local_sensor_rows = db.execute(
                 """
                 SELECT *
@@ -2710,7 +2795,6 @@ def create_due_summaries() -> int:
                 reading_id = str(item.get("id") or "")
                 if reading_id:
                     readings_by_id[reading_id] = item
-
             for item in cloud_sensor_rows:
                 if str(item.get("source") or "") != "wearable":
                     continue
@@ -2730,68 +2814,29 @@ def create_due_summaries() -> int:
                 item["timestamp"] = timestamp
                 readings.append((recorded_at, item))
             readings.sort(key=lambda pair: pair[0])
-
             if not readings:
                 continue
 
-            state = db.execute(
-                """
-                SELECT last_period_end
-                FROM monitoring_summary_state
-                WHERE user_id = ?
-                """,
-                (user_id,),
-            ).fetchone()
-            cloud_state = firestore_read_document(
-                ("users", user_id, "monitoring_summary_state"), "current"
-            ) or {}
+            if period_start is None:
+                period_start = readings[0][0]
 
-            checkpoints = []
-            if state and state["last_period_end"]:
-                try:
-                    checkpoints.append(parse_iso(state["last_period_end"]))
-                except (TypeError, ValueError):
-                    pass
-            cloud_checkpoint = cloud_state.get("last_period_end")
-            if cloud_checkpoint:
-                try:
-                    checkpoints.append(parse_iso(str(cloud_checkpoint)))
-                except (TypeError, ValueError):
-                    pass
-
-            local_last_summary = db.execute(
-                """
-                SELECT MAX(period_end) AS end_time
-                FROM summaries
-                WHERE user_id = ?
-                """,
-                (user_id,),
-            ).fetchone()
-            if local_last_summary and local_last_summary["end_time"]:
-                try:
-                    checkpoints.append(parse_iso(local_last_summary["end_time"]))
-                except (TypeError, ValueError):
-                    pass
-
-            cloud_summaries = firestore_read_collection(
-                ("users", user_id, "summaries"),
-                limit=2000,
-                order_by="period_end",
-            )
-            existing_period_ends = set()
-            for item in cloud_summaries:
-                period_end_value = str(item.get("period_end") or "")
-                if not period_end_value:
-                    continue
-                existing_period_ends.add(period_end_value)
-                try:
-                    checkpoints.append(parse_iso(period_end_value))
-                except (TypeError, ValueError):
-                    continue
-
-            period_start = max(checkpoints) if checkpoints else readings[0][0]
-            if period_start > now:
-                period_start = now
+            if now - period_start < interval:
+                next_checkpoint = iso(period_start)
+                db.execute(
+                    """
+                    INSERT INTO monitoring_summary_state (user_id, last_period_end)
+                    VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        last_period_end = excluded.last_period_end
+                    """,
+                    (user_id, next_checkpoint),
+                )
+                firestore_write(
+                    ("users", user_id, "monitoring_summary_state"),
+                    "current",
+                    {"user_id": user_id, "last_period_end": next_checkpoint},
+                )
+                continue
 
             local_events = db.execute(
                 """
@@ -2832,8 +2877,7 @@ def create_due_summaries() -> int:
                 end_iso = iso(period_end)
 
                 window_rows = [
-                    item
-                    for recorded_at, item in readings
+                    item for recorded_at, item in readings
                     if period_start <= recorded_at < period_end
                 ]
 
@@ -2851,13 +2895,12 @@ def create_due_summaries() -> int:
                         if stress_rows else None
                     )
                     event_count = sum(
-                        1
-                        for occurred_at, _event in events
+                        1 for occurred_at, _event in events
                         if period_start <= occurred_at < period_end
                     )
 
-                    # Stable IDs make retries after a crash idempotent even if
-                    # Firestore acknowledged a write just before the process died.
+                    # Deterministic IDs make cloud writes idempotent if the
+                    # process exits after Firestore commits but before SQLite.
                     summary_id = str(uuid.uuid5(
                         uuid.NAMESPACE_URL,
                         f"neurosense:{user_id}:summary:{end_iso}",
