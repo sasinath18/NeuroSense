@@ -1,0 +1,48 @@
+{
+  "model_name": "neurosense_face_valence_rf",
+  "artifact_filename": "neurosense_face_valence_rf.joblib",
+  "artifact_size_bytes": 7502218,
+  "artifact_sha256": "280fae49138a8116b8be873a57bb5085e3a28bc27272b983b74a3901dc38ec40",
+  "model_created_utc": "2026-11-16T11:37:02.910924Z",
+  "target": {
+    "column": "beh_f_emotion_v",
+    "meaning": "felt valence self-rating; perceived-valence labels were not used"
+  },
+  "features": {
+    "count": 50,
+    "window_aggregation": "mean and population standard deviation (ddof=0)",
+    "valid_frame_condition": "success == 1 and confidence >= 0.8",
+    "minimum_valid_frames": 40
+  },
+  "training_window": {
+    "anchor": "video phase onset",
+    "end": "last_frame_video phase end",
+    "duration_variable": true,
+    "median_seconds": 4.61,
+    "minimum_observed_seconds": 3.53,
+    "maximum_observed_seconds": 5.3
+  },
+  "current_live_extractor": {
+    "window_seconds": 4.8,
+    "window_alignment": "not equivalent to the event-anchored training window; numerical parity not verified"
+  },
+  "evaluation": {
+    "scheme": "5-fold subject-wise cross-validation",
+    "subjects": 61,
+    "trials": 3398,
+    "mean_fold_r2": 0.0795,
+    "high_low_valence_balanced_accuracy": 0.5971,
+    "new_user_validation_completed": false
+  },
+  "deployment_gates": {
+    "explicit_experiment_opt_in_required": true,
+    "feature_parity_verified": false,
+    "new_user_validation_verified": false,
+    "live_webcam_inference_allowed": false
+  },
+  "limitations": [
+    "Research felt-valence model only; not stress classification or diagnosis.",
+    "Offline cross-validation does not establish live webcam performance.",
+    "Do not enable live inference until feature/window parity and new-user validation are independently completed."
+  ]
+}
