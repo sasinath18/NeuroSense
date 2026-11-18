@@ -1,7 +1,11 @@
-"""AFFEC face-only felt-valence inference for NeuroSense.
+"""Experimental AFFEC face-only felt-valence feature extraction for NeuroSense.
 
-The model contract is OpenFace AU intensity, gaze-angle and head-pose
-features over the first 4.8 seconds of a video. It is not a stress model.
+The currently implemented live extractor truncates a submitted clip to its
+first 4.8 seconds. The supplied model metadata says training used a
+stimulus-locked, variable-duration video phase ending at last_frame_video
+(median 4.61 seconds; observed 3.53 to about 5.3 seconds). These windows are
+not equivalent. Keep the API inference route disabled until numerical parity
+and new-user validation are independently completed. This is not a stress model.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import pandas as pd
 
 logger = logging.getLogger("neurosense.face_valence")
 
+# Live prototype capture length only; not a validated reproduction of the event-anchored training window.
 WINDOW_SECONDS = 4.8
 MIN_VALID_FRAMES = 40
 MIN_CONFIDENCE = 0.8
