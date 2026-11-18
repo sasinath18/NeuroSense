@@ -1098,3 +1098,78 @@ def test_recovery_history_rebuilds_cloud_only_before_after_comparison(client, mo
     assert comparison["hrv_ms"]["change"] == 9
     assert comparison["gsr_raw"]["change"] == -350
     assert comparison["skin_temperature_c"]["change"] == -0.3
+
+
+def test_latest_dashboard_and_stress_endpoints_prefer_newer_cloud_readings(client, monkeypatch):
+    """A newer Firestore reading must not be hidden by an older local SQLite row."""
+    user_id = "latest-cloud-reading-user"
+    now = datetime.now(timezone.utc)
+    local_at = (now - timedelta(minutes=6)).isoformat()
+    cloud_wearable_at = (now - timedelta(minutes=3)).isoformat()
+    cloud_simulated_at = (now - timedelta(minutes=1)).isoformat()
+
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "local-wearable-reading", user_id, "device-1",
+                local_at, local_at, 82.0, 31.0, 1950, 33.4,
+                "good", "wearable",
+            ),
+        )
+
+    cloud_rows = [
+        {
+            "id": "cloud-newer-wearable",
+            "timestamp": cloud_wearable_at,
+            "heart_rate_bpm": 76.0,
+            "hrv_ms": 42.0,
+            "gsr_raw": 1700,
+            "skin_temperature_c": 33.1,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        {
+            "id": "cloud-newest-simulated",
+            "timestamp": cloud_simulated_at,
+            "heart_rate_bpm": 90.0,
+            "hrv_ms": 25.0,
+            "gsr_raw": 2200,
+            "skin_temperature_c": 34.0,
+            "signal_quality": "moderate",
+            "source": "simulated",
+        },
+    ]
+
+    def fake_firestore_read_collection(path, **kwargs):
+        return cloud_rows if path == (
+            "users", user_id, "sensor_readings"
+        ) else []
+
+    predicted_readings = []
+    def fake_stored_or_predicted_stress(received_user_id, reading):
+        predicted_readings.append((received_user_id, reading))
+        return {"status": "test_prediction", "stress_score": None}
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(api, "firestore_read_document", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api, "stored_or_predicted_stress", fake_stored_or_predicted_stress)
+
+    headers = auth(user_id)
+    stress = client.get("/api/stress/latest", headers=headers)
+    assert stress.status_code == 200
+    assert stress.json()["reading_id"] == "cloud-newer-wearable"
+    assert stress.json()["reading_timestamp"] == cloud_wearable_at
+    assert predicted_readings[-1][1]["source"] == "wearable"
+
+    dashboard = client.get("/api/dashboard/overview", headers=headers)
+    assert dashboard.status_code == 200
+    assert dashboard.json()["latest_reading"]["id"] == "cloud-newest-simulated"
+    assert dashboard.json()["latest_reading"]["heart_rate_bpm"] == 90.0
+    assert dashboard.json()["stress"]["status"] == "waiting_for_wearable_data"
