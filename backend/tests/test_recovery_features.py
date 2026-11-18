@@ -133,7 +133,7 @@ def test_dashboard_api_request_paths_are_registered_by_backend():
     frontend = frontend_path.read_text(encoding="utf-8")
 
     call_pattern = re.compile(
-        r"""apiRequest\\s*\\(\\s*(?:"([^"]+)"|'([^']+)'|\x60([^\x60]+)\x60)\\s*[,)]"""
+        r"""apiRequest\s*\(\s*(?:"([^"]+)"|'([^']+)'|\x60([^\x60]+)\x60)\s*[,)]""",
     )
     raw_paths = [
         next(group for group in match.groups() if group is not None)
@@ -150,7 +150,7 @@ def test_dashboard_api_request_paths_are_registered_by_backend():
     missing = []
     for raw_path in raw_paths:
         path = urlsplit(raw_path).path
-        path = re.sub(r"\\$\\{[^}]+\\}", "{param}", path)
+        path = re.sub(r"\$\{[^}]+\}", "{param}", path)
         path = path.rstrip("/") or "/"
         segments = path.split("/")
 
