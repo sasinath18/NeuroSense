@@ -1460,13 +1460,16 @@ def maybe_send_emergency_push_alert(user_id: str, probability: float) -> str:
             fids, seen = [], set()
             for device in devices:
                 fid = str(device.get("fcm_fid") or "")
-                if (
-                    device.get("active")
-                    and str(device.get("invite_id") or "") in active_invites
-                    and fid and fid not in seen
-                ):
-                    seen.add(fid)
-                    fids.append(fid)
+                invite_id = str(device.get("invite_id") or "")
+                if not device.get("active") or invite_id not in active_invites or not fid or fid in seen:
+                    continue
+                fid_link = emergency_push_firestore_read_global_document(
+                    "emergency_push_fid_links", emergency_push_fid_hash(fid)
+                )
+                if not fid_link or fid_link.get("user_id") != user_id or fid_link.get("invite_id") != invite_id:
+                    continue
+                seen.add(fid)
+                fids.append(fid)
             if not fids:
                 return "no_registered_contacts"
 
@@ -6467,7 +6470,8 @@ def create_emergency_contact_invite(payload: EmergencyPushInviteIn, user_id: str
 def register_emergency_contact_device(payload: EmergencyPushRegisterIn):
     """Accept a public invite and bind this browser's FCM installation to its owner."""
     token_hash = emergency_push_invite_token_hash(payload.invite_token)
-    now, now_text = utc_now(), iso(utc_now())
+    now = utc_now()
+    now_text = iso(now)
     device_name = payload.device_name.strip()[:120] or "Browser device"
     if FIRESTORE_CLIENT is not None:
         device_id, old_device = None, None
@@ -6669,10 +6673,20 @@ def test_emergency_contact_push(user_id: str = Depends(current_user_id)):
                 for item in invites if not item.get("revoked_at")
             }
             devices = emergency_push_firestore_read_user_collection(user_id, "emergency_push_devices")
-            fids = list(dict.fromkeys(
-                str(item["fcm_fid"]) for item in devices
-                if item.get("active") and item.get("invite_id") in active_invites and item.get("fcm_fid")
-            ))
+            fids = []
+            seen_fids = set()
+            for item in devices:
+                fid = str(item.get("fcm_fid") or "")
+                invite_id = str(item.get("invite_id") or "")
+                if not item.get("active") or invite_id not in active_invites or not fid or fid in seen_fids:
+                    continue
+                fid_link = emergency_push_firestore_read_global_document(
+                    "emergency_push_fid_links", emergency_push_fid_hash(fid)
+                )
+                if not fid_link or fid_link.get("user_id") != user_id or fid_link.get("invite_id") != invite_id:
+                    continue
+                seen_fids.add(fid)
+                fids.append(fid)
         except Exception:
             logger.exception("Could not load emergency push recipients from Firestore.")
             raise HTTPException(status_code=503, detail="Emergency contact storage is temporarily unavailable. Please retry.")
