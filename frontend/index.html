@@ -2821,6 +2821,7 @@
                         <div class="card-header"><div><h3>Personal Stress Learning</h3><p>Build a reference from your own readings</p></div><span class="badge" id="personalLearningBadge">Collecting</span></div>
                         <p id="personalLearningStatus" class="muted small">Collect reliable wearable readings across at least two different days.</p>
                         <p id="personalLearningDetails" class="muted small">Three days are recommended before considering the personal reference stable.</p>
+                        <p id="personalBlinkLearningDetails" class="muted small">Camera blink reference: awaiting completed camera scans.</p>
                     </article>
 
                     <article class="card" style="margin-top:17px">
@@ -3026,6 +3027,9 @@
                     <div class="monitoring-progress-track"><span id="monitorLearningProgress"></span></div>
                     <p id="monitorLearningNotice" class="muted small">
                         Preliminary analysis is a personal reference, not a diagnosis or a newly trained ML model.
+                    </p>
+                    <p id="monitorBlinkLearningNotice" class="muted small">
+                        Camera blink reference: awaiting completed scans. It is descriptive and is not used to infer stress.
                     </p>
                     <div class="feedback-label-controls">
                         <p class="muted small">Label your latest reliable wearable reading (optional):</p>
@@ -4725,6 +4729,17 @@ async function refreshExtendedFeatures() {
         setText("personalLearningStatus", item.days_observed + " distinct day(s) · " + item.reading_count + " reliable wearable readings · " + Number(item.labeled_readings || 0) + " user-labelled readings in the last 72 hours.");
         personalMonitoringProfile = item;
         setText("personalLearningDetails", item.notice);
+        const blinkReference = item.blink_reference || {};
+        const blinkRate = blinkReference.median_blinks_per_minute;
+        const blinkRateText = Number.isFinite(Number(blinkRate))
+            ? Number(blinkRate).toFixed(1) + " blinks/min median"
+            : "no usable blink-rate median yet";
+        const blinkDetail = Number(blinkReference.summary_count || 0) > 0
+            ? "Camera blink reference: " + blinkRateText + " across " +
+              Number(blinkReference.days_observed || 0) + " distinct day(s) and " +
+              Number(blinkReference.summary_count || 0) + " completed scan(s). Descriptive only; not used in stress scoring."
+            : "Camera blink reference: complete scans on multiple days to build a personal descriptive reference. It is not used in stress scoring.";
+        setText("personalBlinkLearningDetails", blinkDetail);
         updateMonitoringLearning();
     }
     if (results[1].status === "fulfilled") {
@@ -4781,6 +4796,17 @@ function updateMonitoringLearning() {
         observed + " distinct day(s) · " + (profile.reading_count || 0) +
         " reliable wearable readings in the latest 72 hours.");
     setText("monitorLearningNotice", profile.notice || "Three days are recommended for a more stable personal reference.");
+    const blinkReference = profile.blink_reference || {};
+    const blinkRate = blinkReference.median_blinks_per_minute;
+    const blinkRateText = Number.isFinite(Number(blinkRate))
+        ? Number(blinkRate).toFixed(1) + " blinks/min median"
+        : "no usable rate yet";
+    setText("monitorBlinkLearningNotice",
+        Number(blinkReference.summary_count || 0) > 0
+            ? "Separate camera reference: " + blinkRateText + " across " +
+              Number(blinkReference.days_observed || 0) + " day(s) and " +
+              Number(blinkReference.summary_count || 0) + " scan(s). Descriptive only; not used for stress scoring."
+            : "Camera blink reference: awaiting completed scans on multiple days. Not used to infer stress.");
     const progress = $("monitorLearningProgress");
     if (progress) progress.style.width = percent + "%";
 }
