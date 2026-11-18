@@ -1039,6 +1039,140 @@ def telegram_global_document(collection_name: str, document_id: str):
     return FIRESTORE_CLIENT.collection(collection_name).document(document_id)
 
 
+
+def emergency_push_firestore_read_user_document(user_id: str, collection_name: str, document_id: str) -> dict | None:
+    snapshot = telegram_user_collection(user_id, collection_name).document(str(document_id)).get()
+    return (snapshot.to_dict() or {}) if snapshot.exists else None
+
+
+def emergency_push_firestore_read_user_collection(user_id: str, collection_name: str) -> list[dict]:
+    return telegram_firestore_documents(telegram_user_collection(user_id, collection_name))
+
+
+def emergency_push_firestore_write_user_document(user_id: str, collection_name: str, document_id: str, payload: dict) -> None:
+    telegram_user_collection(user_id, collection_name).document(str(document_id)).set(payload)
+
+
+def emergency_push_firestore_delete_user_document(user_id: str, collection_name: str, document_id: str) -> None:
+    telegram_user_collection(user_id, collection_name).document(str(document_id)).delete()
+
+
+def emergency_push_firestore_read_global_document(collection_name: str, document_id: str) -> dict | None:
+    snapshot = telegram_global_document(collection_name, str(document_id)).get()
+    return (snapshot.to_dict() or {}) if snapshot.exists else None
+
+
+def emergency_push_firestore_write_global_document(collection_name: str, document_id: str, payload: dict) -> None:
+    telegram_global_document(collection_name, str(document_id)).set(payload)
+
+
+def emergency_push_firestore_delete_global_document(collection_name: str, document_id: str) -> None:
+    telegram_global_document(collection_name, str(document_id)).delete()
+
+
+def emergency_push_invite_token_hash(invite_token: str) -> str:
+    return hashlib.sha256(invite_token.encode("utf-8")).hexdigest()
+
+
+def emergency_push_fid_hash(fcm_fid: str) -> str:
+    return hashlib.sha256(fcm_fid.encode("utf-8")).hexdigest()
+
+
+def sync_local_emergency_push_state_to_firestore(user_id: str) -> None:
+    """Migrate visible SQLite push state once without overwriting Firestore authority."""
+    if FIRESTORE_CLIENT is None:
+        return
+    if emergency_push_firestore_read_user_document(
+        user_id, "emergency_push_metadata", "migration_v1"
+    ):
+        return
+
+    with db_connection() as db:
+        invites = [
+            dict(row) for row in db.execute(
+                """SELECT invite_id, user_id, contact_name, token_hash, created_at, expires_at, revoked_at
+                   FROM emergency_push_invites WHERE user_id = ?""",
+                (user_id,),
+            ).fetchall()
+        ]
+        devices = [
+            dict(row) for row in db.execute(
+                """SELECT device_id, invite_id, user_id, fcm_fid, device_name, created_at, last_seen_at, active
+                   FROM emergency_push_devices WHERE user_id = ?""",
+                (user_id,),
+            ).fetchall()
+        ]
+        state = db.execute(
+            "SELECT last_alert_at FROM emergency_push_alert_state WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+    for invite in invites:
+        invite_id = str(invite["invite_id"])
+        if emergency_push_firestore_read_user_document(
+            user_id, "emergency_push_invites", invite_id
+        ) is None:
+            emergency_push_firestore_write_user_document(
+                user_id, "emergency_push_invites", invite_id, invite
+            )
+        token_hash = str(invite["token_hash"])
+        token_link = emergency_push_firestore_read_global_document(
+            "emergency_push_invite_tokens", token_hash
+        )
+        if invite.get("revoked_at"):
+            if token_link and token_link.get("user_id") == user_id:
+                emergency_push_firestore_delete_global_document(
+                    "emergency_push_invite_tokens", token_hash
+                )
+        elif token_link is None:
+            emergency_push_firestore_write_global_document(
+                "emergency_push_invite_tokens", token_hash,
+                {"user_id": user_id, "invite_id": invite_id},
+            )
+
+    for device in devices:
+        invite_id = str(device["invite_id"])
+        invite = emergency_push_firestore_read_user_document(
+            user_id, "emergency_push_invites", invite_id
+        )
+        fid_hash = emergency_push_fid_hash(str(device["fcm_fid"]))
+        link = emergency_push_firestore_read_global_document(
+            "emergency_push_fid_links", fid_hash
+        )
+        if link and (link.get("user_id") != user_id or link.get("invite_id") != invite_id):
+            logger.warning("Skipped conflicting legacy emergency push device during migration.")
+            continue
+        device_id = str(device["device_id"])
+        if emergency_push_firestore_read_user_document(
+            user_id, "emergency_push_devices", device_id
+        ) is None:
+            emergency_push_firestore_write_user_document(
+                user_id, "emergency_push_devices", device_id, device
+            )
+        if bool(device.get("active")) and invite and not invite.get("revoked_at") and link is None:
+            emergency_push_firestore_write_global_document(
+                "emergency_push_fid_links", fid_hash,
+                {"user_id": user_id, "invite_id": invite_id, "device_id": device_id},
+            )
+
+    if state and emergency_push_firestore_read_user_document(
+        user_id, "emergency_push_alert_state", "current"
+    ) is None:
+        last_alert_at = str(state["last_alert_at"])
+        emergency_push_firestore_write_user_document(
+            user_id, "emergency_push_alert_state", "current",
+            {
+                "user_id": user_id, "last_alert_at": last_alert_at,
+                "last_attempt_at": last_alert_at, "last_attempt_status": "migrated",
+            },
+        )
+
+    emergency_push_firestore_write_user_document(
+        user_id, "emergency_push_metadata", "migration_v1",
+        {"version": 1, "completed_at": iso(utc_now())},
+    )
+
+
 def telegram_firestore_documents(collection_ref) -> list[dict]:
     """Return a Firestore collection with document IDs included."""
     return [
@@ -1184,7 +1318,6 @@ def send_emergency_push_message(fids: list[str], title: str, body: str) -> tuple
         return "not_configured", 0
     if not fids:
         return "no_registered_contacts", 0
-
     messages = [
         firebase_messaging.Message(
             fid=fid,
@@ -1200,10 +1333,7 @@ def send_emergency_push_message(fids: list[str], title: str, body: str) -> tuple
             if item.success:
                 continue
             error_code = getattr(item.exception, "code", "")
-            if error_code in {
-                "messaging/registration-token-not-registered",
-                "messaging/invalid-registration-token",
-            }:
+            if error_code in {"messaging/registration-token-not-registered", "messaging/invalid-registration-token"}:
                 invalid_tokens.append(fids[index])
         if invalid_tokens:
             with db_connection() as db:
@@ -1211,6 +1341,22 @@ def send_emergency_push_message(fids: list[str], title: str, body: str) -> tuple
                     "UPDATE emergency_push_devices SET active = 0 WHERE fcm_fid = ?",
                     [(fid,) for fid in invalid_tokens],
                 )
+            if FIRESTORE_CLIENT is not None:
+                for fid in invalid_tokens:
+                    try:
+                        fid_hash = emergency_push_fid_hash(fid)
+                        link = emergency_push_firestore_read_global_document("emergency_push_fid_links", fid_hash)
+                        if not link:
+                            continue
+                        uid, device_id = str(link.get("user_id") or ""), str(link.get("device_id") or "")
+                        if uid and device_id:
+                            device = emergency_push_firestore_read_user_document(uid, "emergency_push_devices", device_id)
+                            if device:
+                                device["active"] = False
+                                emergency_push_firestore_write_user_document(uid, "emergency_push_devices", device_id, device)
+                        emergency_push_firestore_delete_global_document("emergency_push_fid_links", fid_hash)
+                    except Exception:
+                        logger.exception("Could not deactivate an invalid cloud emergency push device.")
         if response.success_count:
             return "sent", int(response.success_count)
         logger.warning("FCM delivery failed for all %s emergency contact device(s).", len(messages))
@@ -1266,47 +1412,142 @@ def maybe_send_emergency_telegram_alert(user_id: str, probability: float) -> str
 
 
 def maybe_send_emergency_push_alert(user_id: str, probability: float) -> str:
-    """Send after repeated elevated estimates, with opt-in and six-hour cooldown."""
+    """Send after repeated elevated estimates, with Firestore-backed contacts and cooldown."""
     if probability < HIGH_STRESS_THRESHOLD:
         return "not_triggered"
+    if not firebase_push_configured():
+        return "not_configured"
 
     now = utc_now()
     now_text = iso(now)
+    cutoff = now - timedelta(minutes=30)
+
+    if FIRESTORE_CLIENT is not None:
+        try:
+            sync_local_emergency_push_state_to_firestore(user_id)
+            event_by_reading: dict[str, dict] = {}
+            with db_connection() as db:
+                local_events = db.execute(
+                    """SELECT event_id, reading_id, stress_probability, occurred_at
+                       FROM high_stress_events WHERE user_id = ? AND occurred_at >= ?""",
+                    (user_id, iso(cutoff)),
+                ).fetchall()
+            for row in local_events:
+                event = dict(row)
+                event_by_reading[str(event["reading_id"])] = event
+            for event in emergency_push_firestore_read_user_collection(user_id, "high_stress_events"):
+                reading_id = str(event.get("reading_id") or event.get("event_id") or "")
+                occurred_at = event.get("occurred_at")
+                if not reading_id or not occurred_at or parse_iso(str(occurred_at)) < cutoff:
+                    continue
+                event_by_reading[reading_id] = event
+            if len(event_by_reading) < 3:
+                return "awaiting_repeated_readings"
+
+            state = emergency_push_firestore_read_user_document(
+                user_id, "emergency_push_alert_state", "current"
+            ) or {}
+            last_attempt = state.get("last_attempt_at") or state.get("last_alert_at")
+            if last_attempt and now - parse_iso(str(last_attempt)) < timedelta(hours=6):
+                return "cooldown"
+
+            invites = emergency_push_firestore_read_user_collection(user_id, "emergency_push_invites")
+            active_invites = {
+                str(item.get("invite_id") or item.get("document_id")): item
+                for item in invites if not item.get("revoked_at")
+            }
+            devices = emergency_push_firestore_read_user_collection(user_id, "emergency_push_devices")
+            fids, seen = [], set()
+            for device in devices:
+                fid = str(device.get("fcm_fid") or "")
+                if (
+                    device.get("active")
+                    and str(device.get("invite_id") or "") in active_invites
+                    and fid and fid not in seen
+                ):
+                    seen.add(fid)
+                    fids.append(fid)
+            if not fids:
+                return "no_registered_contacts"
+
+            # Durable pre-send reservation prevents a restart from re-sending
+            # an alert that may have been delivered just before the process stopped.
+            reserved = {
+                **state,
+                "user_id": user_id,
+                "last_attempt_at": now_text,
+                "last_attempt_id": uuid.uuid4().hex,
+                "last_attempt_status": "pending",
+            }
+            emergency_push_firestore_write_user_document(
+                user_id, "emergency_push_alert_state", "current", reserved
+            )
+        except Exception:
+            logger.exception("Could not read or reserve durable emergency push state.")
+            return "storage_error"
+
+        delivery, sent_count = send_emergency_push_message(
+            fids,
+            "NeuroSense check-in",
+            "Repeated elevated stress-related readings were recorded. Please check in with the user. "
+            "This is an experimental wellness alert, not a medical diagnosis or emergency service.",
+        )
+        if delivery == "sent" and sent_count:
+            reserved.update({
+                "last_alert_at": now_text,
+                "last_attempt_status": "sent",
+                "last_delivery_count": int(sent_count),
+            })
+            try:
+                emergency_push_firestore_write_user_document(
+                    user_id, "emergency_push_alert_state", "current", reserved
+                )
+            except Exception:
+                logger.exception("Push delivered but final cooldown metadata could not be saved.")
+            with db_connection() as db:
+                db.execute(
+                    """INSERT INTO emergency_push_alert_state (user_id, last_alert_at)
+                       VALUES (?, ?)
+                       ON CONFLICT(user_id) DO UPDATE SET last_alert_at = excluded.last_alert_at""",
+                    (user_id, now_text),
+                )
+        else:
+            reserved["last_attempt_status"] = delivery
+            try:
+                emergency_push_firestore_write_user_document(
+                    user_id, "emergency_push_alert_state", "current", reserved
+                )
+            except Exception:
+                logger.exception("Could not update emergency push attempt status.")
+        return delivery
+
+    if APP_ENV != "development":
+        return "storage_not_configured"
+
     with db_connection() as db:
         recent = db.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM high_stress_events
-            WHERE user_id = ? AND occurred_at >= ?
-            """,
-            (user_id, iso(now - timedelta(minutes=30))),
+            """SELECT COUNT(*) AS total FROM high_stress_events
+               WHERE user_id = ? AND occurred_at >= ?""",
+            (user_id, iso(cutoff)),
         ).fetchone()["total"]
         if int(recent) < 3:
             return "awaiting_repeated_readings"
-
         alert_state = db.execute(
             "SELECT last_alert_at FROM emergency_push_alert_state WHERE user_id = ?",
             (user_id,),
         ).fetchone()
         if alert_state and now - parse_iso(alert_state["last_alert_at"]) < timedelta(hours=6):
             return "cooldown"
-
         device_rows = db.execute(
-            """
-            SELECT d.fcm_fid
-            FROM emergency_push_devices d
-            JOIN emergency_push_invites i ON i.invite_id = d.invite_id
-            WHERE d.user_id = ? AND d.active = 1
-              AND i.revoked_at IS NULL
-            ORDER BY d.created_at
-            """,
+            """SELECT d.fcm_fid FROM emergency_push_devices d
+               JOIN emergency_push_invites i ON i.invite_id = d.invite_id
+               WHERE d.user_id = ? AND d.active = 1 AND i.revoked_at IS NULL
+               ORDER BY d.created_at""",
             (user_id,),
         ).fetchall()
-
     fids = [row["fcm_fid"] for row in device_rows]
     if not fids:
         return "no_registered_contacts"
-
     delivery, sent_count = send_emergency_push_message(
         fids,
         "NeuroSense check-in",
@@ -1316,11 +1557,9 @@ def maybe_send_emergency_push_alert(user_id: str, probability: float) -> str:
     if delivery == "sent" and sent_count:
         with db_connection() as db:
             db.execute(
-                """
-                INSERT INTO emergency_push_alert_state (user_id, last_alert_at)
-                VALUES (?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET last_alert_at = excluded.last_alert_at
-                """,
+                """INSERT INTO emergency_push_alert_state (user_id, last_alert_at)
+                   VALUES (?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET last_alert_at = excluded.last_alert_at""",
                 (user_id, now_text),
             )
     return delivery
@@ -6087,83 +6326,137 @@ def telegram_webhook(
 
 @app.get("/api/emergency-contacts")
 def list_emergency_contacts(user_id: str = Depends(current_user_id)):
-    with db_connection() as db:
-        rows = db.execute(
-            """
-            SELECT i.invite_id, i.contact_name, i.created_at, i.expires_at,
-                   COUNT(d.device_id) AS device_count, MAX(d.last_seen_at) AS last_seen_at
-            FROM emergency_push_invites i
-            LEFT JOIN emergency_push_devices d
-                ON d.invite_id = i.invite_id AND d.active = 1
-            WHERE i.user_id = ? AND i.revoked_at IS NULL
-            GROUP BY i.invite_id
-            ORDER BY i.created_at DESC
-            """,
-            (user_id,),
-        ).fetchall()
-
-    contacts = []
     now = utc_now()
-    for row in rows:
-        state = (
-            "connected" if int(row["device_count"]) > 0
-            else "expired" if parse_iso(row["expires_at"]) <= now
-            else "pending"
-        )
-        contacts.append({
-            "id": row["invite_id"],
-            "contact_name": row["contact_name"],
-            "created_at": row["created_at"],
-            "expires_at": row["expires_at"],
-            "device_count": int(row["device_count"]),
-            "last_seen_at": row["last_seen_at"],
-            "status": state,
-        })
+    if FIRESTORE_CLIENT is not None:
+        try:
+            sync_local_emergency_push_state_to_firestore(user_id)
+            invites = emergency_push_firestore_read_user_collection(user_id, "emergency_push_invites")
+            devices = emergency_push_firestore_read_user_collection(user_id, "emergency_push_devices")
+            active_invites = {
+                str(item.get("invite_id") or item.get("document_id")): item
+                for item in invites if not item.get("revoked_at")
+            }
+            counts, last_seen = {}, {}
+            for device in devices:
+                invite_id = str(device.get("invite_id") or "")
+                if not device.get("active") or invite_id not in active_invites:
+                    continue
+                counts[invite_id] = counts.get(invite_id, 0) + 1
+                seen = str(device.get("last_seen_at") or "")
+                if seen > last_seen.get(invite_id, ""):
+                    last_seen[invite_id] = seen
+            contacts = []
+            for invite_id, invite in active_invites.items():
+                count = counts.get(invite_id, 0)
+                expires = str(invite["expires_at"])
+                contacts.append({
+                    "id": invite_id,
+                    "contact_name": invite.get("contact_name", "Emergency contact"),
+                    "created_at": invite.get("created_at"),
+                    "expires_at": expires,
+                    "device_count": count,
+                    "last_seen_at": last_seen.get(invite_id),
+                    "status": "connected" if count else ("expired" if parse_iso(expires) <= now else "pending"),
+                })
+            contacts.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        except Exception:
+            logger.exception("Could not load durable emergency push contacts from Firestore.")
+            raise HTTPException(status_code=503, detail="Emergency contact storage is temporarily unavailable. Please retry.")
+    else:
+        if APP_ENV != "development":
+            raise HTTPException(status_code=503, detail="Persistent emergency contact storage is not configured.")
+        with db_connection() as db:
+            rows = db.execute(
+                """SELECT i.invite_id, i.contact_name, i.created_at, i.expires_at,
+                          COUNT(d.device_id) AS device_count, MAX(d.last_seen_at) AS last_seen_at
+                   FROM emergency_push_invites i
+                   LEFT JOIN emergency_push_devices d
+                     ON d.invite_id = i.invite_id AND d.active = 1
+                   WHERE i.user_id = ? AND i.revoked_at IS NULL
+                   GROUP BY i.invite_id ORDER BY i.created_at DESC""",
+                (user_id,),
+            ).fetchall()
+        contacts = []
+        for row in rows:
+            count = int(row["device_count"])
+            contacts.append({
+                "id": row["invite_id"], "contact_name": row["contact_name"],
+                "created_at": row["created_at"], "expires_at": row["expires_at"],
+                "device_count": count, "last_seen_at": row["last_seen_at"],
+                "status": "connected" if count else ("expired" if parse_iso(row["expires_at"]) <= now else "pending"),
+            })
     return {"contacts": contacts, "push_configured": firebase_push_configured()}
 
 
 @app.post("/api/emergency-contacts/invites")
-def create_emergency_contact_invite(
-    payload: EmergencyPushInviteIn,
-    user_id: str = Depends(current_user_id),
-):
+def create_emergency_contact_invite(payload: EmergencyPushInviteIn, user_id: str = Depends(current_user_id)):
     if not firebase_push_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Firebase Web Push is not configured. Add Firebase web app settings, the Admin service account and FIREBASE_WEB_VAPID_KEY first.",
-        )
+        raise HTTPException(status_code=503, detail="Firebase Web Push is not configured. Add Firebase web app settings, the Admin service account and FIREBASE_WEB_VAPID_KEY first.")
+    if FIRESTORE_CLIENT is None and APP_ENV != "development":
+        raise HTTPException(status_code=503, detail="Persistent emergency contact storage is not configured.")
     contact_name = payload.contact_name.strip()
     if len(contact_name) < 2:
         raise HTTPException(status_code=422, detail="Enter a contact name with at least 2 characters.")
     now = utc_now()
     expires_at = now + timedelta(days=EMERGENCY_INVITE_TTL_DAYS)
+    invite_token = secrets.token_urlsafe(40)
+    invite_id = uuid.uuid4().hex
+    token_hash = emergency_push_invite_token_hash(invite_token)
+    invite_data = {
+        "invite_id": invite_id, "user_id": user_id, "contact_name": contact_name,
+        "token_hash": token_hash, "created_at": iso(now),
+        "expires_at": iso(expires_at), "revoked_at": None,
+    }
 
-    with db_connection() as db:
-        active_count = db.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM emergency_push_invites
-            WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
-            """,
-            (user_id, iso(now)),
-        ).fetchone()["total"]
-        if int(active_count) >= MAX_EMERGENCY_CONTACTS:
-            raise HTTPException(status_code=429, detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active emergency contacts.")
-
-        invite_token = secrets.token_urlsafe(40)
-        invite_id = uuid.uuid4().hex
-        db.execute(
-            """
-            INSERT INTO emergency_push_invites (
-                invite_id, user_id, contact_name, token_hash, created_at, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                invite_id, user_id, contact_name,
-                hashlib.sha256(invite_token.encode("utf-8")).hexdigest(),
-                iso(now), iso(expires_at),
-            ),
-        )
+    if FIRESTORE_CLIENT is not None:
+        try:
+            sync_local_emergency_push_state_to_firestore(user_id)
+            current_invites = emergency_push_firestore_read_user_collection(user_id, "emergency_push_invites")
+            active_count = sum(
+                1 for item in current_invites
+                if not item.get("revoked_at") and parse_iso(str(item["expires_at"])) > now
+            )
+            if active_count >= MAX_EMERGENCY_CONTACTS:
+                raise HTTPException(status_code=429, detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active emergency contacts.")
+            emergency_push_firestore_write_user_document(user_id, "emergency_push_invites", invite_id, invite_data)
+            try:
+                emergency_push_firestore_write_global_document(
+                    "emergency_push_invite_tokens", token_hash,
+                    {"user_id": user_id, "invite_id": invite_id},
+                )
+            except Exception:
+                emergency_push_firestore_delete_user_document(user_id, "emergency_push_invites", invite_id)
+                raise
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Could not save emergency push invitation in Firestore.")
+            raise HTTPException(status_code=503, detail="Emergency contact invitation could not be saved safely. Please retry.")
+    else:
+        with db_connection() as db:
+            active_count = db.execute(
+                """SELECT COUNT(*) AS total FROM emergency_push_invites
+                   WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?""",
+                (user_id, iso(now)),
+            ).fetchone()["total"]
+            if int(active_count) >= MAX_EMERGENCY_CONTACTS:
+                raise HTTPException(status_code=429, detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active emergency contacts.")
+            db.execute(
+                """INSERT INTO emergency_push_invites
+                   (invite_id, user_id, contact_name, token_hash, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (invite_id, user_id, contact_name, token_hash, iso(now), iso(expires_at)),
+            )
+    try:
+        with db_connection() as db:
+            db.execute(
+                """INSERT INTO emergency_push_invites
+                   (invite_id, user_id, contact_name, token_hash, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(invite_id) DO NOTHING""",
+                (invite_id, user_id, contact_name, token_hash, iso(now), iso(expires_at)),
+            )
+    except Exception:
+        logger.exception("Could not update local emergency push invite cache.")
     return {
         "success": True, "id": invite_id, "contact_name": contact_name,
         "invite_token": invite_token, "expires_at": iso(expires_at),
@@ -6172,96 +6465,192 @@ def create_emergency_contact_invite(
 
 @app.post("/api/emergency-contacts/register")
 def register_emergency_contact_device(payload: EmergencyPushRegisterIn):
-    """Accept a public invite and bind this browser's FCM token to its owner."""
-    token_hash = hashlib.sha256(payload.invite_token.encode("utf-8")).hexdigest()
-    now = utc_now()
-    now_text = iso(now)
+    """Accept a public invite and bind this browser's FCM installation to its owner."""
+    token_hash = emergency_push_invite_token_hash(payload.invite_token)
+    now, now_text = utc_now(), iso(utc_now())
+    device_name = payload.device_name.strip()[:120] or "Browser device"
+    if FIRESTORE_CLIENT is not None:
+        device_id, old_device = None, None
+        try:
+            token_link = emergency_push_firestore_read_global_document("emergency_push_invite_tokens", token_hash)
+            if not token_link:
+                raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
+            user_id, invite_id = str(token_link.get("user_id") or ""), str(token_link.get("invite_id") or "")
+            if not user_id or not invite_id:
+                raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
+            invite = emergency_push_firestore_read_user_document(user_id, "emergency_push_invites", invite_id)
+            if not invite or invite.get("token_hash") != token_hash or invite.get("revoked_at"):
+                raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
+            if parse_iso(str(invite["expires_at"])) <= now:
+                raise HTTPException(status_code=410, detail="This invitation has expired. Ask the NeuroSense user to create a new link.")
+            fid_hash = emergency_push_fid_hash(payload.fcm_fid)
+            fid_link = emergency_push_firestore_read_global_document("emergency_push_fid_links", fid_hash)
+            if fid_link and (fid_link.get("user_id") != user_id or fid_link.get("invite_id") != invite_id):
+                raise HTTPException(status_code=409, detail="This browser is already linked to another emergency contact.")
+            device_id = str((fid_link or {}).get("device_id") or fid_hash)
+            old_device = emergency_push_firestore_read_user_document(user_id, "emergency_push_devices", device_id)
+            if old_device and (old_device.get("invite_id") != invite_id or old_device.get("fcm_fid") != payload.fcm_fid):
+                raise HTTPException(status_code=409, detail="This browser is already linked to another emergency contact.")
+            device_rows = emergency_push_firestore_read_user_collection(user_id, "emergency_push_devices")
+            active_count = sum(
+                1 for item in device_rows
+                if item.get("active") and item.get("invite_id") == invite_id
+                and str(item.get("device_id") or item.get("document_id")) != device_id
+            )
+            if old_device is None and active_count >= MAX_DEVICES_PER_EMERGENCY_CONTACT:
+                raise HTTPException(status_code=429, detail=f"This invitation already has {MAX_DEVICES_PER_EMERGENCY_CONTACT} registered devices.")
+            device_data = {
+                "device_id": device_id, "invite_id": invite_id, "user_id": user_id,
+                "fcm_fid": payload.fcm_fid, "device_name": device_name,
+                "created_at": (old_device or {}).get("created_at") or now_text,
+                "last_seen_at": now_text, "active": True,
+            }
+            emergency_push_firestore_write_user_document(user_id, "emergency_push_devices", device_id, device_data)
+            try:
+                emergency_push_firestore_write_global_document(
+                    "emergency_push_fid_links", fid_hash,
+                    {"user_id": user_id, "invite_id": invite_id, "device_id": device_id},
+                )
+            except Exception:
+                if old_device is None:
+                    emergency_push_firestore_delete_user_document(user_id, "emergency_push_devices", device_id)
+                else:
+                    emergency_push_firestore_write_user_document(user_id, "emergency_push_devices", device_id, old_device)
+                raise
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Could not register emergency push device in Firestore.")
+            raise HTTPException(status_code=503, detail="Emergency contact registration could not be saved safely. Please retry.")
+        try:
+            with db_connection() as db:
+                db.execute("DELETE FROM emergency_push_devices WHERE fcm_fid = ?", (payload.fcm_fid,))
+                db.execute(
+                    """INSERT OR REPLACE INTO emergency_push_devices
+                       (device_id, invite_id, user_id, fcm_fid, device_name, created_at, last_seen_at, active)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+                    (device_id, invite_id, user_id, payload.fcm_fid, device_name, device_data["created_at"], now_text),
+                )
+        except Exception:
+            logger.exception("Could not update local emergency push device cache.")
+        return {"success": True, "contact_name": invite.get("contact_name", "Emergency contact"),
+                "message": "This browser is now registered to receive NeuroSense push alerts."}
+
+    if APP_ENV != "development":
+        raise HTTPException(status_code=503, detail="Persistent emergency contact storage is not configured.")
     with db_connection() as db:
         invite = db.execute(
-            """
-            SELECT invite_id, user_id, contact_name, expires_at
-            FROM emergency_push_invites
-            WHERE token_hash = ? AND revoked_at IS NULL
-            """,
+            """SELECT invite_id, user_id, contact_name, expires_at FROM emergency_push_invites
+               WHERE token_hash = ? AND revoked_at IS NULL""",
             (token_hash,),
         ).fetchone()
         if invite is None:
             raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
         if parse_iso(invite["expires_at"]) <= now:
             raise HTTPException(status_code=410, detail="This invitation has expired. Ask the NeuroSense user to create a new link.")
-
-        existing = db.execute(
-            "SELECT invite_id, user_id FROM emergency_push_devices WHERE fcm_fid = ?",
-            (payload.fcm_fid,),
-        ).fetchone()
+        existing = db.execute("SELECT invite_id, user_id FROM emergency_push_devices WHERE fcm_fid = ?", (payload.fcm_fid,)).fetchone()
         if existing and (existing["invite_id"] != invite["invite_id"] or existing["user_id"] != invite["user_id"]):
             raise HTTPException(status_code=409, detail="This browser is already linked to another emergency contact.")
-
         if existing is None:
-            device_count = db.execute(
+            count = db.execute(
                 "SELECT COUNT(*) AS total FROM emergency_push_devices WHERE invite_id = ? AND active = 1",
                 (invite["invite_id"],),
             ).fetchone()["total"]
-            if int(device_count) >= MAX_DEVICES_PER_EMERGENCY_CONTACT:
+            if int(count) >= MAX_DEVICES_PER_EMERGENCY_CONTACT:
                 raise HTTPException(status_code=429, detail=f"This invitation already has {MAX_DEVICES_PER_EMERGENCY_CONTACT} registered devices.")
             db.execute(
-                """
-                INSERT INTO emergency_push_devices (
-                    device_id, invite_id, user_id, fcm_fid, device_name,
-                    created_at, last_seen_at, active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-                """,
-                (
-                    uuid.uuid4().hex, invite["invite_id"], invite["user_id"],
-                    payload.fcm_fid, payload.device_name.strip()[:120] or "Browser device",
-                    now_text, now_text,
-                ),
+                """INSERT INTO emergency_push_devices
+                   (device_id, invite_id, user_id, fcm_fid, device_name, created_at, last_seen_at, active)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+                (uuid.uuid4().hex, invite["invite_id"], invite["user_id"], payload.fcm_fid, device_name, now_text, now_text),
             )
         else:
-            db.execute(
-                """
-                UPDATE emergency_push_devices
-                SET device_name = ?, last_seen_at = ?, active = 1
-                WHERE fcm_fid = ?
-                """,
-                (payload.device_name.strip()[:120] or "Browser device", now_text, payload.fcm_fid),
-            )
-    return {
-        "success": True,
-        "contact_name": invite["contact_name"],
-        "message": "This browser is now registered to receive NeuroSense push alerts.",
-    }
+            db.execute("UPDATE emergency_push_devices SET device_name = ?, last_seen_at = ?, active = 1 WHERE fcm_fid = ?",
+                       (device_name, now_text, payload.fcm_fid))
+    return {"success": True, "contact_name": invite["contact_name"],
+            "message": "This browser is now registered to receive NeuroSense push alerts."}
 
 
 @app.post("/api/emergency-contacts/unregister")
 def unregister_emergency_contact_device(payload: EmergencyPushUnregisterIn):
-    """Remove an FID when Firebase reports this browser was unregistered."""
-    token_hash = hashlib.sha256(payload.invite_token.encode("utf-8")).hexdigest()
+    token_hash = emergency_push_invite_token_hash(payload.invite_token)
+    if FIRESTORE_CLIENT is not None:
+        try:
+            token_link = emergency_push_firestore_read_global_document("emergency_push_invite_tokens", token_hash)
+            if not token_link:
+                raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
+            user_id, invite_id = str(token_link.get("user_id") or ""), str(token_link.get("invite_id") or "")
+            invite = emergency_push_firestore_read_user_document(user_id, "emergency_push_invites", invite_id)
+            if not invite or invite.get("token_hash") != token_hash or invite.get("revoked_at"):
+                raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
+            fid_hash = emergency_push_fid_hash(payload.fcm_fid)
+            link = emergency_push_firestore_read_global_document("emergency_push_fid_links", fid_hash)
+            if not link or link.get("user_id") != user_id or link.get("invite_id") != invite_id:
+                return {"success": True, "removed": False}
+            device_id = str(link.get("device_id") or fid_hash)
+            device = emergency_push_firestore_read_user_document(user_id, "emergency_push_devices", device_id)
+            if device:
+                device["active"] = False
+                device["last_seen_at"] = iso(utc_now())
+                emergency_push_firestore_write_user_document(user_id, "emergency_push_devices", device_id, device)
+            emergency_push_firestore_delete_global_document("emergency_push_fid_links", fid_hash)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Could not unregister emergency push device from Firestore.")
+            raise HTTPException(status_code=503, detail="Emergency contact device could not be removed safely. Please retry.")
+        with db_connection() as db:
+            db.execute("DELETE FROM emergency_push_devices WHERE fcm_fid = ?", (payload.fcm_fid,))
+        return {"success": True, "removed": bool(device)}
+    if APP_ENV != "development":
+        raise HTTPException(status_code=503, detail="Persistent emergency contact storage is not configured.")
     with db_connection() as db:
         invite = db.execute(
-            """
-            SELECT invite_id
-            FROM emergency_push_invites
-            WHERE token_hash = ? AND revoked_at IS NULL
-            """,
+            "SELECT invite_id FROM emergency_push_invites WHERE token_hash = ? AND revoked_at IS NULL",
             (token_hash,),
         ).fetchone()
         if invite is None:
             raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
-        deleted = db.execute(
-            "DELETE FROM emergency_push_devices WHERE invite_id = ? AND fcm_fid = ?",
-            (invite["invite_id"], payload.fcm_fid),
-        )
+        deleted = db.execute("DELETE FROM emergency_push_devices WHERE invite_id = ? AND fcm_fid = ?",
+                             (invite["invite_id"], payload.fcm_fid))
     return {"success": True, "removed": deleted.rowcount > 0}
 
 
 @app.delete("/api/emergency-contacts/{invite_id}")
 def revoke_emergency_contact(invite_id: str, user_id: str = Depends(current_user_id)):
+    if FIRESTORE_CLIENT is not None:
+        try:
+            invite = emergency_push_firestore_read_user_document(user_id, "emergency_push_invites", invite_id)
+            if not invite:
+                raise HTTPException(status_code=404, detail="Emergency contact was not found.")
+            invite["revoked_at"] = invite.get("revoked_at") or iso(utc_now())
+            emergency_push_firestore_write_user_document(user_id, "emergency_push_invites", invite_id, invite)
+            token_hash = str(invite.get("token_hash") or "")
+            if token_hash:
+                emergency_push_firestore_delete_global_document("emergency_push_invite_tokens", token_hash)
+            for device in emergency_push_firestore_read_user_collection(user_id, "emergency_push_devices"):
+                if device.get("invite_id") != invite_id:
+                    continue
+                device_id, fid = str(device.get("device_id") or device.get("document_id") or ""), str(device.get("fcm_fid") or "")
+                device["active"] = False
+                emergency_push_firestore_write_user_document(user_id, "emergency_push_devices", device_id, device)
+                if fid:
+                    fid_hash = emergency_push_fid_hash(fid)
+                    link = emergency_push_firestore_read_global_document("emergency_push_fid_links", fid_hash)
+                    if link and link.get("user_id") == user_id and link.get("invite_id") == invite_id:
+                        emergency_push_firestore_delete_global_document("emergency_push_fid_links", fid_hash)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Could not revoke emergency contact in Firestore.")
+            raise HTTPException(status_code=503, detail="Emergency contact could not be revoked completely. Please retry.")
+        with db_connection() as db:
+            db.execute("DELETE FROM emergency_push_invites WHERE invite_id = ? AND user_id = ?", (invite_id, user_id))
+        return {"success": True}
+    if APP_ENV != "development":
+        raise HTTPException(status_code=503, detail="Persistent emergency contact storage is not configured.")
     with db_connection() as db:
-        deleted = db.execute(
-            "DELETE FROM emergency_push_invites WHERE invite_id = ? AND user_id = ?",
-            (invite_id, user_id),
-        )
+        deleted = db.execute("DELETE FROM emergency_push_invites WHERE invite_id = ? AND user_id = ?", (invite_id, user_id))
         if deleted.rowcount == 0:
             raise HTTPException(status_code=404, detail="Emergency contact was not found.")
     return {"success": True}
@@ -6271,24 +6660,37 @@ def revoke_emergency_contact(invite_id: str, user_id: str = Depends(current_user
 def test_emergency_contact_push(user_id: str = Depends(current_user_id)):
     if not firebase_push_configured():
         raise HTTPException(status_code=503, detail="Firebase Web Push is not configured on the server.")
-    with db_connection() as db:
-        rows = db.execute(
-            """
-            SELECT d.fcm_fid
-            FROM emergency_push_devices d
-            JOIN emergency_push_invites i ON i.invite_id = d.invite_id
-            WHERE d.user_id = ? AND d.active = 1
-              AND i.revoked_at IS NULL
-            """,
-            (user_id,),
-        ).fetchall()
-    fids = [row["fcm_fid"] for row in rows]
+    if FIRESTORE_CLIENT is not None:
+        try:
+            sync_local_emergency_push_state_to_firestore(user_id)
+            invites = emergency_push_firestore_read_user_collection(user_id, "emergency_push_invites")
+            active_invites = {
+                str(item.get("invite_id") or item.get("document_id"))
+                for item in invites if not item.get("revoked_at")
+            }
+            devices = emergency_push_firestore_read_user_collection(user_id, "emergency_push_devices")
+            fids = list(dict.fromkeys(
+                str(item["fcm_fid"]) for item in devices
+                if item.get("active") and item.get("invite_id") in active_invites and item.get("fcm_fid")
+            ))
+        except Exception:
+            logger.exception("Could not load emergency push recipients from Firestore.")
+            raise HTTPException(status_code=503, detail="Emergency contact storage is temporarily unavailable. Please retry.")
+    else:
+        if APP_ENV != "development":
+            raise HTTPException(status_code=503, detail="Persistent emergency contact storage is not configured.")
+        with db_connection() as db:
+            rows = db.execute(
+                """SELECT d.fcm_fid FROM emergency_push_devices d
+                   JOIN emergency_push_invites i ON i.invite_id = d.invite_id
+                   WHERE d.user_id = ? AND d.active = 1 AND i.revoked_at IS NULL""",
+                (user_id,),
+            ).fetchall()
+        fids = [row["fcm_fid"] for row in rows]
     if not fids:
         raise HTTPException(status_code=409, detail="No emergency contact has accepted an invitation yet.")
-
     result, sent_count = send_emergency_push_message(
-        fids,
-        "NeuroSense test notification",
+        fids, "NeuroSense test notification",
         "Push notifications are connected. This is a test, not an emergency alert.",
     )
     if result == "not_configured":
