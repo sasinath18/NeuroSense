@@ -1030,3 +1030,71 @@ def test_personalization_profile_deduplicates_local_and_cloud_sensor_readings(cl
     assert payload["personal_reference"]["heart_rate_bpm"] == 77.5
     assert payload["days_observed"] == 1
     assert payload["ready_for_preliminary_profile"] is False
+
+
+def test_recovery_history_rebuilds_cloud_only_before_after_comparison(client, monkeypatch):
+    """Recovery comparison must survive a Render restart with Firestore-only data."""
+    now = datetime.now(timezone.utc)
+    started = now - timedelta(seconds=120)
+    completed = now - timedelta(seconds=60)
+    before_at = started - timedelta(seconds=10)
+    after_at = completed + timedelta(seconds=10)
+
+    cloud_session = {
+        "session_id": "cloud-recovery-session",
+        "user_id": "cloud-recovery-user",
+        "activity": "breathing",
+        "started_at": started.isoformat(),
+        "completed_at": completed.isoformat(),
+        "duration_seconds": 60,
+        "completed": True,
+    }
+    cloud_readings = [
+        {
+            "id": "cloud-before-reading",
+            "timestamp": before_at.isoformat(),
+            "heart_rate_bpm": 84,
+            "hrv_ms": 30,
+            "gsr_raw": 2000,
+            "skin_temperature_c": 33.4,
+            "source": "wearable",
+            "signal_quality": "good",
+        },
+        {
+            "id": "cloud-after-reading",
+            "timestamp": after_at.isoformat(),
+            "heart_rate_bpm": 76,
+            "hrv_ms": 39,
+            "gsr_raw": 1650,
+            "skin_temperature_c": 33.1,
+            "source": "wearable",
+            "signal_quality": "good",
+        },
+    ]
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", "cloud-recovery-user", "recovery_sessions"):
+            return [cloud_session]
+        if path == ("users", "cloud-recovery-user", "sensor_readings"):
+            return cloud_readings
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+
+    response = client.get(
+        "/api/recovery/history",
+        headers=auth("cloud-recovery-user"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    recovered = payload["sessions"][0]
+    assert recovered["session_id"] == "cloud-recovery-session"
+    comparison = recovered["comparison"]
+    assert comparison["heart_rate_bpm"]["before"] == 84
+    assert comparison["heart_rate_bpm"]["after"] == 76
+    assert comparison["heart_rate_bpm"]["change"] == -8
+    assert comparison["hrv_ms"]["change"] == 9
+    assert comparison["gsr_raw"]["change"] == -350
+    assert comparison["skin_temperature_c"]["change"] == -0.3
