@@ -1,7 +1,9 @@
 """Tests for the nine-phase NeuroSense recovery and personalization features."""
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -123,6 +125,59 @@ def test_firebase_rules_deploy_workflow_is_manual_and_project_scoped():
     assert "firestore.googleapis.com" in readme
     assert "firebasestorage.googleapis.com" in readme
     assert "30-day recovery period" in readme
+
+
+def test_dashboard_api_request_paths_are_registered_by_backend():
+    """Catch dashboard/backend route drift for literal API paths and URL templates."""
+    frontend_path = api.BASE_DIR / "frontend" / "index.html"
+    frontend = frontend_path.read_text(encoding="utf-8")
+
+    call_pattern = re.compile(
+        r"""apiRequest\\s*\\(\\s*(?:"([^"]+)"|'([^']+)'|\x60([^\x60]+)\x60)\\s*[,)]"""
+    )
+    raw_paths = [
+        next(group for group in match.groups() if group is not None)
+        for match in call_pattern.finditer(frontend)
+    ]
+    assert raw_paths, "No dashboard API request paths were discovered."
+
+    registered_paths = {
+        str(route.path).rstrip("/") or "/"
+        for route in api.app.routes
+        if getattr(route, "path", None)
+    }
+
+    missing = []
+    for raw_path in raw_paths:
+        path = urlsplit(raw_path).path
+        path = re.sub(r"\\$\\{[^}]+\\}", "{param}", path)
+        path = path.rstrip("/") or "/"
+        segments = path.split("/")
+
+        matched = False
+        for route_path in registered_paths:
+            route_segments = route_path.split("/")
+            if len(segments) != len(route_segments):
+                continue
+            if all(
+                route_segment == request_segment
+                or (
+                    route_segment.startswith("{")
+                    and route_segment.endswith("}")
+                    and bool(request_segment)
+                )
+                for request_segment, route_segment in zip(segments, route_segments)
+            ):
+                matched = True
+                break
+
+        if not matched:
+            missing.append(raw_path)
+
+    assert not missing, (
+        "Dashboard calls API paths that are not registered by FastAPI: "
+        + ", ".join(sorted(set(missing)))
+    )
 
 
 def test_music_mode_does_not_change_haptic_preference(client):
