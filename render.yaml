@@ -44,6 +44,10 @@ services:
         value: /app/ml_model/face_valence/neurosense_face_valence_rf.joblib
       - key: NEUROSENSE_FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED
         value: "false"
+      - key: NEUROSENSE_FACE_VALENCE_FEATURE_PARITY_VERIFIED
+        value: "false"
+      - key: NEUROSENSE_FACE_VALENCE_NEW_USER_VALIDATION_VERIFIED
+        value: "false"
       - key: OPENFACE_ROOT
         value: /opt/OpenFace
       - key: OPENFACE_FEATURE_EXTRACTION_PATH
