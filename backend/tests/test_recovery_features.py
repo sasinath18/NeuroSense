@@ -113,6 +113,12 @@ def test_firebase_rules_deploy_workflow_is_manual_and_project_scoped():
     assert "--only firestore:rules,storage" in workflow
     assert "NEUROSENSE_FIREBASE_RULES_DEPLOY_CREDENTIALS_JSON" in workflow
 
+    readme = (api.BASE_DIR / "README.md").read_text(encoding="utf-8")
+    assert "roles/firebaserules.admin" in readme
+    assert "roles/serviceusage.serviceUsageViewer" in readme
+    assert "firebaserules.googleapis.com" in readme
+    assert "firebasestorage.googleapis.com" in readme
+
 
 def test_music_mode_does_not_change_haptic_preference(client):
     enabled = client.put(
