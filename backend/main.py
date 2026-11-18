@@ -4977,9 +4977,10 @@ def personalization_profile(
 ):
     since = iso(utc_now() - timedelta(days=3))
     with db_connection() as db:
-        rows = db.execute(
+        local_sensor_rows = db.execute(
             """
-            SELECT timestamp, heart_rate_bpm, hrv_ms, gsr_raw
+            SELECT id, timestamp, heart_rate_bpm, hrv_ms, gsr_raw,
+                   source, signal_quality
             FROM sensor_readings
             WHERE user_id = ? AND source = 'wearable'
               AND signal_quality IN ('good', 'moderate')
@@ -4988,12 +4989,103 @@ def personalization_profile(
             """,
             (user_id, since),
         ).fetchall()
+
+        local_blink_rows = db.execute(
+            """
+            SELECT summary_id, blink_count, duration_seconds,
+                   blinks_per_minute, recorded_at
+            FROM blink_summaries
+            WHERE user_id = ? AND recorded_at >= ?
+            ORDER BY recorded_at ASC
+            """,
+            (user_id, since),
+        ).fetchall()
+
+    # Render's filesystem is ephemeral. Rebuild the learning window from
+    # Firestore as well as SQLite, deduplicating by the stable reading ID.
+    sensor_by_id = {
+        str(row["id"]): dict(row)
+        for row in local_sensor_rows
+        if row["id"]
+    }
+    cloud_sensor_rows = firestore_read_collection(
+        ("users", user_id, "sensor_readings"),
+        limit=500,
+        order_by="timestamp",
+    )
+    for item in cloud_sensor_rows:
+        reading_id = str(item.get("id") or item.get("document_id") or "")
+        timestamp = str(item.get("timestamp") or "")
+        if (
+            not reading_id
+            or not timestamp
+            or timestamp < since
+            or str(item.get("source") or "") != "wearable"
+            or str(item.get("signal_quality") or "") not in {"good", "moderate"}
+        ):
+            continue
+        sensor_by_id.setdefault(reading_id, item)
+
+    rows = sorted(
+        sensor_by_id.values(),
+        key=lambda item: str(item.get("timestamp") or ""),
+    )
     day_keys = {str(row["timestamp"])[:10] for row in rows}
     def med(field):
         return median_or_none([
-            float(row[field]) for row in rows if row[field] is not None
+            float(row[field]) for row in rows if row.get(field) is not None
         ])
     days = len(day_keys)
+
+    # Build a separate descriptive blink reference from completed scans.
+    # Blink rate is not treated as a stress label and is not fused into the
+    # wearable Random Forest prediction.
+    blink_by_id = {
+        str(row["summary_id"]): dict(row)
+        for row in local_blink_rows
+        if row["summary_id"]
+    }
+    cloud_blink_rows = firestore_read_collection(
+        ("users", user_id, "blink_summaries"),
+        limit=200,
+        order_by="recorded_at",
+    )
+    for item in cloud_blink_rows:
+        summary_id = str(item.get("summary_id") or item.get("document_id") or "")
+        recorded_at = str(item.get("recorded_at") or "")
+        if not summary_id or not recorded_at or recorded_at < since:
+            continue
+        blink_by_id.setdefault(summary_id, item)
+
+    blink_summaries = sorted(
+        blink_by_id.values(),
+        key=lambda item: str(item.get("recorded_at") or ""),
+    )
+    blink_day_keys = {
+        str(item.get("recorded_at") or "")[:10]
+        for item in blink_summaries
+        if item.get("recorded_at")
+    }
+    blink_rates = []
+    for item in blink_summaries:
+        try:
+            rate = float(item.get("blinks_per_minute"))
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(rate) and rate >= 0:
+            blink_rates.append(rate)
+    blink_days = len(blink_day_keys)
+    blink_count = len(blink_summaries)
+    blink_reference = {
+        "summary_count": blink_count,
+        "days_observed": blink_days,
+        "median_blinks_per_minute": median_or_none(blink_rates),
+        "ready_for_preliminary_reference": blink_days >= 2 and blink_count >= 2,
+        "recommended_reference_ready": blink_days >= 3 and blink_count >= 3,
+        "notice": (
+            "Descriptive camera blink reference only; it is not used as a stress score."
+        ),
+    }
     with db_connection() as db:
         label_rows = db.execute(
             "SELECT label, COUNT(*) AS total FROM reading_feedback WHERE user_id = ? GROUP BY label",
@@ -5038,7 +5130,8 @@ def personalization_profile(
             "hrv_ms": med("hrv_ms"),
             "gsr_raw": med("gsr_raw"),
         },
-        "notice": "Two distinct days allow a preliminary personal reference; three or more days are recommended. This is baseline analysis, not a newly trained or clinically validated model.",
+        "blink_reference": blink_reference,
+        "notice": "Two distinct days allow a preliminary wearable reference; three or more days are recommended. Camera blink history is reported separately and is not used to infer stress. These are descriptive references, not a newly trained or clinically validated model.",
     }
 
 
