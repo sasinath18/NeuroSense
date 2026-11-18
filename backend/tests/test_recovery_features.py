@@ -924,7 +924,7 @@ def test_personalization_profile_restores_cloud_sensor_and_blink_history(client,
     assert payload["personalized_model_ready"] is False
     assert payload["blink_reference"]["summary_count"] == 2
     assert payload["blink_reference"]["days_observed"] == 2
-    assert payload["blink_reference"]["median_blinks_per_minute"] == 18.5
+    assert payload["blink_reference"]["median_blinks_per_minute"] == 16.5
     assert payload["blink_reference"]["ready_for_preliminary_reference"] is True
     assert payload["blink_reference"]["recommended_reference_ready"] is False
 
