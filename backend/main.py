@@ -163,6 +163,30 @@ FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED = (
     in {"1", "true", "yes", "on"}
 )
 
+# Enabling the experiment is not sufficient. Live inference stays unavailable
+# until training-to-live feature parity and separate new-user validation are
+# completed and explicitly recorded by the maintainer.
+FACE_VALENCE_FEATURE_PARITY_VERIFIED = (
+    os.getenv("NEUROSENSE_FACE_VALENCE_FEATURE_PARITY_VERIFIED", "false")
+    .strip()
+    .lower()
+    in {"1", "true", "yes", "on"}
+)
+FACE_VALENCE_NEW_USER_VALIDATION_VERIFIED = (
+    os.getenv("NEUROSENSE_FACE_VALENCE_NEW_USER_VALIDATION_VERIFIED", "false")
+    .strip()
+    .lower()
+    in {"1", "true", "yes", "on"}
+)
+
+
+def face_valence_live_inference_enabled() -> bool:
+    return (
+        FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED
+        and FACE_VALENCE_FEATURE_PARITY_VERIFIED
+        and FACE_VALENCE_NEW_USER_VALIDATION_VERIFIED
+    )
+
 
 # ============================================================
 # 2. COMMON HELPERS
@@ -3033,7 +3057,7 @@ def system_status():
 
         "face_scan_analysis": "browser_local_landmarks; AFFEC_webcam_inference_validation_pending",
         "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
-        "face_valence_webcam_experiment_enabled": FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED,
+        "face_valence_webcam_experiment_enabled": face_valence_live_inference_enabled(),
         "timestamp": iso()
     }
 
@@ -5900,7 +5924,7 @@ def face_scan_status():
         "/opt/OpenFace/build/bin/FeatureExtraction",
     ))
     webcam_inference_available = (
-        FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED
+        face_valence_live_inference_enabled()
         and FACE_VALENCE_MODEL is not None
         and openface_executable.is_file()
     )
@@ -5949,22 +5973,40 @@ def face_valence_status():
         "OPENFACE_FEATURE_EXTRACTION_PATH",
         "/opt/OpenFace/build/bin/FeatureExtraction",
     ))
+    parity_verified = FACE_VALENCE_FEATURE_PARITY_VERIFIED
+    new_user_validation_verified = FACE_VALENCE_NEW_USER_VALIDATION_VERIFIED
+    effective_enabled = face_valence_live_inference_enabled()
     return {
         "model_loaded": FACE_VALENCE_MODEL is not None,
         "openface_available": openface_executable.is_file(),
-        "webcam_experiment_enabled": FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED,
-        "requested_capture_seconds": 4.8,
-        "training_window_context": (
-            "stimulus-locked video phase; variable duration, median 4.61 seconds"
+        "webcam_experiment_requested": FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED,
+        "webcam_experiment_enabled": effective_enabled,
+        "inference_available": bool(
+            effective_enabled
+            and FACE_VALENCE_MODEL is not None
+            and openface_executable.is_file()
         ),
+        "feature_parity_verified": parity_verified,
+        "new_user_validation_verified": new_user_validation_verified,
+        "requested_capture_seconds": 4.8,
+        "live_window_context": "first 4.8 seconds of the submitted clip",
+        "training_window_context": (
+            "stimulus-locked video phase from video onset to last_frame_video; "
+            "variable duration (metadata median 4.61 seconds, observed range "
+            "3.53 to approximately 5.3 seconds)"
+        ),
+        "window_alignment_verified": False,
         "minimum_valid_frames": 40,
         "confidence_threshold": 0.8,
         "feature_count": 50,
         "target": "beh_f_emotion_v",
         "interpretation": "felt_valence_only_not_stress",
-        "new_user_validation": False,
-        "cross_validation_mean_fold_r2": 0.08,
-        "high_low_valence_balanced_accuracy": 0.60,
+        "cross_validation_mean_fold_r2": 0.0795,
+        "high_low_valence_balanced_accuracy": 0.5971,
+        "validation_note": (
+            "Offline subject-wise cross-validation only; no new-user validation. "
+            "Live-window numerical parity is not yet verified."
+        ),
     }
 
 
@@ -5973,18 +6015,18 @@ async def predict_face_valence(
     video: UploadFile = File(...),
     user_id: str = Depends(current_user_id),
 ):
-    """Run explicit 4.8-second OpenFace felt-valence inference for one user."""
+    """Run the gated experimental OpenFace felt-valence inference for one user."""
     del user_id  # Authentication gates access; no raw video or identity is persisted.
 
-    if not FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED:
+    if not face_valence_live_inference_enabled():
         raise HTTPException(
             status_code=503,
             detail=(
-                "AFFEC webcam inference is disabled pending validation. The "
-                "training data used stimulus-locked video-phase windows with "
-                "variable duration, not arbitrary 4.8-second webcam selfies. "
-                "Complete numerical feature parity and new-user validation "
-                "before enabling this research experiment."
+                "AFFEC webcam inference is disabled. Live inference requires "
+                "explicit experiment opt-in, verified training-to-live feature "
+                "parity, and completed new-user validation. The saved model "
+                "was trained on variable stimulus-locked video-phase windows, "
+                "not arbitrary 4.8-second webcam clips."
             ),
         )
 
