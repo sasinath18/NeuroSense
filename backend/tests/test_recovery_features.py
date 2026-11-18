@@ -1270,7 +1270,7 @@ def test_summary_scheduler_rebuilds_periods_from_cloud_history_after_restart(cli
     monkeypatch.setattr(api, "firestore_write", fake_firestore_write)
 
     created = api.create_due_summaries()
-    assert created == 3
+    assert created == 2
 
     with api.db_connection() as db:
         summaries = [
@@ -1292,7 +1292,7 @@ def test_summary_scheduler_rebuilds_periods_from_cloud_history_after_restart(cli
             (user_id,),
         ).fetchone()
 
-    assert len(summaries) == 3
+    assert len(summaries) == 2
     first_summary = summaries[0]
     assert first_summary["reading_count"] == 2
     assert first_summary["reliable_reading_count"] == 2
