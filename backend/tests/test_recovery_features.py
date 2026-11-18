@@ -1481,3 +1481,71 @@ def test_haptic_nudge_can_use_three_cloud_backed_readings_after_restart(client, 
     assert writes[0][0] == ("users", user_id, "haptic_commands")
     assert writes[0][2]["command_id"] == result["command_id"]
     assert writes[0][2]["duration_ms"] == 300
+
+
+def test_high_stress_prediction_dispatches_automatic_emergency_push(client, monkeypatch):
+    """A high-probability wearable prediction must invoke the push-alert policy."""
+    user_id = "automatic-push-dispatch-user"
+    calls = []
+
+    class HighStressModel:
+        classes_ = [0, 1]
+
+        def predict_proba(self, _matrix):
+            return api.np.asarray([[0.08, 0.92]], dtype=float)
+
+    monkeypatch.setattr(api, "STRESS_MODEL", HighStressModel())
+    monkeypatch.setattr(
+        api,
+        "baseline_for_user",
+        lambda _user_id: {
+            "heart_rate_bpm": 70.0,
+            "hrv_ms": 42.0,
+            "gsr_raw": 1500.0,
+            "skin_temperature_c": 33.0,
+        },
+    )
+    monkeypatch.setattr(api, "firestore_write", lambda *_args, **_kwargs: "synced")
+    monkeypatch.setattr(
+        api,
+        "maybe_send_emergency_telegram_alert",
+        lambda *_args, **_kwargs: "not_configured",
+    )
+    monkeypatch.setattr(
+        api,
+        "maybe_send_emergency_push_alert",
+        lambda received_user, probability: (
+            calls.append((received_user, probability)) or "sent"
+        ),
+    )
+
+    reading = {
+        "id": "automatic-push-dispatch-reading",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "heart_rate_bpm": 98.0,
+        "hrv_ms": 24.0,
+        "gsr_raw": 2200,
+        "skin_temperature_c": 33.8,
+        "signal_quality": "good",
+        "source": "wearable",
+    }
+
+    result = api.predict_stress(user_id, reading)
+
+    assert result["status"] == "prediction_available"
+    assert result["stress_probability"] == 0.92
+    assert result["push_alert"] == "sent"
+    assert calls == [(user_id, 0.92)]
+
+    with api.db_connection() as db:
+        event = db.execute(
+            """
+            SELECT reading_id, stress_probability
+            FROM high_stress_events
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    assert event is not None
+    assert event["reading_id"] == reading["id"]
+    assert event["stress_probability"] == 0.92
