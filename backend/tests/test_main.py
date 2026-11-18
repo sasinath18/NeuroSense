@@ -1,5 +1,5 @@
-import json
 """
+
 NeuroSense - Backend API Tests
 
 Run from the project root:
@@ -8,7 +8,7 @@ Run from the project root:
 Tests use an isolated temporary SQLite database. They do not modify
 the developer's local NeuroSense database or require real hardware.
 """
-
+\nimport json\n
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -2635,8 +2635,8 @@ def test_emergency_push_cloud_invite_registration_and_revocation_survive_sqlite_
     }
     stored_invite = user_docs[(user_id, "emergency_push_invites", invite["id"])]
     assert stored_invite["token_hash"] == token_hash
-    assert invite["invite_token"] not in json.dumps(user_docs)
-    assert invite["invite_token"] not in json.dumps(global_docs)
+    assert invite["invite_token"] not in json.dumps(list(user_docs.items()))
+    assert invite["invite_token"] not in json.dumps(list(global_docs.items()))
 
     fid = "firebase-installation-" + ("p" * 24)
     registered = register_test_push_device(client, invite["invite_token"], fid)
