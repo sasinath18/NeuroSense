@@ -123,6 +123,23 @@ account limited to the two roles above. Firebase CLI deployment overwrites the c
 rules currently published in the Firebase Console, so keep the repository rule files as the
 source of truth.
 
+### Automated rules verification
+
+The repository CI also runs the Firestore and Storage rules against the Firebase Local Emulator
+Suite using the `demo-neurosense-rules` demo project. The tests exercise unauthenticated and
+authenticated client reads, writes, uploads and deletes and expect every direct client request to
+be denied. This is an emulator test only; it does not deploy or modify production Firebase rules.
+
+Run the same check locally (Node.js 22 and Java 21 are required):
+
+```bash
+npm install --prefix tests/firebase-rules --no-audit --no-fund
+npx --yes firebase-tools@15.36.0 emulators:exec \
+  --only firestore,storage \
+  --project demo-neurosense-rules \
+  "npm --prefix tests/firebase-rules test"
+```
+
 These rules are intentionally deny-all for untrusted clients. Do not add direct client access
 unless the product architecture is deliberately changed and the rules are reviewed separately.
 
