@@ -130,7 +130,7 @@ Suite using the `demo-neurosense-rules` demo project. The tests exercise unauthe
 authenticated client reads, writes, uploads and deletes and expect every direct client request to
 be denied. This is an emulator test only; it does not deploy or modify production Firebase rules.
 
-Run the same check locally (Node.js 22 and Java 21 are required):
+Run the same check locally (Node.js 24.12.0+ and Java 21 are required):
 
 ```bash
 npm install --prefix tests/firebase-rules --no-audit --no-fund
