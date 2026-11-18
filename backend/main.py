@@ -5995,7 +5995,7 @@ def face_valence_status():
             "variable duration (metadata median 4.61 seconds, observed range "
             "3.53 to approximately 5.3 seconds)"
         ),
-        "window_alignment_verified": False,
+        "window_alignment_verified": parity_verified,
         "minimum_valid_frames": 40,
         "confidence_threshold": 0.8,
         "feature_count": 50,
