@@ -228,6 +228,42 @@ def median_or_none(values: list[float]) -> float | None:
     )
 
 
+def select_latest_sensor_reading(
+    local_reading,
+    cloud_readings: list[dict],
+    source: str | None = None,
+) -> dict | None:
+    """Select the newest valid timestamped reading from SQLite and Firestore."""
+    candidates = []
+    if local_reading is not None:
+        candidates.append(dict(local_reading))
+
+    candidates.extend(
+        dict(item) for item in cloud_readings if isinstance(item, dict)
+    )
+
+    newest = None
+    newest_timestamp = None
+    for item in candidates:
+        if source is not None and str(item.get("source") or "") != source:
+            continue
+
+        raw_timestamp = item.get("timestamp")
+        if not raw_timestamp:
+            continue
+
+        try:
+            parsed_timestamp = parse_iso(str(raw_timestamp))
+        except (TypeError, ValueError):
+            continue
+
+        if newest is None or parsed_timestamp > newest_timestamp:
+            newest = item
+            newest_timestamp = parsed_timestamp
+
+    return newest
+
+
 def row_dict(row: sqlite3.Row | None) -> dict | None:
 
     return dict(row) if row is not None else None
@@ -3493,20 +3529,23 @@ def latest_stress_estimate(
             (user_id,)
         ).fetchone()
 
-    if row is None:
-        cloud_rows = firestore_read_collection(
-            ("users", user_id, "sensor_readings"),
-            limit=1,
-            order_by="timestamp",
-        )
-        if not cloud_rows:
-            return {
-                "status": "waiting_for_data",
-                "stress_score": None
-            }
-        reading = cloud_rows[0]
-    else:
-        reading = dict(row)
+    # Always check the cloud copy: Render can retain an older local row
+    # while Firestore already contains a newer wearable reading.
+    cloud_rows = firestore_read_collection(
+        ("users", user_id, "sensor_readings"),
+        limit=100,
+        order_by="timestamp",
+    )
+    reading = select_latest_sensor_reading(
+        row,
+        cloud_rows,
+        source="wearable",
+    )
+    if reading is None:
+        return {
+            "status": "waiting_for_data",
+            "stress_score": None
+        }
 
     prediction = stored_or_predicted_stress(user_id, reading)
     return {
@@ -3579,15 +3618,15 @@ def dashboard_overview(
                 )
             }
 
-    reading = row_dict(latest)
-
-    if reading is None:
-        cloud_readings = firestore_read_collection(
-            ("users", user_id, "sensor_readings"),
-            limit=1,
-            order_by="timestamp"
-        )
-        reading = cloud_readings[0] if cloud_readings else None
+    cloud_readings = firestore_read_collection(
+        ("users", user_id, "sensor_readings"),
+        limit=1,
+        order_by="timestamp",
+    )
+    reading = select_latest_sensor_reading(
+        latest,
+        cloud_readings,
+    )
 
     if (
         reading
