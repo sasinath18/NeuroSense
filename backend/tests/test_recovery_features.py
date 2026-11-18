@@ -112,12 +112,17 @@ def test_firebase_rules_deploy_workflow_is_manual_and_project_scoped():
     assert "--project neurosense-d7f69" in workflow
     assert "--only firestore:rules,storage" in workflow
     assert "NEUROSENSE_FIREBASE_RULES_DEPLOY_CREDENTIALS_JSON" in workflow
+    assert "token_format: access_token" in workflow
+    assert "serviceusage.googleapis.com/v1/projects/neurosense-d7f69/services/$api" in workflow
+    assert "roles/serviceusage.serviceUsageViewer" not in workflow
 
     readme = (api.BASE_DIR / "README.md").read_text(encoding="utf-8")
     assert "roles/firebaserules.admin" in readme
     assert "roles/serviceusage.serviceUsageViewer" in readme
     assert "firebaserules.googleapis.com" in readme
+    assert "firestore.googleapis.com" in readme
     assert "firebasestorage.googleapis.com" in readme
+    assert "30-day recovery period" in readme
 
 
 def test_music_mode_does_not_change_haptic_preference(client):
