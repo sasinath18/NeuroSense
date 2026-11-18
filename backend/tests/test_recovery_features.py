@@ -1530,6 +1530,33 @@ def test_high_stress_prediction_dispatches_automatic_emergency_push(client, monk
         "source": "wearable",
     }
 
+    # The production prediction path receives readings after they have been
+    # persisted by sensor ingestion. Seed that parent row so the event FK is
+    # valid when the high-stress prediction is recorded.
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                reading["id"],
+                user_id,
+                "automatic-push-test-device",
+                reading["timestamp"],
+                reading["timestamp"],
+                reading["heart_rate_bpm"],
+                reading["hrv_ms"],
+                reading["gsr_raw"],
+                reading["skin_temperature_c"],
+                reading["signal_quality"],
+                reading["source"],
+            ),
+        )
+
     result = api.predict_stress(user_id, reading)
 
     assert result["status"] == "prediction_available"
