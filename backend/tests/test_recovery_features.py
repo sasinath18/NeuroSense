@@ -1317,3 +1317,167 @@ def test_summary_scheduler_rebuilds_periods_from_cloud_history_after_restart(cli
     first_write_count = len(writes)
     assert api.create_due_summaries() == 0
     assert len(writes) == first_write_count
+
+
+def _seed_haptic_restart_state(client, user_id, device_id, now):
+    """Seed the one post-restart local reading and its paired device."""
+    current_at = now - timedelta(seconds=5)
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO devices (
+                device_id, user_id, device_name, token_hash,
+                created_at, last_seen, active
+            ) VALUES (?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                device_id, user_id, "Restart test ESP32", "a" * 64,
+                api.iso(now - timedelta(days=1)), api.iso(now),
+            ),
+        )
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "post-restart-local-reading", user_id, device_id,
+                current_at.isoformat(), current_at.isoformat(),
+                92.0, 20.0, 1800, 33.0, "good", "wearable",
+            ),
+        )
+    return {
+        "id": "post-restart-local-reading",
+        "source": "wearable",
+        "signal_quality": "good",
+        "timestamp": current_at.isoformat(),
+    }
+
+
+def _cloud_haptic_history(now):
+    return [
+        {
+            "id": "cloud-good-reading-1",
+            "timestamp": (now - timedelta(seconds=125)).isoformat(),
+            "heart_rate_bpm": 92.0,
+            "hrv_ms": 20.0,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        {
+            "id": "cloud-good-reading-2",
+            "timestamp": (now - timedelta(seconds=65)).isoformat(),
+            "heart_rate_bpm": 94.0,
+            "hrv_ms": 19.0,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+    ]
+
+
+def _enable_haptic_test_guards(monkeypatch):
+    monkeypatch.setattr(
+        api, "get_settings",
+        lambda _user_id: {"haptic_enabled": True},
+    )
+    monkeypatch.setattr(
+        api, "baseline_for_user",
+        lambda _user_id: {"heart_rate_bpm": 70.0, "hrv_ms": 40.0},
+    )
+
+
+def test_haptic_nudge_restores_cloud_readings_and_cooldown_after_restart(client, monkeypatch):
+    """A cloud-only recent command must retain the 15-minute anti-repeat guard."""
+    user_id = "cloud-haptic-cooldown-user"
+    device_id = "cloud-haptic-cooldown-device"
+    now = datetime.now(timezone.utc)
+    current = _seed_haptic_restart_state(client, user_id, device_id, now)
+    cloud_readings = _cloud_haptic_history(now)
+    cloud_command = {
+        "command_id": "recent-cloud-haptic-command",
+        "created_at": (now - timedelta(minutes=10)).isoformat(),
+        "command_status": "acknowledged",
+    }
+    writes = []
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_readings
+        if path == ("users", user_id, "haptic_commands"):
+            return [cloud_command]
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(
+        api, "firestore_write",
+        lambda path, document_id, payload: writes.append((path, document_id, dict(payload))) or "synced",
+    )
+    _enable_haptic_test_guards(monkeypatch)
+
+    result = api.maybe_queue_personal_haptic_nudge(user_id, device_id, current)
+    assert result == {"queued": False, "reason": "cooldown"}
+    assert writes == []
+
+
+def test_haptic_nudge_restores_cloud_activity_label_after_restart(client, monkeypatch):
+    """A recent active label remains an override even after local SQLite is reset."""
+    user_id = "cloud-haptic-activity-user"
+    device_id = "cloud-haptic-activity-device"
+    now = datetime.now(timezone.utc)
+    current = _seed_haptic_restart_state(client, user_id, device_id, now)
+    cloud_readings = _cloud_haptic_history(now)
+    cloud_feedback = {
+        "reading_id": "cloud-good-reading-2",
+        "label": "active",
+        "created_at": (now - timedelta(minutes=5)).isoformat(),
+    }
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_readings
+        if path == ("users", user_id, "reading_feedback"):
+            return [cloud_feedback]
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(
+        api, "firestore_write",
+        lambda *_args, **_kwargs: "synced",
+    )
+    _enable_haptic_test_guards(monkeypatch)
+
+    result = api.maybe_queue_personal_haptic_nudge(user_id, device_id, current)
+    assert result == {"queued": False, "reason": "recent_activity_label"}
+
+
+def test_haptic_nudge_can_use_three_cloud_backed_readings_after_restart(client, monkeypatch):
+    """A restart does not permanently disable a valid haptic check-in sequence."""
+    user_id = "cloud-haptic-history-user"
+    device_id = "cloud-haptic-history-device"
+    now = datetime.now(timezone.utc)
+    current = _seed_haptic_restart_state(client, user_id, device_id, now)
+    cloud_readings = _cloud_haptic_history(now)
+    writes = []
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_readings
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(
+        api, "firestore_write",
+        lambda path, document_id, payload: writes.append((path, document_id, dict(payload))) or "synced",
+    )
+    _enable_haptic_test_guards(monkeypatch)
+
+    result = api.maybe_queue_personal_haptic_nudge(user_id, device_id, current)
+    assert result["queued"] is True
+    assert result["reason"] == "sustained_personal_hr_hrv_deviation"
+    assert len(writes) == 1
+    assert writes[0][0] == ("users", user_id, "haptic_commands")
+    assert writes[0][2]["command_id"] == result["command_id"]
+    assert writes[0][2]["duration_ms"] == 300
