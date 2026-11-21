@@ -109,7 +109,7 @@ def _js_function_body(script: str, name: str) -> str:
     start = script.find(signature)
     assert start >= 0, f"{name}() is missing."
     next_function = re.search(
-        r"\\n(?:async\\s+)?function\\s+",
+        r"\n(?:async\s+)?function\s+",
         script[start + len(signature):],
     )
     end = len(script) if not next_function else start + len(signature) + next_function.start()
