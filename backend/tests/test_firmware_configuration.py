@@ -122,3 +122,133 @@ def test_sensor_upload_keeps_gsr_and_unconfirmed_temperature_null():
     assert captured["payload"]["gsr_raw"] is None
     assert captured["payload"]["skin_temperature_c"] is None
     assert captured["payload"]["ibi_ms"] == metrics["ibi_ms"]
+
+
+
+def test_motor_boot_configuration_starts_with_gpio_low():
+    tree = _firmware_tree()
+    motor_assignment = next(
+        node for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "motor"
+            for target in node.targets
+        )
+    )
+
+    assert isinstance(motor_assignment.value, ast.Call)
+    assert isinstance(motor_assignment.value.func, ast.Name)
+    assert motor_assignment.value.func.id == "Pin"
+    keyword_values = {
+        item.arg: item.value
+        for item in motor_assignment.value.keywords
+    }
+    assert ast.literal_eval(keyword_values["value"]) == 0
+
+
+def test_local_haptic_disabled_gate_keeps_motor_low_without_sleeping():
+    tree = _firmware_tree()
+
+    class FakeMotor:
+        def __init__(self):
+            self.values = []
+
+        def value(self, level):
+            self.values.append(level)
+
+    class FakeTime:
+        @staticmethod
+        def sleep_ms(_duration):
+            raise AssertionError("Disabled haptics must never energize or sleep.")
+
+    motor = FakeMotor()
+    pulse_motor = _load_function(
+        tree,
+        "pulse_motor",
+        {
+            "HAPTIC_ENABLED": False,
+            "motor": motor,
+            "time": FakeTime(),
+        },
+    )
+
+    pulse_motor(500)
+
+    assert motor.values == [0]
+
+
+def test_haptic_command_duration_is_clamped_to_100_through_3000_ms():
+    import json
+
+    tree = _firmware_tree()
+    calls = []
+    pulses = []
+
+    response_body = json.dumps({
+        "commands": [
+            {"command_id": "short", "duration_ms": 1},
+            {"command_id": "long", "duration_ms": 9000},
+        ]
+    })
+    response = "HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n" + response_body
+
+    def fake_http_request(method, path, payload=None):
+        calls.append((method, path, payload))
+        return (200, response if method == "GET" else "HTTP/1.1 200 OK")
+
+    poll = _load_function(
+        tree,
+        "poll_and_process_haptic_commands",
+        {
+            "DEVICE_TOKEN": "configured-device-token",
+            "COMMAND_PATH": "/api/devices/test/commands",
+            "HAPTIC_ENABLED": True,
+            "http_request": fake_http_request,
+            "ujson": json,
+            "pulse_motor": pulses.append,
+        },
+    )
+
+    poll()
+
+    assert pulses == [100, 3000]
+    assert [call[0] for call in calls] == ["GET", "POST", "POST"]
+    assert calls[1][1] == "/api/devices/test/commands/short/ack"
+    assert calls[2][1] == "/api/devices/test/commands/long/ack"
+
+
+def test_server_haptic_commands_respect_local_disabled_gate():
+    import json
+
+    tree = _firmware_tree()
+    motor_values = []
+    pulses = []
+
+    response_body = json.dumps({
+        "commands": [{"command_id": "ignored", "duration_ms": 500}]
+    })
+    response = "HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n" + response_body
+
+    def fake_http_request(method, path, payload=None):
+        return (200, response if method == "GET" else "HTTP/1.1 200 OK")
+
+    poll = _load_function(
+        tree,
+        "poll_and_process_haptic_commands",
+        {
+            "DEVICE_TOKEN": "configured-device-token",
+            "COMMAND_PATH": "/api/devices/test/commands",
+            "HAPTIC_ENABLED": False,
+            "http_request": fake_http_request,
+            "ujson": json,
+            "pulse_motor": pulses.append,
+            "motor": type("FakeMotor", (), {
+                "value": staticmethod(motor_values.append)
+            })(),
+        },
+    )
+
+    poll()
+
+    assert pulses == []
+    assert motor_values == [0]
