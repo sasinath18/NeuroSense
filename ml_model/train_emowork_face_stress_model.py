@@ -163,9 +163,16 @@ def identify_participant_condition(path: Path, root: Path) -> tuple[str, str] | 
 
 
 def participant_matches(path: Path, participant_id: str) -> bool:
+    """Match participant directory components only, never condition/file names."""
     expected = str(int(participant_id))
     for part in path.parts:
-        digits = re.sub(r"[^0-9]", "", part)
+        component = Path(part)
+        if component.suffix:
+            continue
+        stem = component.stem.lower()
+        if re.fullmatch(r"c[1-3]", stem):
+            continue
+        digits = re.sub(r"[^0-9]", "", stem)
         if digits and str(int(digits)) == expected:
             return True
     return False
