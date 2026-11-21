@@ -8,6 +8,7 @@ import pytest
 import ml_model.train_face_stress_model as face_stress
 from ml_model.train_face_stress_model import (
     audit_dataset,
+    summarize_audit,
     build_feature_windows,
     build_label_intervals,
     label_for_window,
@@ -165,6 +166,61 @@ def test_dataset_audit_flags_unpaired_video_and_invalid_interval_layout(tmp_path
     assert report["tasks"][0]["status"] == "valid"
     assert report["tasks"][1]["status"] == "invalid"
     assert "Only shortened T3" in report["tasks"][1]["validation_error"]
+
+
+def test_summary_audit_omits_participant_and_task_identifiers():
+    report = {
+        "dataset": "EmpathicSchool",
+        "video_candidate_count": 2,
+        "paired_task_count": 2,
+        "valid_task_count": 1,
+        "invalid_task_count": 1,
+        "unpaired_video_task_count": 0,
+        "participant_count": 1,
+        "class_counts": {"0": 2, "1": 3, "2": 1},
+        "class_count": 3,
+        "ready_for_exploratory_training": False,
+        "warnings": ["1 video/label pair failed validation."],
+        "tasks": [{"participant_id": "S7", "task_id": "T2"}],
+        "unpaired_video_tasks": [{"participant_id": "S8", "video_file": "V.mp4"}],
+    }
+
+    summary = summarize_audit(report)
+
+    assert summary["participant_count"] == 1
+    assert summary["class_counts"] == {"0": 2, "1": 3, "2": 1}
+    assert summary["participant_identifiers_included"] is False
+    assert summary["task_details_included"] is False
+    assert "tasks" not in summary
+    assert "unpaired_video_tasks" not in summary
+    assert "S7" not in json.dumps(summary)
+    assert "S8" not in json.dumps(summary)
+    assert "V.mp4" not in json.dumps(summary)
+
+
+def test_audit_summary_only_run_emits_aggregate_report_without_landmarker(
+    tmp_path: Path, monkeypatch, capsys
+):
+    def unexpected_download(_path):
+        pytest.fail("Summary-only audit must never download the MediaPipe asset")
+
+    monkeypatch.setattr(face_stress, "ensure_landmarker_model", unexpected_download)
+    args = SimpleNamespace(
+        dataset_root=tmp_path,
+        audit_only=False,
+        audit_summary_only=True,
+    )
+
+    run_empathicschool_training(args)
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["audit_only"] is True
+    assert output["summary_only"] is True
+    assert output["video_candidate_count"] == 0
+    assert output["participant_count"] == 0
+    assert "tasks" not in output
+    assert "unpaired_video_tasks" not in output
+    assert output["participant_identifiers_included"] is False
 
 
 def test_audit_only_run_does_not_download_or_require_landmarker(tmp_path: Path, monkeypatch, capsys):
