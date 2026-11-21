@@ -228,6 +228,141 @@ def discover_video_tasks(root: Path) -> list[tuple[str, str, Path, Path]]:
     return tasks
 
 
+
+def video_duration_seconds(video_path: Path) -> float:
+    """Read MP4 metadata locally without decoding or saving any frames."""
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        capture.release()
+        raise ValueError(f"Could not open released video: {video_path.name}")
+    try:
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+        frame_count = float(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    finally:
+        capture.release()
+    if not np.isfinite(fps) or not np.isfinite(frame_count) or fps <= 0 or frame_count <= 0:
+        raise ValueError(
+            f"Invalid video metadata for {video_path.name}: "
+            f"fps={fps}, frame_count={frame_count}"
+        )
+    return frame_count / fps
+
+
+def audit_dataset(root: Path) -> dict[str, Any]:
+    """Check authorised video/label pairs and timing before downloading ML assets."""
+    if not root.exists():
+        raise FileNotFoundError(
+            f"Dataset folder not found: {root}. Request EmpathicSchool access, "
+            "accept the Research Use License, then extract the authorised release locally."
+        )
+
+    video_candidates = [
+        path for path in sorted(root.rglob("*.mp4"))
+        if find_subject_task(path, root) is not None
+    ]
+    tasks = discover_video_tasks(root)
+    paired_videos = {video.resolve() for _, _, video, _ in tasks}
+    unpaired_video_tasks = []
+    for video in video_candidates:
+        if video.resolve() in paired_videos:
+            continue
+        identity = find_subject_task(video, root)
+        if identity:
+            unpaired_video_tasks.append({
+                "participant_id": identity[0],
+                "task_id": identity[1],
+            })
+
+    task_reports: list[dict[str, Any]] = []
+    class_totals = {str(label): 0 for label in LABEL_NAMES}
+    valid_participants: set[str] = set()
+    valid_task_count = 0
+
+    for participant, task, video_path, label_path in tasks:
+        details: dict[str, Any] = {
+            "participant_id": participant,
+            "task_id": task,
+            "status": "invalid",
+        }
+        try:
+            labels = read_stress_labels(label_path)
+            duration = video_duration_seconds(video_path)
+            intervals = build_label_intervals(labels, duration, task_id=task)
+            class_counts = {
+                str(label): sum(value == label for value in labels)
+                for label in LABEL_NAMES
+            }
+            known_count = sum(class_counts.values())
+            unknown_count = sum(value is None for value in labels)
+            if known_count == 0:
+                raise ValueError("No recognised 0/1/2 stress labels; all intervals are unknown.")
+
+            details.update({
+                "status": "valid",
+                "duration_seconds": round(duration, 3),
+                "stress_label_count": len(labels),
+                "known_label_count": known_count,
+                "unknown_label_count": unknown_count,
+                "class_counts": class_counts,
+                "mapped_label_intervals": len(intervals),
+            })
+            for key, count in class_counts.items():
+                class_totals[key] += count
+            valid_participants.add(participant)
+            valid_task_count += 1
+        except Exception as exc:
+            details["validation_error"] = str(exc)
+        task_reports.append(details)
+
+    class_count = sum(count > 0 for count in class_totals.values())
+    warnings: list[str] = []
+    if unpaired_video_tasks:
+        warnings.append(
+            f"{len(unpaired_video_tasks)} released video task(s) have no matching "
+            "task-level Stress_level.csv and will not be used."
+        )
+    invalid_count = len(tasks) - valid_task_count
+    if invalid_count:
+        warnings.append(
+            f"{invalid_count} video/label pair(s) failed metadata or label validation."
+        )
+    if len(valid_participants) < 4:
+        warnings.append(
+            f"Only {len(valid_participants)} participant(s) have valid labelled videos; "
+            "at least 4 are required for exploratory LOSO evaluation."
+        )
+    if class_count < 2:
+        warnings.append(
+            "At least two recognised stress classes are needed for classifier training."
+        )
+
+    ready = (
+        valid_task_count > 0
+        and len(valid_participants) >= 4
+        and class_count >= 2
+    )
+    return {
+        "dataset": "EmpathicSchool",
+        "audit_only": True,
+        "video_candidate_count": len(video_candidates),
+        "paired_task_count": len(tasks),
+        "valid_task_count": valid_task_count,
+        "invalid_task_count": invalid_count,
+        "unpaired_video_task_count": len(unpaired_video_tasks),
+        "participant_count": len(valid_participants),
+        "class_counts": class_totals,
+        "class_count": class_count,
+        "ready_for_exploratory_training": ready,
+        "warnings": warnings,
+        "unpaired_video_tasks": unpaired_video_tasks,
+        "tasks": task_reports,
+        "note": (
+            "Metadata-only audit. It does not download the MediaPipe model, decode frames, "
+            "extract facial features, save participant data, or upload files. A passing "
+            "audit does not guarantee enough labelled windows for training."
+        ),
+    }
+
 def ensure_landmarker_model(path: Path) -> Path:
     """Download the same Face Landmarker task asset used by the browser client."""
     if path.exists() and path.stat().st_size > 1_000_000:
@@ -447,6 +582,17 @@ def evaluate_loso(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, 
 
 def run(args: argparse.Namespace) -> None:
     dataset_root = args.dataset_root.resolve()
+    if getattr(args, "audit_only", False):
+        audit = audit_dataset(dataset_root)
+        print(json.dumps(audit, indent=2))
+        if not audit["ready_for_exploratory_training"]:
+            print(
+                "Dataset audit completed with readiness warnings. "
+                "Resolve the listed issues before training.",
+                file=sys.stderr,
+            )
+        return
+
     model_path = args.model_path.resolve()
     report_path = args.report_path.resolve()
     landmarker_path = ensure_landmarker_model(args.landmarker_model.resolve())
@@ -562,6 +708,11 @@ def parse_args() -> argparse.Namespace:
         description="Train NeuroSense's camera-only facial stress model."
     )
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET)
+    parser.add_argument(
+        "--audit-only",
+        action="store_true",
+        help="Validate local consented video/label pairs without downloading the model or extracting frames.",
+    )
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--landmarker-model", type=Path, default=DEFAULT_LANDMARKER)

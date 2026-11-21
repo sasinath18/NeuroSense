@@ -154,6 +154,20 @@ labels are included. The script reads the documented classes 0 (no stress), 1
 download uses another CSV structure, inspect it and adapt the label reader
 rather than guessing the column or class mapping.
 
+## Pre-training dataset audit
+
+Before downloading the MediaPipe model or extracting any frames, validate the
+authorised local dataset:
+
+    python ml_model/train_face_stress_model.py --dataset-root data/empathicschool --audit-only
+
+The audit checks each consented MP4 against its task-level `Stress_level.csv`,
+validates the video duration and label-interval mapping (including shortened T3
+tasks), and reports participant count and the 0/1/2 class distribution. It
+does not decode frames, download the model asset, save participant data or
+upload any files. A passing audit is only a structural/readiness check; training
+still requires enough usable labelled windows and successful LOSO evaluation.
+
 ## Install and train
 
 From the repository root, create/activate a Python virtual environment and install
