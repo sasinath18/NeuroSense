@@ -854,7 +854,7 @@ def test_device_reading_accepts_optional_gsr_and_temperature_as_null(client):
             "hrv_ms": 35,
             "gsr_raw": None,
             "skin_temperature_c": None,
-            "ibi_ms": [800, 810, 820],
+            "ibi_ms": [800, 835, 800],
             "signal_quality": "moderate",
             "source": "wearable",
         },
@@ -867,7 +867,7 @@ def test_device_reading_accepts_optional_gsr_and_temperature_as_null(client):
     assert reading["hrv_ms"] == 35
     assert reading["gsr_raw"] is None
     assert reading["skin_temperature_c"] is None
-    assert reading["ibi_ms"] == [800, 810, 820]
+    assert reading["ibi_ms"] == [800, 835, 800]
 
 
 def test_device_cannot_be_paired_to_two_different_users(client):
