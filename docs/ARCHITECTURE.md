@@ -63,7 +63,7 @@ FastAPI backend  <---- Firebase ID token ----  Browser dashboard
 
 The wearable model input-coverage response reports how many of its eight configured input features are available. Missing values may be median-imputed; the dashboard must retain the limited-input warning rather than presenting an imputed result as a full sensor measurement.
 
-**Sensor-unit limitation:** the current ESP32 GSR value is a raw ADC count (0–4095), whereas WESAD training EDA uses calibrated microsiemens. Those units are not interchangeable. Live GSR mean/delta are excluded from the wearable model until the actual circuit has a validated conversion. The temperature channel is currently disabled in firmware and uploads `null`. MAX30102 signal quality, HR/HRV extraction, temperature sensing, motor wiring and live device operation still require physical validation.
+**Current hardware/firmware contract (2026-11-21):** GSR is not part of the selected hardware BOM. The ESP32 firmware therefore sets `GSR_SENSOR_ENABLED = False`, does not construct/read the GPIO34 ADC, and sends `gsr_raw: null`. Do not treat a floating ADC pin as a GSR measurement. Keep all GSR-derived model inputs excluded until a physical GSR module is added, its circuit is calibrated in the units used by the model, and the conversion is independently checked. The temperature sensor is present in the parts list, but its exact part/interface is not confirmed; `TEMP_SENSOR_ENABLED = False` and uploads `skin_temperature_c: null`. The dashboard labels absent GSR as “Not fitted” and temperature as “Not configured” instead of presenting an empty field as a fresh reading. The backend accepts PPG/IBI uploads with these optional fields null. The MPU6050 is not yet read by the current firmware or included in the API data path. MAX30102 signal quality/HRV, the temperature interface, MPU6050 integration, the 5 V motor/MOSFET/power path and end-to-end operation still require physical validation.
 
 ### Camera Face Scan
 
@@ -117,35 +117,35 @@ The EmoWork trainer is a separate face-derived feature experiment with a differe
 
 The application is deployed as a Docker-based Render web service from the repository's `main` branch. The configured health-check path is `/health`; the application also documents `/dashboard` and `/docs`.
 
-**Operational verification (2026-11-21, 23:15 IST):**
-- Render service `neurosense-app` is linked to `main`, uses the Dockerfile at the repository root, and has the HTTP health-check path `/health` configured.
-- The latest observed deployment at review time used commit `1a2f9373a29107fffdfdc4f8a7a4bdafd9e5d2ee`; Render reported both its build and deploy as successful and the deployment status as `live`.
-- GitHub Actions backend tests and Firebase Rules Emulator tests completed successfully for run `44931192064`. The optional OpenFace Docker smoke job was skipped because the relevant image inputs had not changed.
-- The full-history Gitleaks run `44931192089` completed successfully; its report scanned 426 commits and found no leaks.
-- The Render log query returned two older error-level build records from 2026-11-17 (a Docker build could not find the root `Dockerfile`). Those records are historical and are not associated with the 2026-11-21 live deployment.
-- A narrow request-log query for `/health` during the latest deployment window returned no records, so this snapshot does not claim a separate application-level HTTP probe result.
+**Operational verification (2026-11-21, 23:59 IST):**
+- Render service `neurosense-app` is linked to `main`, uses the root Dockerfile, and has the HTTP health-check path `/health` configured.
+- UI/firmware application changes through commit `7f75e1a6a8fbc513f9e5ecfac75eac0a778336c8` are live. Render deploy `dep-dc0u4lm7bikc739sa4p0` reached `live` and emitted `deploy_ended / succeeded` at 2026-11-21 18:28:45 UTC (23:58:45 IST).
+- The new instance logged application startup complete and `Uvicorn running on http://0.0.0.0:10000` at 18:28:42 UTC. Render's deployment event confirmed success.
+- GitHub Actions backend run `44935566128` completed successfully on commit `539eec52559747a2e0df0ad568f5ee08646cad5d`: frontend/firmware syntax checks passed; all 9 browser-local FaceScan Node tests passed; pytest reported **216 passed in 18.53s**; Firebase Firestore/Storage Rules Emulator tests passed.
+- Secret Scan run `44935565924` also completed successfully on the same commit. The conditional OpenFace Docker smoke job was skipped because its build inputs were unchanged.
+- The final documentation-only commits may be tagged `[skip render]`; those do not change the deployed runtime.
 
-This is a point-in-time operational check, not an end-to-end acceptance test. It does not establish that Google login, Firestore persistence, Telegram delivery, browser camera access or physical ESP32 integration has passed an end-to-end user test. Re-check the Render Deploys page for current live state before a demonstration.
+This is automated deployment/CI verification, not an end-to-end acceptance test. It does not establish that Google login, user-specific Firestore persistence, Telegram delivery, browser camera permissions, physical sensors or haptic wiring passed a manual test. The ESP32 firmware change is in GitHub only; it still needs to be flashed to the physical board.
 
 ## 8. Remaining acceptance checks
 
-### Dataset/model work
-- Obtain authorised EmpathicSchool v3 access and read/accept its Research Use License.
-- Extract the released consented data locally and run the aggregate-only audit.
-- Train only if the audit passes; inspect per-participant LOSO results, class support, failure counts and data quality.
-- Implement and validate a live browser feature extractor that exactly matches the trained model contract before any model integration.
-- Add calibrated confidence/abstention handling and independent-user/student-context validation before considering a user-facing face-stress estimate.
+The assistant-side software, firmware source, regression tests, security scan, Firebase emulator suite and current Render deployment have been completed and verified as described above. The following items require access to the physical prototype, owner-controlled accounts or a manual browser session.
 
-### Account and cloud configuration
-- Verify Firebase Google Sign-In, Admin credentials and per-user Firestore persistence in the target project.
-- Decide whether durable music storage is required and configure Firebase Storage only after checking billing.
-- Verify Telegram bot credentials and an explicitly opted-in test contact.
-- Configure Google Drive Picker credentials only if Drive browsing is required.
+### Physical ESP32 / hardware work (user-side)
+- Flash the latest `firmware/esp32_firmware.py` to the ESP32 and create the untracked `neurosense_secrets.py` from the example with the local Wi-Fi credentials and the one-time token generated by dashboard pairing.
+- Install the matching Render CA bundle on the device and verify clock synchronization plus certificate-checked HTTPS on the actual MicroPython build.
+- Bench-test MAX30102 placement, PPG signal quality and repeatability; integrate and verify the temperature sensor only after its exact model/pinout is confirmed.
+- Decide and implement MPU6050 acquisition if it is needed in the final prototype; it is not part of the current firmware/API payload.
+- Verify the 5 V vibration motor through the correct MOSFET/driver and power path. Never connect the motor directly to an ESP32 GPIO. Confirm motor-off behaviour at reset, loss of Wi-Fi and device shutdown.
+- GSR remains disabled because it is not in the selected BOM. Do not enable it or report ADC counts as calibrated conductance.
 
-### Hardware and end-to-end
-- Validate ESP32 pairing, Wi-Fi, TLS certificate verification, sensor uploads and haptic acknowledgements.
-- Bench-test MPU6050, MAX30102, temperature sensing and the 5 V vibration motor/MOSFET/power path.
-- Calibrate GSR before enabling any GSR-derived model feature.
-- Run signed-in browser tests for monitoring modes, saved history, camera permissions, blink tracking, breathing timing, music playback/queue, Telegram test delivery and responsive layouts.
+### Owner-account and manual acceptance (user-side)
+- Verify Google Sign-In with the intended Firebase Web App and Admin service account; confirm private readings/history persist only under the signed-in user's UID.
+- Verify Telegram delivery only with a real bot token and an explicitly opted-in test contact. Do not treat the feature as an emergency-response service.
+- Run the browser checklist in `docs/FACESCAN_MANUAL_QA.md` for camera permission, 120-second scan, stop controls, unavailable stress state and local processing.
+- Manually exercise the three modes, saved monitor history, breathing timer, music queue/playback, and mobile/responsive navigation in a signed-in browser.
 
-The project should remain labelled as a research/college prototype until these hardware, dataset, independent-validation and user-flow checks are complete.
+### Deferred face-only stress estimate
+The dedicated FaceScan stress estimate remains unavailable. Do not enable a user-facing percentage from blink rate, rPPG or the separate AFFEC felt-valence experiment. Model training and validation are deferred; existing feature-preparation code stays local-only and is not an inference pipeline.
+
+Keep NeuroSense labelled as a research/college prototype, not a medical device, until the physical hardware, account-specific end-to-end and manual browser checks are complete.
