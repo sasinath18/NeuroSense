@@ -2559,10 +2559,9 @@ def predict_stress(
                     }
                 )
 
+                # NeuroSense uses Telegram as its only emergency-contact channel.
+                # Do not dispatch the legacy Firebase Web Push path.
                 result["telegram_alert"] = maybe_send_emergency_telegram_alert(
-                    user_id, probability
-                )
-                result["push_alert"] = maybe_send_emergency_push_alert(
                     user_id, probability
                 )
 
