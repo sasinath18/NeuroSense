@@ -115,14 +115,15 @@ The EmoWork trainer is a separate face-derived feature experiment with a differe
 
 The application is deployed as a Docker-based Render web service from the repository's `main` branch. The configured health-check path is `/health`; the application also documents `/dashboard` and `/docs`.
 
-**Operational snapshot (2026-11-21):**
-- Latest observed commit: `2f8ae2adda6e197ac57c1dbd76df836cac13b8cc`.
-- Latest Render deployment: `dep-dc0skmm8bjmc73asj64g`, status `live`.
-- Render build and deploy events reported success.
-- Runtime health-check requests returned HTTP 200 in the checked application logs.
-- No error-level application logs were returned for the checked seven-day window.
+**Operational verification (2026-11-21, 23:15 IST):**
+- Render service `neurosense-app` is linked to `main`, uses the Dockerfile at the repository root, and has the HTTP health-check path `/health` configured.
+- The latest observed deployment at review time used commit `1a2f9373a29107fffdfdc4f8a7a4bdafd9e5d2ee`; Render reported both its build and deploy as successful and the deployment status as `live`.
+- GitHub Actions backend tests and Firebase Rules Emulator tests completed successfully for run `44931192064`. The optional OpenFace Docker smoke job was skipped because the relevant image inputs had not changed.
+- The full-history Gitleaks run `44931192089` completed successfully; its report scanned 426 commits and found no leaks.
+- The Render log query returned two older error-level build records from 2026-11-17 (a Docker build could not find the root `Dockerfile`). Those records are historical and are not associated with the 2026-11-21 live deployment.
+- A narrow request-log query for `/health` during the latest deployment window returned no records, so this snapshot does not claim a separate application-level HTTP probe result.
 
-This operational check confirms service availability only. It does not establish that Google login, Firestore persistence, Telegram delivery, browser camera access or physical ESP32 integration has passed an end-to-end user test.
+This is a point-in-time operational check, not an end-to-end acceptance test. It does not establish that Google login, Firestore persistence, Telegram delivery, browser camera access or physical ESP32 integration has passed an end-to-end user test. Re-check the Render Deploys page for current live state before a demonstration.
 
 ## 8. Remaining acceptance checks
 
