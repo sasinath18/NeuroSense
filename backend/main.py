@@ -99,6 +99,7 @@ ALLOWED_MUSIC_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".w
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
 TELEGRAM_INVITE_TTL_DAYS = 7
+TELEGRAM_MAX_CONTACTS = 10
 NEUROSENSE_PUBLIC_URL = os.getenv(
     "NEUROSENSE_PUBLIC_URL",
     os.getenv("RENDER_EXTERNAL_URL", "https://neurosense-app.onrender.com")
@@ -5567,10 +5568,10 @@ def create_telegram_emergency_invite(
                 if not item.get("revoked_at")
                 and parse_iso(item["expires_at"]) > now
             )
-            if active_count >= MAX_EMERGENCY_CONTACTS:
+            if active_count >= TELEGRAM_MAX_CONTACTS:
                 raise HTTPException(
                     status_code=429,
-                    detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active Telegram contacts.",
+                    detail=f"You can have up to {TELEGRAM_MAX_CONTACTS} active Telegram contacts.",
                 )
             telegram_user_collection(
                 user_id, "telegram_emergency_invites"
@@ -5850,7 +5851,7 @@ def telegram_webhook(
                     item for item in telegram_firestore_documents(contacts_ref)
                     if item.get("active")
                 ]
-                if len(active_contacts) >= MAX_EMERGENCY_CONTACTS:
+                if len(active_contacts) >= TELEGRAM_MAX_CONTACTS:
                     send_telegram_message(chat_id, "This NeuroSense account has reached its Telegram contact limit.")
                     return {"ok": True}
 
@@ -5961,7 +5962,7 @@ def telegram_webhook(
                 "SELECT COUNT(*) AS total FROM telegram_emergency_contacts WHERE user_id = ? AND active = 1",
                 (invite["user_id"],),
             ).fetchone()["total"]
-            if int(count) >= MAX_EMERGENCY_CONTACTS:
+            if int(count) >= TELEGRAM_MAX_CONTACTS:
                 send_telegram_message(chat_id, "This NeuroSense account has reached its Telegram contact limit.")
                 return {"ok": True}
             db.execute(
