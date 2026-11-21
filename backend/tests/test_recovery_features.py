@@ -1483,10 +1483,11 @@ def test_haptic_nudge_can_use_three_cloud_backed_readings_after_restart(client, 
     assert writes[0][2]["duration_ms"] == 300
 
 
-def test_high_stress_prediction_dispatches_automatic_emergency_push(client, monkeypatch):
-    """A high-probability wearable prediction must invoke the push-alert policy."""
-    user_id = "automatic-push-dispatch-user"
-    calls = []
+def test_high_stress_prediction_uses_telegram_only(client, monkeypatch):
+    """High-probability wearable predictions use Telegram, never legacy FCM."""
+    user_id = "automatic-telegram-only-user"
+    telegram_calls = []
+    push_calls = []
 
     class HighStressModel:
         classes_ = [0, 1]
@@ -1509,18 +1510,20 @@ def test_high_stress_prediction_dispatches_automatic_emergency_push(client, monk
     monkeypatch.setattr(
         api,
         "maybe_send_emergency_telegram_alert",
-        lambda *_args, **_kwargs: "not_configured",
+        lambda received_user, probability: (
+            telegram_calls.append((received_user, probability)) or "sent"
+        ),
     )
     monkeypatch.setattr(
         api,
         "maybe_send_emergency_push_alert",
         lambda received_user, probability: (
-            calls.append((received_user, probability)) or "sent"
+            push_calls.append((received_user, probability)) or "sent"
         ),
     )
 
     reading = {
-        "id": "automatic-push-dispatch-reading",
+        "id": "automatic-telegram-only-reading",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "heart_rate_bpm": 98.0,
         "hrv_ms": 24.0,
@@ -1531,8 +1534,7 @@ def test_high_stress_prediction_dispatches_automatic_emergency_push(client, monk
     }
 
     # The production prediction path receives readings after they have been
-    # persisted by sensor ingestion. Seed that parent row so the event FK is
-    # valid when the high-stress prediction is recorded.
+    # persisted by sensor ingestion. Seed the parent row for the stress event.
     with api.db_connection() as db:
         db.execute(
             """
@@ -1545,7 +1547,7 @@ def test_high_stress_prediction_dispatches_automatic_emergency_push(client, monk
             (
                 reading["id"],
                 user_id,
-                "automatic-push-test-device",
+                "automatic-telegram-test-device",
                 reading["timestamp"],
                 reading["timestamp"],
                 reading["heart_rate_bpm"],
@@ -1561,8 +1563,10 @@ def test_high_stress_prediction_dispatches_automatic_emergency_push(client, monk
 
     assert result["status"] == "prediction_available"
     assert result["stress_probability"] == 0.92
-    assert result["push_alert"] == "sent"
-    assert calls == [(user_id, 0.92)]
+    assert result["telegram_alert"] == "sent"
+    assert "push_alert" not in result
+    assert telegram_calls == [(user_id, 0.92)]
+    assert push_calls == []
 
     with api.db_connection() as db:
         event = db.execute(
