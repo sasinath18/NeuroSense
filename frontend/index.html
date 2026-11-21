@@ -2636,7 +2636,7 @@
                 <article class="card metric-card">
 
                     <div class="metric-top">
-                        <span class="muted small">GSR</span>
+                        <span class="muted small">GSR raw ADC</span>
                         <span class="metric-icon">〰</span>
                     </div>
 
@@ -2988,7 +2988,7 @@
                 </article>
                 <article class="card">
                     <div class="card-header">
-                        <div><h3>GSR Trend</h3><p>Raw galvanic skin response readings</p></div>
+                        <div><h3>GSR ADC Trend</h3><p>Uncalibrated raw galvanic skin response ADC counts</p></div>
                         <span class="badge" id="monitorGsrBadge">No data</span>
                     </div>
                     <div class="chart-wrap"><canvas id="monitorGsrChart" role="img" aria-label="My GSR history"></canvas></div>
@@ -3052,7 +3052,7 @@
                     </div>
                     <div class="table-wrap monitoring-table-wrap">
                         <table class="monitoring-table">
-                            <thead><tr><th>Time</th><th>HR</th><th>HRV</th><th>GSR</th><th>Quality</th></tr></thead>
+                            <thead><tr><th>Time</th><th>HR</th><th>HRV</th><th>GSR raw ADC</th><th>Quality</th></tr></thead>
                             <tbody id="monitorReadingsBody">
                                 <tr><td colspan="5" class="empty-state">No wearable readings available.</td></tr>
                             </tbody>
@@ -3149,14 +3149,14 @@
                 <article class="card">
                     <div class="card-header">
                         <div>
-                            <h3>GSR History</h3>
+                            <h3>GSR raw ADC History</h3>
                             <p>Backend wearable history</p>
                         </div>
                     </div>
                     <div class="chart-wrap">
                         <canvas id="analyticsGsrChart"
                                 role="img"
-                                aria-label="Wearable GSR history chart"></canvas>
+                                aria-label="Wearable GSR raw ADC history chart"></canvas>
                     </div>
                 </article>
 
@@ -4466,7 +4466,7 @@ function formatRecoveryReading(values) {
         parts.push(`HRV ${displayValue(values.hrv_ms, 1)} ms`);
     }
     if (values.gsr_raw !== null && values.gsr_raw !== undefined) {
-        parts.push(`GSR ${displayValue(values.gsr_raw)}`);
+        parts.push(`GSR raw ADC ${displayValue(values.gsr_raw)}`);
     }
     if (values.skin_temperature_c !== null && values.skin_temperature_c !== undefined) {
         parts.push(`Temp ${displayValue(values.skin_temperature_c, 1)} °C`);
