@@ -270,8 +270,21 @@ of this new MediaPipe blendshape model and must not be copied into NeuroSense's 
 
 ## Product integration status
 
-This is an offline training pipeline only. It does not activate a face-only stress
-score in the web app. The browser currently estimates pulse from local rPPG; the
-blendshape model has a different feature contract and must be integrated only after
-a genuine training run and a matching browser inference implementation. Raw frames
-must remain local to the browser.
+The offline EmpathicSchool trainer remains separate from live inference. It uses
+MediaPipe Face Landmarker blendshape features aggregated as per-feature mean/std
+over 20-second windows with a 5-second step and a minimum 60% sample coverage.
+
+The browser now prepares the same feature-window schema locally during the
+120-second Face Scan: it samples blendshapes at 5 Hz, builds the 20-second/5-second
+windows, and retains only the derived window aggregates in browser memory after
+the scan. The sample stream is discarded after window construction; manual stop
+clears both samples and aggregates. This preparation path does not upload frames
+or derived feature payloads, save them to account history, or run model inference.
+Automated Node tests exercise the sample-rate gate, window count/timing, mean/std,
+minimum coverage and short-duration fallback.
+
+The browser still does not activate a face-only stress score. Its pulse estimate is
+local rPPG, while the face-stress feature windows are not consumed by a trained
+model. Numerical parity against an authorised participant video, model loading,
+confidence/quality abstention, independent validation and a separate face-only
+prediction path remain pending. Raw frames must remain local to the browser.
