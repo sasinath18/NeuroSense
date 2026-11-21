@@ -72,20 +72,24 @@ not face-only performance and must not be copied as NeuroSense results.
 
 ### Offline EmoWork training pipeline
 
-NeuroSense now includes `ml_model/train_emowork_face_stress_model.py`. It expects
-the provider's CSV hierarchy, including matching files such as (the label
-folder is called `LABELS` in the dataset description; the trainer also accepts
-the `LABEL` spelling used in the paper's example path):
+NeuroSense now includes `ml_model/train_emowork_face_stress_model.py`. It supports
+the official EmoWork v3 CSV mirror. Its exact folders are `CSV/LABEL_CSV`
+and `CSV/VIDEO_csv` (the latter name uses a lowercase `csv` suffix):
 
     data/emowork/
-      LABELS/
-        1/
-          c1/
-            stress.csv
       CSV/
-        VIDEO/
+        LABEL_CSV/
+          1/
+            c1/
+              stress.csv
+        VIDEO_csv/
           1/
             c1.csv
+
+The loader also accepts legacy `LABEL` / `LABELS` and `VIDEO` fixture layouts
+for unit tests and small, manually exported samples. It does not require or read
+the raw-video files; the official release supplies timestamped face-derived
+features in the CSV mirror.
 
 The loader strictly selects the documented timestamped facial-feature columns
 (head rotation/translation, total translation, blink, gaze and left/right lip
