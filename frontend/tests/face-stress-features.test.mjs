@@ -28,6 +28,28 @@ const buildFunction = sourceBetween(
     "function buildFaceStressFeatureWindows(",
     "function beginFaceOnlyScan("
 );
+const optionalSensorFunction = sourceBetween(
+    script,
+    "function setOptionalSensorDisplay(",
+    "function setSystemInformation("
+);
+
+function createOptionalSensorContext() {
+    const values = new Map();
+    const context = {
+        values,
+        setText: (id, value) => values.set(id, value),
+        displayValue: (value, decimals = 0) => {
+            if (value === null || value === undefined || value === "") return "--";
+            if (!Number.isFinite(Number(value))) return "--";
+            return Number(value).toFixed(decimals);
+        },
+        formatReadingTime: (value) => value ? `formatted ${value}` : "None",
+    };
+    vm.createContext(context);
+    vm.runInContext(optionalSensorFunction, context);
+    return context;
+}
 
 function createContext(overrides = {}) {
     const context = {
@@ -128,4 +150,67 @@ test("feature windows are unavailable when scan duration is below 20 seconds", (
     );
 
     assert.equal(context.buildFaceStressFeatureWindows(samples, 19.99).length, 0);
+});
+
+
+test("unavailable optional GSR is labelled not fitted, not freshly updated", () => {
+    const context = createOptionalSensorContext();
+
+    context.setOptionalSensorDisplay(
+        "gsrValue",
+        "gsrFoot",
+        null,
+        0,
+        "GSR module not fitted in the current hardware BOM."
+    );
+
+    assert.equal(context.values.get("gsrValue"), "--");
+    assert.equal(
+        context.values.get("gsrFoot"),
+        "GSR module not fitted in the current hardware BOM."
+    );
+});
+
+test("unconfigured temperature remains unavailable instead of showing a stale timestamp", () => {
+    const context = createOptionalSensorContext();
+
+    context.setOptionalSensorDisplay(
+        "temperatureValue",
+        "temperatureFoot",
+        undefined,
+        1,
+        "Temperature sensor interface is not configured yet."
+    );
+
+    assert.equal(context.values.get("temperatureValue"), "--");
+    assert.equal(
+        context.values.get("temperatureFoot"),
+        "Temperature sensor interface is not configured yet."
+    );
+});
+
+test("optional sensor status still shows genuine historic values with their timestamp", () => {
+    const context = createOptionalSensorContext();
+
+    context.setOptionalSensorDisplay(
+        "gsrValue",
+        "gsrFoot",
+        1820,
+        0,
+        "GSR module not fitted in the current hardware BOM.",
+        "2026-11-21T18:00:00Z"
+    );
+
+    assert.equal(context.values.get("gsrValue"), "1820");
+    assert.equal(
+        context.values.get("gsrFoot"),
+        "Updated formatted 2026-11-21T18:00:00Z"
+    );
+});
+
+test("dashboard routes missing GSR and temperature fields through optional sensor status", () => {
+    assert.match(script, /latest\.gsr_raw/);
+    assert.match(script, /latest\.skin_temperature_c/);
+    assert.match(script, /GSR module not fitted in the current hardware BOM/);
+    assert.match(script, /Temperature sensor interface is not configured yet/);
 });
