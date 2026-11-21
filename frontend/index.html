@@ -4419,7 +4419,7 @@ function applyStressResult(stress) {
         setText("stressSummary", "Experimental model estimate");
         setText(
             "stressDescription",
-            "WESAD-trained model output. This model is not clinically validated and is not a diagnosis."
+            "WESAD-trained experimental estimate. Raw ESP32 GSR ADC counts are excluded because WESAD training expects EDA in microsiemens; this model is not clinically validated and is not a diagnosis."
         );
         setText("stressStatusBadge", "Experimental");
         if (ring) {
