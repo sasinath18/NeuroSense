@@ -100,6 +100,27 @@ def test_dataset_audit_reports_task_labels_and_loso_readiness(tmp_path: Path, mo
     assert any("at least 4" in warning for warning in report["warnings"])
 
 
+def test_dataset_audit_reports_videos_when_every_task_label_is_missing(tmp_path: Path):
+    task_dir = tmp_path / "S7" / "T2"
+    task_dir.mkdir(parents=True)
+    (task_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
+
+    report = audit_dataset(tmp_path)
+
+    assert report["video_candidate_count"] == 1
+    assert report["paired_task_count"] == 0
+    assert report["valid_task_count"] == 0
+    assert report["unpaired_video_task_count"] == 1
+    assert report["unpaired_video_tasks"] == [{
+        "participant_id": "S7",
+        "task_id": "T2",
+        "video_file": "V.mp4",
+        "reason": "No task-level Stress_level.csv found.",
+    }]
+    assert report["ready_for_exploratory_training"] is False
+    assert any("No video task has a matching Stress_level.csv" in item for item in report["warnings"])
+
+
 def test_dataset_audit_flags_unpaired_video_and_invalid_interval_layout(tmp_path: Path, monkeypatch):
     valid_dir = tmp_path / "S7" / "T3"
     invalid_dir = tmp_path / "S8" / "T2"
