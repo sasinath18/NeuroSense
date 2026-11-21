@@ -1,15 +1,18 @@
 # NeuroSense — Face-only Stress Model
 
-This training path is separate from the WESAD wearable model. It uses only
-MediaPipe Face Landmarker blendshape scores extracted from face video. HR, BVP,
-EDA, skin temperature, accelerometer values and wearable-model outputs are
-excluded from the feature set.
+The face-only research path is separate from the WESAD wearable model. Its feature
+contract must contain only facial video/landmark-derived measurements; HR, BVP, EDA,
+skin temperature, pupil data, accelerometer values and wearable-model outputs are
+excluded. The existing EmpathicSchool trainer uses MediaPipe blendshape features.
+The EmoWork dataset described below provides a different facial-landmark feature
+contract and requires a separate adapter before it can be trained or deployed.
 
 ## Dataset and access
 
 The selected research dataset is EmpathicSchool:
 
-- Dataset DOI: https://doi.org/10.5281/zenodo.7372497
+- Current dataset record (v3): https://doi.org/10.5281/zenodo.15556502
+- Earlier record: https://doi.org/10.5281/zenodo.7372497
 - Research paper: https://doi.org/10.1038/s41597-025-05812-0
 - Stress labels are self-assessments at roughly two-minute intervals.
 - Video recordings are released only for participants who consented to video sharing.
@@ -37,6 +40,39 @@ experiment, not this stress-training pipeline.
 
 The separate AFFEC felt-valence model is not a face-only stress detector. Do not use
 its output as a stress target or silently relabel arousal/valence as stress.
+
+## Additional candidate: EmoWork (facial-feature CSV + continuous stress labels)
+
+EmoWork is a more recent candidate for a second, face-only feature pipeline:
+
+- Latest Zenodo version: https://zenodo.org/records/17513978
+- Dataset DOI: https://doi.org/10.5281/zenodo.17513978
+- Data paper: https://doi.org/10.1038/s41597-025-06531-2
+- The data include 31 call-agent participants and approximately 395 minutes of
+  recorded video. Raw videos are not distributed; timestamped facial features
+  extracted from MediaPipe/OpenCV are provided instead.
+- The video-derived features include head rotation/translation, total head
+  movement, blink events, gaze direction, lip-corner movement and an error flag.
+- The LABELS folder contains timestamped, self-reported stress values on a
+  1–20 scale, collected at approximately 100 ms intervals.
+- This makes a facial-feature-only stress experiment possible without loading
+  the dataset's audio, wearable, EEG, EDA, BVP, temperature or other physiological
+  modalities.
+
+**Access is controlled.** Download and read the dataset Data Usage Agreement,
+request access on Zenodo, and submit the required data-use form. Do not try to
+bypass the access gate or place restricted data, labels, derived participant
+features or dataset archives in GitHub/Render. See the paper's Usage Notes and
+the official code repository: https://github.com/Kaist-ICLab/EmoWork
+
+The EmoWork context is simulated customer-service interactions and emotional
+workload, not students' everyday study stress. Its features are derived facial
+measurements, not raw video. A dedicated loader, timestamp-alignment step and
+facial-feature-only model have **not** been implemented in NeuroSense yet. The
+published paper's multimodal stress metrics are not face-only performance and
+must not be copied as NeuroSense results. Any future face-only experiment must
+use only the video-derived face features, keep participants grouped for
+Leave-One-Subject-Out validation, and report independent-user limitations.
 
 The EmpathicSchool stress-training path below remains the intended source, subject to
 the dataset's access restrictions and Research Use License. Training may proceed only
