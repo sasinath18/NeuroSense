@@ -1638,6 +1638,7 @@ def test_telegram_alert_recovers_cloud_history_and_cooldown_after_restart(client
             return Document()
 
     monkeypatch.setattr(api, "FIRESTORE_CLIENT", object())
+    monkeypatch.setattr(api, "telegram_configured", lambda: True)
     monkeypatch.setattr(
         api,
         "telegram_user_collection",
