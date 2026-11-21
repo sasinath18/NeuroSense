@@ -193,6 +193,8 @@ The firmware targets an ESP32 DevKit V1 running a MicroPython build that support
 
 The firmware fails closed when verified TLS cannot be initialized. Do not use `CERT_NONE` or disable certificate checks for cloud connections.
 
+On a socket/hardware `OSError`, the firmware checks the Wi-Fi station state. A healthy link is left untouched; when the station has disconnected, the device resets that interface, reconnects, refreshes time using NTP and recreates the certificate-verifying TLS context. Failed reconnects are reported and retried by the main loop while the motor remains OFF.
+
 **Current sensor configuration:** GSR is not in the selected hardware BOM, so `GSR_SENSOR_ENABLED = False`. The firmware does not initialize/read the GPIO34 ADC and sends `gsr_raw: null`; it will not turn a floating pin into a fake measurement. The temperature module is present in the parts list, but its exact model and interface are not yet confirmed, so `TEMP_SENSOR_ENABLED = False` and `skin_temperature_c` remains `null`. The dashboard labels these as “Not fitted” / “Not configured”. The MPU6050 is not yet integrated into firmware or the API. Do not enable GSR or temperature acquisition until the hardware and calibration/interface are verified. MAX30102 signal quality/HRV, the temperature interface, MPU6050 integration, motor-driver wiring and actual device-to-Render operation still require bench testing.
 
 ## Safety and privacy
