@@ -190,7 +190,7 @@ def test_haptic_command_duration_is_clamped_to_100_through_3000_ms():
             {"command_id": "long", "duration_ms": 9000},
         ]
     })
-    response = "HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n" + response_body
+    response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + response_body
 
     def fake_http_request(method, path, payload=None):
         calls.append((method, path, payload))
@@ -227,7 +227,7 @@ def test_server_haptic_commands_respect_local_disabled_gate():
     response_body = json.dumps({
         "commands": [{"command_id": "ignored", "duration_ms": 500}]
     })
-    response = "HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n" + response_body
+    response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + response_body
 
     def fake_http_request(method, path, payload=None):
         return (200, response if method == "GET" else "HTTP/1.1 200 OK")
