@@ -208,6 +208,8 @@ Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi crede
 
 ### Telegram emergency-alert setup
 
+NeuroSense uses **Telegram as its only emergency-contact notification channel**. Browser Web Push / Firebase Cloud Messaging endpoints and the old emergency-invite page are not part of the active application.
+
 Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_BOT_USERNAME` in Render's secret environment. The backend registers its HTTPS webhook at startup. Each emergency contact must open the invite link and press Start before receiving check-in alerts. Use the in-app test message and explain the experimental nature of the underlying stress signal; this is not an emergency service.
 
 ### Google Drive music browsing
