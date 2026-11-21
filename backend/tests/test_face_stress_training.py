@@ -270,7 +270,7 @@ def test_training_preflight_stops_before_downloading_landmarker_when_dataset_not
     task_dir.mkdir(parents=True)
     (task_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
     (task_dir / "Stress_level.csv").write_text(
-        "stress_level\\n0\\n1\\n2\\n1\\n0\\n",
+        "stress_level\n0\n1\n2\n1\n0\n",
         encoding="utf-8",
     )
     _make_fake_video_capture(monkeypatch, duration_seconds=540.0)
