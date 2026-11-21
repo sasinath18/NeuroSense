@@ -98,6 +98,7 @@ ALLOWED_MUSIC_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".w
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+TELEGRAM_INVITE_TTL_DAYS = 7
 NEUROSENSE_PUBLIC_URL = os.getenv(
     "NEUROSENSE_PUBLIC_URL",
     os.getenv("RENDER_EXTERNAL_URL", "https://neurosense-app.onrender.com")
@@ -5541,7 +5542,7 @@ def create_telegram_emergency_invite(
         raise HTTPException(status_code=422, detail="Enter a contact name with at least 2 characters.")
 
     now = utc_now()
-    expires_at = now + timedelta(days=EMERGENCY_INVITE_TTL_DAYS)
+    expires_at = now + timedelta(days=TELEGRAM_INVITE_TTL_DAYS)
     invite_token = secrets.token_urlsafe(24)
     invite_id = uuid.uuid4().hex
     token_hash = token_digest(invite_token)
