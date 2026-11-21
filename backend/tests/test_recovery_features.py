@@ -1658,3 +1658,113 @@ def test_telegram_alert_recovers_cloud_history_and_cooldown_after_restart(client
     assert second == "cooldown"
     assert len(deliveries) == 1
 
+def test_summary_scheduler_retries_after_cloud_summary_write_failure(client, monkeypatch):
+    """A failed Firestore summary write must not advance the durable checkpoint."""
+    user_id = "cloud-summary-retry-user"
+    now = datetime.now(timezone.utc)
+    first_at = now - timedelta(hours=2, minutes=20)
+    second_at = now - timedelta(hours=2, minutes=10)
+    third_at = now - timedelta(hours=1, minutes=10)
+    local_at = now - timedelta(minutes=2)
+
+    # A post-restart local reading discovers the UID; earlier readings exist only
+    # in Firestore, matching the ephemeral Render SQLite reset scenario.
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "summary-retry-local", user_id, "device-summary-retry",
+                api.iso(local_at), api.iso(local_at),
+                72.0, 45.0, 1600, 33.0, "good", "wearable",
+            ),
+        )
+
+    cloud_sensor_rows = [
+        {
+            "id": "summary-retry-cloud-1",
+            "timestamp": api.iso(first_at),
+            "heart_rate_bpm": 80.0,
+            "hrv_ms": 35.0,
+            "gsr_raw": 1800,
+            "skin_temperature_c": 33.2,
+            "signal_quality": "good",
+            "source": "wearable",
+            "stress_score": 70.0,
+        },
+        {
+            "id": "summary-retry-cloud-2",
+            "timestamp": api.iso(second_at),
+            "heart_rate_bpm": 84.0,
+            "hrv_ms": 31.0,
+            "gsr_raw": 1900,
+            "skin_temperature_c": 33.3,
+            "signal_quality": "moderate",
+            "source": "wearable",
+            "stress_score": 80.0,
+        },
+        {
+            "id": "summary-retry-cloud-3",
+            "timestamp": api.iso(third_at),
+            "heart_rate_bpm": 76.0,
+            "hrv_ms": 42.0,
+            "gsr_raw": 1700,
+            "skin_temperature_c": 33.1,
+            "signal_quality": "good",
+            "source": "wearable",
+            "stress_score": 60.0,
+        },
+    ]
+    summary_attempts = []
+
+    def fake_firestore_read_document(_path, _document_id):
+        return None
+
+    def fake_firestore_read_collection(path, **_kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_sensor_rows
+        return []
+
+    def fake_firestore_write(path, document_id, payload):
+        if path == ("users", user_id, "summaries"):
+            summary_attempts.append((document_id, dict(payload)))
+            return "failed" if len(summary_attempts) == 1 else "synced"
+        return "synced"
+
+    monkeypatch.setattr(api, "DEFAULT_MONITORING_INTERVAL_SECONDS", 3600)
+    monkeypatch.setattr(api, "MAX_SUMMARY_WINDOWS_PER_PASS", 10)
+    monkeypatch.setattr(api, "firestore_read_document", fake_firestore_read_document)
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(api, "firestore_write", fake_firestore_write)
+
+    # First pass: no local summary is committed and the checkpoint stays at the
+    # start of the failed interval, allowing the following pass to retry it.
+    assert api.create_due_summaries() == 0
+    assert len(summary_attempts) == 1
+    with api.db_connection() as db:
+        summaries = db.execute(
+            "SELECT COUNT(*) FROM summaries WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+        checkpoint = db.execute(
+            "SELECT last_period_end FROM monitoring_summary_state WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+    assert summaries == 0
+    assert checkpoint is not None
+    assert api.parse_iso(checkpoint["last_period_end"]) == api.parse_iso(api.iso(first_at))
+
+    # Second pass: the cloud write succeeds, so both overdue windows are saved.
+    assert api.create_due_summaries() == 2
+    assert len(summary_attempts) == 3
+    with api.db_connection() as db:
+        summaries = db.execute(
+            "SELECT COUNT(*) FROM summaries WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+    assert summaries == 2
+
