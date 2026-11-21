@@ -1580,3 +1580,94 @@ def test_high_stress_prediction_uses_telegram_only(client, monkeypatch):
     assert event is not None
     assert event["reading_id"] == reading["id"]
     assert event["stress_probability"] == 0.92
+
+def test_telegram_alert_recovers_cloud_history_and_cooldown_after_restart(client, monkeypatch):
+    """Telegram's repeated-reading alert remains deduplicated after SQLite is lost."""
+    user_id = "telegram-cloud-alert-recovery-user"
+    now = datetime.now(timezone.utc)
+    cloud_events = [
+        {
+            "event_id": f"telegram-cloud-event-{index}",
+            "reading_id": f"telegram-cloud-reading-{index}",
+            "stress_probability": 0.9,
+            "occurred_at": (now - timedelta(minutes=index + 1)).isoformat(),
+        }
+        for index in range(3)
+    ]
+    alert_state = {}
+    deliveries = []
+
+    class Snapshot:
+        def __init__(self, data, document_id=""):
+            self._data = dict(data) if data is not None else None
+            self.id = document_id
+            self.exists = data is not None
+
+        def to_dict(self):
+            return dict(self._data or {})
+
+    class Query:
+        def order_by(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, _value):
+            return self
+
+        def stream(self):
+            return [
+                Snapshot(item, str(item["event_id"]))
+                for item in cloud_events
+            ]
+
+    class Document:
+        def get(self):
+            return Snapshot(alert_state if alert_state else None, "current")
+
+        def set(self, payload):
+            alert_state.clear()
+            alert_state.update(dict(payload))
+
+    class Collection:
+        def __init__(self, name):
+            self.name = name
+
+        def order_by(self, *_args, **_kwargs):
+            return Query()
+
+        def document(self, _document_id):
+            return Document()
+
+    monkeypatch.setattr(api, "FIRESTORE_CLIENT", object())
+    monkeypatch.setattr(
+        api,
+        "telegram_user_collection",
+        lambda _user_id, name: Collection(name),
+    )
+    monkeypatch.setattr(
+        api,
+        "telegram_firestore_active_chat_ids",
+        lambda _user_id: ["telegram-chat-123"],
+    )
+    monkeypatch.setattr(
+        api,
+        "send_user_telegram_alert",
+        lambda received_user, title, body: (
+            deliveries.append((received_user, title)) or ("sent", 1)
+        ),
+    )
+
+    first = api.maybe_send_emergency_telegram_alert(user_id, 0.9)
+
+    assert first == "sent"
+    assert len(deliveries) == 1
+    assert alert_state["last_attempt_status"] == "sent"
+    assert alert_state["last_alert_at"]
+    assert alert_state["last_attempt_at"]
+
+    # A new invocation represents a Render restart with no usable SQLite
+    # history. The cloud history still qualifies, but the cloud cooldown wins.
+    second = api.maybe_send_emergency_telegram_alert(user_id, 0.9)
+
+    assert second == "cooldown"
+    assert len(deliveries) == 1
+
