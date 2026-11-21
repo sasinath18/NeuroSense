@@ -169,6 +169,7 @@ including when every video is missing its labels. It does not decode frames,
 download the model asset, save participant data or upload any files. A passing
 audit is only a structural/readiness check; training still requires enough usable
 labelled windows and successful LOSO evaluation.
+
 The normal training command repeats this metadata-only preflight automatically
 before downloading the MediaPipe asset or decoding participant videos. If the
 participant/class readiness checks fail, it stops and prints the warnings.
