@@ -69,6 +69,8 @@ The wearable model input-coverage response reports how many of its eight configu
 
 - The camera is requested only after the user starts it.
 - The 120-second blink/rPPG scan processes face landmarks and facial colour samples locally in the browser. Raw frames from this scan are not uploaded.
+- The scan also prepares a separate local-only face-stress feature stream from MediaPipe blendshapes: 5 samples/second, 20-second windows, 5-second step, and per-feature mean/std with at least 60% sample coverage. The feature-window schema is aligned with the offline EmpathicSchool trainer.
+- These blendshape samples/windows remain in browser memory; they are not posted to the backend, saved to account history, or used for inference. Manual scan stop clears the in-progress derived data. This is feature-extractor preparation only, not a stress estimate.
 - Blink summaries are derived metrics. They can be saved to the authenticated user's history; blink rate is kept separate from wearable stress predictions.
 - The rPPG pulse value is an experimental camera estimate, not a medical heart-rate measurement.
 - The API's `/api/face-scan/status` response explicitly reports `stress_inference: false`.
