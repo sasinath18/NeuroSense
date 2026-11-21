@@ -417,6 +417,31 @@ def test_blink_summaries_are_saved_per_google_uid(client):
     assert other_history.json()["total"] == 0
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"blink_count": -1, "duration_seconds": 120},
+        {"blink_count": 2001, "duration_seconds": 120},
+        {"blink_count": 20, "duration_seconds": 9},
+        {"blink_count": 20, "duration_seconds": 3601},
+    ],
+)
+def test_blink_summary_rejects_out_of_range_values_without_saving_history(client, payload):
+    response = client.post(
+        "/api/face/blink-summary",
+        json=payload,
+        headers=auth("blink-validation-user"),
+    )
+
+    assert response.status_code == 422
+    history = client.get(
+        "/api/face/blink-history",
+        headers=auth("blink-validation-user"),
+    )
+    assert history.status_code == 200
+    assert history.json()["total"] == 0
+
+
 def test_personalization_profile_uses_distinct_days_and_is_preliminary(client):
     now = datetime.now(timezone.utc)
     # Insert historical rows directly: the public sensor-ingest API correctly
