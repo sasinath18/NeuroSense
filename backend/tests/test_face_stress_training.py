@@ -181,7 +181,8 @@ def test_emowork_loader_aligns_face_only_frames_with_stress_labels(tmp_path: Pat
     assert "pupil_diameter" not in face_columns
     assert "gsr_raw" not in face_columns
     assert "heart_rate_bpm" not in face_columns
-    assert "stress_score" in aligned.columns
+    assert "_stress_score" in aligned.columns
+    assert aligned["_stress_score"].between(1, 20).all()
     assert aligned["stress_score"].between(1, 20).all()
 
 
