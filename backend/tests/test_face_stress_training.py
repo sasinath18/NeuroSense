@@ -175,7 +175,9 @@ def test_emowork_loader_aligns_face_only_frames_with_stress_labels(tmp_path: Pat
         video_path, label_path, label_tolerance_ms=60.0
     )
 
-    assert len(aligned) == 149
+    # One invalid face row is filtered, and the final frame is outside the
+    # 60 ms stress-label alignment tolerance.
+    assert len(aligned) == 148
     assert "pupil_diameter" not in face_columns
     assert "gsr_raw" not in face_columns
     assert "heart_rate_bpm" not in face_columns
