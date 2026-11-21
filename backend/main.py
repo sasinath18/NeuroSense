@@ -1367,20 +1367,146 @@ def send_emergency_push_message(fids: list[str], title: str, body: str) -> tuple
 
 
 def maybe_send_emergency_telegram_alert(user_id: str, probability: float) -> str:
-    """Send a Telegram check-in after three elevated readings within 30 minutes; six-hour cooldown."""
+    """Send a Telegram check-in using cloud-backed event history and cooldown."""
     if probability < HIGH_STRESS_THRESHOLD:
         return "not_triggered"
 
     now = utc_now()
     now_text = iso(now)
+    cutoff = now - timedelta(minutes=30)
+
+    # Local SQLite is a development cache. In production, recover the rolling
+    # event window and alert reservation from Firestore so a Render restart
+    # cannot erase the three-reading threshold or cause a duplicate alert.
+    if FIRESTORE_CLIENT is not None:
+        try:
+            local_events = []
+            with db_connection() as db:
+                local_events = [
+                    dict(row) for row in db.execute(
+                        """
+                        SELECT event_id, reading_id, stress_probability, occurred_at
+                        FROM high_stress_events
+                        WHERE user_id = ? AND occurred_at >= ?
+                        """,
+                        (user_id, iso(cutoff)),
+                    ).fetchall()
+                ]
+
+            event_ref = telegram_user_collection(user_id, "high_stress_events")
+            event_query = event_ref.order_by(
+                "occurred_at", direction=firestore.Query.DESCENDING
+            ).limit(500)
+            cloud_events = [
+                {**(snapshot.to_dict() or {}), "document_id": snapshot.id}
+                for snapshot in event_query.stream()
+            ]
+
+            state_ref = telegram_user_collection(
+                user_id, "telegram_emergency_alert_state"
+            ).document("current")
+            state_snapshot = state_ref.get()
+            cloud_state = (
+                state_snapshot.to_dict() or {}
+                if state_snapshot.exists else {}
+            )
+            active_chat_ids = telegram_firestore_active_chat_ids(user_id)
+        except Exception:
+            logger.exception("Could not recover Telegram alert history or cooldown from Firestore.")
+            return "storage_failed"
+
+        event_by_reading: dict[str, dict] = {}
+        for event in [*local_events, *cloud_events]:
+            reading_id = str(
+                event.get("reading_id") or event.get("event_id")
+                or event.get("document_id") or ""
+            )
+            raw_occurred_at = event.get("occurred_at")
+            if not reading_id or not raw_occurred_at:
+                continue
+            try:
+                occurred_at = parse_iso(str(raw_occurred_at))
+            except (TypeError, ValueError):
+                continue
+            if cutoff <= occurred_at <= now:
+                event_by_reading[reading_id] = event
+
+        if len(event_by_reading) < 3:
+            return "awaiting_repeated_readings"
+
+        last_attempt = cloud_state.get("last_attempt_at") or cloud_state.get("last_alert_at")
+        if last_attempt:
+            try:
+                if now - parse_iso(str(last_attempt)) < timedelta(hours=6):
+                    return "cooldown"
+            except (TypeError, ValueError):
+                logger.warning("Ignoring invalid Telegram alert cooldown timestamp for user %s.", user_id)
+
+        if not active_chat_ids:
+            return "no_registered_contacts"
+
+        # Reserve the cooldown before contacting Telegram. If the process
+        # stops after delivery but before the response is persisted, a restart
+        # must not immediately send the same check-in again.
+        reserved_state = {
+            **cloud_state,
+            "user_id": user_id,
+            "last_attempt_at": now_text,
+            "last_attempt_id": uuid.uuid4().hex,
+            "last_attempt_status": "pending",
+        }
+        try:
+            state_ref.set(reserved_state)
+        except Exception:
+            logger.exception("Could not reserve durable Telegram alert cooldown.")
+            return "storage_failed"
+
+        delivery, sent_count = send_user_telegram_alert(
+            user_id,
+            "NeuroSense wellness check-in",
+            "Repeated elevated stress-related readings were recorded. Please check in with the NeuroSense user. "
+            "This is an experimental wellness alert, not a medical diagnosis or emergency service.",
+        )
+
+        final_state = {
+            **reserved_state,
+            "last_attempt_status": delivery,
+            "last_delivery_count": int(sent_count),
+        }
+        if delivery == "sent" and sent_count:
+            final_state["last_alert_at"] = now_text
+
+        try:
+            state_ref.set(final_state)
+        except Exception:
+            # The pre-send reservation remains durable, preventing duplicates.
+            logger.exception("Telegram alert sent/attempted but final cooldown metadata could not be saved.")
+
+        if delivery == "sent" and sent_count:
+            try:
+                with db_connection() as db:
+                    db.execute(
+                        """
+                        INSERT INTO telegram_emergency_alert_state (user_id, last_alert_at)
+                        VALUES (?, ?)
+                        ON CONFLICT(user_id) DO UPDATE SET last_alert_at = excluded.last_alert_at
+                        """,
+                        (user_id, now_text),
+                    )
+            except Exception:
+                logger.exception("Could not update the local Telegram alert cooldown cache.")
+
+        return delivery
+
+    # Local development fallback: Firestore is not configured.
     with db_connection() as db:
         recent = db.execute(
             """
-            SELECT COUNT(*) AS total
+            SELECT COUNT(DISTINCT reading_id) AS total
             FROM high_stress_events
             WHERE user_id = ? AND occurred_at >= ?
             """,
-            (user_id, iso(now - timedelta(minutes=30))),
+            (user_id, iso(cutoff)),
         ).fetchone()["total"]
         if int(recent) < 3:
             return "awaiting_repeated_readings"
@@ -1409,7 +1535,6 @@ def maybe_send_emergency_telegram_alert(user_id: str, probability: float) -> str
                 (user_id, now_text),
             )
     return delivery
-
 
 def maybe_send_emergency_push_alert(user_id: str, probability: float) -> str:
     """Send after repeated elevated estimates, with Firestore-backed contacts and cooldown."""
