@@ -625,6 +625,20 @@ def evaluate_loso(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, 
     }
 
 
+def require_complete_loso_evaluation(evaluation: dict[str, Any]) -> None:
+    """Fail closed when any participant's windows were omitted from LOSO."""
+    expected = int(evaluation.get("windows", 0))
+    evaluated = int(evaluation.get("evaluated_windows", 0))
+    omitted = int(evaluation.get("not_evaluated_windows", expected - evaluated))
+    if expected <= 0 or evaluated != expected or omitted != 0:
+        raise ValueError(
+            "LOSO evaluation did not cover every labelled window "
+            f"({evaluated}/{expected}; {omitted} omitted). No face-stress model "
+            "artifact was saved. Check participant-level class support and "
+            "label distribution before attempting training again."
+        )
+
+
 def run(args: argparse.Namespace) -> None:
     dataset_root = args.dataset_root.resolve()
     if getattr(args, "audit_summary_only", False):
@@ -714,6 +728,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"Saved local feature windows: {output_csv}")
 
     evaluation = evaluate_loso(frame, feature_columns)
+    require_complete_loso_evaluation(evaluation)
     final_model = create_classifier()
     final_model.fit(
         frame[feature_columns].replace([np.inf, -np.inf], np.nan),
