@@ -137,6 +137,10 @@ def test_health_endpoint(client):
 
     assert body["status"] == "healthy"
     assert body["database"] == "healthy"
+    assert isinstance(body["firebase_configured"], bool)
+    assert isinstance(body["firebase_sign_in_ready"], bool)
+    assert isinstance(body["firebase_storage_configured"], bool)
+    assert isinstance(body["telegram_alerts_configured"], bool)
 
 
 def test_system_status_endpoint(client):
@@ -2406,16 +2410,19 @@ def register_test_push_device(client, invite_token, fcm_fid):
     )
 
 
-def test_public_firebase_config_exposes_vapid_key_but_never_admin_secrets(client, monkeypatch):
+def test_public_config_does_not_expose_legacy_fcm_settings(client, monkeypatch):
+    """Telegram is the only active alert channel; FCM settings stay off the public API."""
     configure_test_fcm(monkeypatch)
     response = client.get("/api/public-config")
+
     assert response.status_code == 200
     body = response.json()
-    assert body["firebase_push_configured"] is True
-    assert body["firebase_vapid_key"] == api.FIREBASE_WEB_VAPID_KEY
+    assert body["telegram_alerts_configured"] is False
+    assert "firebase_push_configured" not in body
+    assert "firebase_vapid_key" not in body
+    assert api.FIREBASE_WEB_VAPID_KEY not in response.text
     assert "FIREBASE_SERVICE_ACCOUNT_JSON" not in response.text
     assert "private_key" not in response.text
-
 
 def test_emergency_push_invites_register_multiple_contacts_and_list_status(client, monkeypatch):
     configure_test_fcm(monkeypatch)
