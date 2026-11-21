@@ -164,9 +164,11 @@ authorised local dataset:
 The audit checks each consented MP4 against its task-level `Stress_level.csv`,
 validates the video duration and label-interval mapping (including shortened T3
 tasks), and reports participant count and the 0/1/2 class distribution. It
-does not decode frames, download the model asset, save participant data or
-upload any files. A passing audit is only a structural/readiness check; training
-still requires enough usable labelled windows and successful LOSO evaluation.
+also reports any videos that have no matching task-level stress-label file,
+including when every video is missing its labels. It does not decode frames,
+download the model asset, save participant data or upload any files. A passing
+audit is only a structural/readiness check; training still requires enough usable
+labelled windows and successful LOSO evaluation.
 
 ## Install and train
 
