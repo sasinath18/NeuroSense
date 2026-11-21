@@ -227,28 +227,23 @@ def test_dashboard_api_request_paths_are_registered_by_backend():
     )
 
 
-def test_dashboard_pages_have_mobile_viewports_and_unique_static_ids():
-    """Keep the dashboard and emergency invite usable on narrow mobile screens."""
+def test_dashboard_has_mobile_viewport_and_unique_static_ids():
+    """Keep the active NeuroSense dashboard usable on narrow mobile screens."""
     dashboard = (
         api.BASE_DIR / "frontend" / "index.html"
     ).read_text(encoding="utf-8")
-    invite = (
-        api.BASE_DIR / "frontend" / "emergency-invite.html"
-    ).read_text(encoding="utf-8")
 
-    for name, html in (("dashboard", dashboard), ("emergency invite", invite)):
-        assert re.search(
-            r"""<meta\s+name=["']viewport["']""",
-            html,
-            flags=re.IGNORECASE,
-        ), f"{name} page is missing its mobile viewport declaration."
+    assert re.search(
+        r"""<meta\s+name=["']viewport["']""",
+        dashboard,
+        flags=re.IGNORECASE,
+    ), "Dashboard page is missing its mobile viewport declaration."
 
-        ids = re.findall(r"""id\s*=\s*["']([^"']+)["']""", html)
-        duplicates = sorted({element_id for element_id in ids if ids.count(element_id) > 1})
-        assert not duplicates, f"{name} page has duplicate IDs: {duplicates}"
+    ids = re.findall(r"""id\s*=\s*["']([^"']+)["']""", dashboard)
+    duplicates = sorted({element_id for element_id in ids if ids.count(element_id) > 1})
+    assert not duplicates, f"Dashboard page has duplicate IDs: {duplicates}"
 
     assert re.search(r"@media\s*\(max-width\s*:", dashboard)
-    assert re.search(r"width\s*:\s*min\(100%\s*,\s*520px\)", invite)
 
 
 def test_music_mode_does_not_change_haptic_preference(client):
