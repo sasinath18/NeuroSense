@@ -1043,7 +1043,15 @@ def test_stress_prediction_api_uses_baseline_and_records_high_stress_event(
     assert body["stress_score"] == 80.0
     assert body["stress_probability"] == 0.8
     assert body["model_validated"] is False
+    assert body["model_input_coverage"]["available_count"] == 6
+    assert body["model_input_coverage"]["expected_count"] == 8
+    assert body["model_input_coverage"]["coverage_percent"] == 75.0
+    assert body["model_input_coverage"]["imputed_features"] == [
+        "gsr_raw",
+        "gsr_delta",
+    ]
     assert any("GSR was excluded" in warning for warning in body["model_input_warnings"])
+    assert not any("Skin temperature was unavailable" in warning for warning in body["model_input_warnings"])
 
     events = client.get(
         "/api/events/high-stress",
@@ -1052,6 +1060,55 @@ def test_stress_prediction_api_uses_baseline_and_records_high_stress_event(
     assert events.status_code == 200
     assert events.json()["total"] == 1
     assert events.json()["events"][0]["stress_probability"] == 0.8
+
+
+
+def test_stress_prediction_reports_missing_temperature_as_imputed(monkeypatch):
+    """The API must identify temperature features that fall back to imputation."""
+    class DeterministicStressModel:
+        classes_ = ["baseline", "stress"]
+
+        def predict_proba(self, matrix):
+            assert matrix.shape == (1, 8)
+            return [[0.80, 0.20]]
+
+    monkeypatch.setattr(api, "STRESS_MODEL", DeterministicStressModel())
+    monkeypatch.setattr(
+        api,
+        "baseline_for_user",
+        lambda _user_id: {
+            "heart_rate_bpm": 70.0,
+            "hrv_ms": 45.0,
+            "gsr_raw": None,
+            "skin_temperature_c": None,
+        },
+    )
+
+    result = api.predict_stress(
+        "neurosense-missing-temperature-user",
+        {
+            "signal_quality": "moderate",
+            "heart_rate_bpm": 82.0,
+            "hrv_ms": 38.0,
+            "gsr_raw": 2300,
+            "skin_temperature_c": None,
+        },
+    )
+
+    assert result["status"] == "prediction_available"
+    assert result["model_input_coverage"]["available_count"] == 4
+    assert result["model_input_coverage"]["expected_count"] == 8
+    assert result["model_input_coverage"]["coverage_percent"] == 50.0
+    assert result["model_input_coverage"]["imputed_features"] == [
+        "gsr_raw",
+        "skin_temperature_c",
+        "gsr_delta",
+        "skin_temperature_delta",
+    ]
+    assert any(
+        "Skin temperature was unavailable" in warning
+        for warning in result["model_input_warnings"]
+    )
 
 
 
