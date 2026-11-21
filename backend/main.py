@@ -2204,6 +2204,23 @@ def predict_stress(
         "skin_temperature_delta"
     ]
 
+    available_model_features = [
+        name for name in feature_order if np.isfinite(features[name])
+    ]
+    imputed_model_features = [
+        name for name in feature_order if not np.isfinite(features[name])
+    ]
+    input_coverage = {
+        "available_count": len(available_model_features),
+        "expected_count": len(feature_order),
+        "coverage_percent": round(
+            len(available_model_features) / len(feature_order) * 100,
+            1,
+        ),
+        "available_features": available_model_features,
+        "imputed_features": imputed_model_features,
+    }
+
     matrix = np.asarray(
         [[features[name] for name in feature_order]],
         dtype=float
@@ -2244,6 +2261,19 @@ def predict_stress(
                 1
             )
 
+            model_input_warnings = []
+            if "gsr_raw" in imputed_model_features or "gsr_delta" in imputed_model_features:
+                model_input_warnings.append(
+                    "GSR was excluded from this prediction because the ESP32 sends raw ADC counts while the training data uses EDA in microsiemens. Hardware calibration is required before GSR can be used."
+                )
+            if (
+                "skin_temperature_c" in imputed_model_features
+                or "skin_temperature_delta" in imputed_model_features
+            ):
+                model_input_warnings.append(
+                    "Skin temperature was unavailable for this reading and its model features were median-imputed. Integrate and validate the selected temperature sensor before relying on this estimate."
+                )
+
             result = {
                 "status": "prediction_available",
                 "stress_score": score,
@@ -2251,9 +2281,8 @@ def predict_stress(
                     probability, 4
                 ),
                 "model_validated": False,
-                "model_input_warnings": [
-                    "GSR was excluded from this prediction because the ESP32 sends raw ADC counts while the training data uses EDA in microsiemens. Hardware calibration is required before GSR can be used."
-                ]
+                "model_input_coverage": input_coverage,
+                "model_input_warnings": model_input_warnings,
             }
 
             if probability >= HIGH_STRESS_THRESHOLD:
