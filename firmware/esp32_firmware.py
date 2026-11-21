@@ -68,7 +68,13 @@ I2C_SCL_PIN = 22
 GSR_PIN = 34
 MOTOR_PIN = 25
 
-# Temperature sensor has not been selected yet.
+# The current hardware BOM does not include a GSR module. Keep its ADC input
+# disabled so an unconnected GPIO34 cannot be reported as a real measurement.
+# Enable only after the module and its ADC calibration are confirmed.
+GSR_SENSOR_ENABLED = False
+
+# Temperature sensor is present in the parts list, but its exact model and
+# interface have not yet been confirmed. Do not probe or report it yet.
 TEMP_SENSOR_ENABLED = False
 
 # Enable only after the Wi-Fi, TLS CA bundle and device token are configured.
@@ -118,22 +124,18 @@ motor = Pin(
 )
 
 
-# GSR analog input
+# Optional GSR analog input. Avoid configuring a floating ADC pin when the
+# sensor is not part of this hardware build.
+gsr_adc = None
 
-gsr_adc = ADC(
-    Pin(GSR_PIN)
-)
+if GSR_SENSOR_ENABLED:
+    gsr_adc = ADC(Pin(GSR_PIN))
+    gsr_adc.atten(ADC.ATTN_11DB)
 
-gsr_adc.atten(
-    ADC.ATTN_11DB
-)
-
-try:
-    gsr_adc.width(
-        ADC.WIDTH_12BIT
-    )
-except AttributeError:
-    pass
+    try:
+        gsr_adc.width(ADC.WIDTH_12BIT)
+    except AttributeError:
+        pass
 
 
 # I2C initialization
@@ -580,10 +582,10 @@ def estimate_pulse(samples):
 # ============================================================
 
 def read_gsr():
-
-    value = gsr_adc.read()
-
-    return int(value)
+    """Return a GSR sample, or None when the optional sensor is not fitted."""
+    if not GSR_SENSOR_ENABLED or gsr_adc is None:
+        return None
+    return int(gsr_adc.read())
 
 
 # ============================================================
@@ -934,10 +936,10 @@ def main():
 
                 print("\n------------------------------")
 
-                print(
-                    "GSR ADC:",
-                    gsr_value
-                )
+                if gsr_value is None:
+                    print("GSR sensor disabled (not fitted in the current BOM).")
+                else:
+                    print("GSR ADC:", gsr_value)
 
                 print(
                     "MAX30102 IR samples:",
