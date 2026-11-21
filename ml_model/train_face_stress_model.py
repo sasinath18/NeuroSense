@@ -22,8 +22,8 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
-    accuracy_score, balanced_accuracy_score, classification_report,
-    confusion_matrix, f1_score,
+    accuracy_score, classification_report, confusion_matrix, f1_score,
+    recall_score,
 )
 from sklearn.model_selection import LeaveOneGroupOut
 from sklearn.pipeline import Pipeline
@@ -607,7 +607,14 @@ def evaluate_loso(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, 
         "windows": int(len(frame)),
         "evaluated_windows": int(valid.sum()),
         "accuracy": float(accuracy_score(y_true, y_pred)),
-        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+        # Balanced accuracy is macro recall over classes present in y_true.
+        # Supply labels explicitly so single-class held-out coverage does not
+        # trigger sklearn's implicit confusion-matrix warning.
+        "balanced_accuracy": float(recall_score(
+            y_true, y_pred,
+            labels=sorted(int(label) for label in np.unique(y_true)),
+            average="macro", zero_division=0,
+        )),
         "macro_f1": float(f1_score(
             y_true, y_pred, labels=ordered_labels,
             average="macro", zero_division=0,
