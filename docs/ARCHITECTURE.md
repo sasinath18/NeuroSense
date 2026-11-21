@@ -1,6 +1,6 @@
 # NeuroSense — Architecture and Implementation Handover
 
-**Last reviewed:** 2026-11-21  
+**Last reviewed:** 2026-11-22  
 **Repository:** `sasinath18/NeuroSense`  
 **Production service:** `neurosense-app` on Render
 
@@ -119,15 +119,15 @@ The EmoWork trainer is a separate face-derived feature experiment with a differe
 
 The application is deployed as a Docker-based Render web service from the repository's `main` branch. The configured health-check path is `/health`; the application also documents `/dashboard` and `/docs`.
 
-**Operational verification (2026-11-21, 23:59 IST):**
+**Operational verification (2026-11-22, 00:08 IST):**
 - Render service `neurosense-app` is linked to `main`, uses the root Dockerfile, and has the HTTP health-check path `/health` configured.
-- UI/firmware application changes through commit `7f75e1a6a8fbc513f9e5ecfac75eac0a778336c8` are live. Render deploy `dep-dc0u4lm7bikc739sa4p0` reached `live` and emitted `deploy_ended / succeeded` at 2026-11-21 18:28:45 UTC (23:58:45 IST).
-- The new instance logged application startup complete and `Uvicorn running on http://0.0.0.0:10000` at 18:28:42 UTC. Render's deployment event confirmed success.
-- GitHub Actions backend run `44935566128` completed successfully on commit `539eec52559747a2e0df0ad568f5ee08646cad5d`: frontend/firmware syntax checks passed; all 9 browser-local FaceScan Node tests passed; pytest reported **216 passed in 18.53s**; Firebase Firestore/Storage Rules Emulator tests passed.
-- Secret Scan run `44935565924` also completed successfully on the same commit. The conditional OpenFace Docker smoke job was skipped because its build inputs were unchanged.
-- The final documentation-only commits may be tagged `[skip render]`; those do not change the deployed runtime.
+- Latest application/firmware source commit `b815064f4e94c2e1f3b5afc108b6036c100b161f` is live. Render deploy `dep-dc0u9mjtqb8s73dtb5h0` reached `live` and emitted `deploy_ended / succeeded` at 2026-11-21 18:38:08 UTC (2026-11-22 00:08:08 IST).
+- The new instance logged application startup complete and `Uvicorn running on http://0.0.0.0:10000` at 18:38:05 UTC. Render recorded `GET /health 200 OK` and `GET / 200 OK` during the deployment.
+- GitHub Actions backend run `44936545342` completed successfully on commit `491f59356c325b1beec5c10aff49e99508a9b0cd`: firmware/frontend syntax checks passed; all 9 browser-local FaceScan Node tests passed; pytest reported **232 passed in 17.28s**; Firebase Firestore/Storage Rules Emulator tests passed.
+- Secret Scan run `44936545337` also completed successfully on the same commit. The conditional OpenFace Docker smoke job was skipped because its build inputs were unchanged.
+- Later documentation-only commits `adbc7db` and `578e292` are tagged `[skip render]`; those do not change the deployed runtime.
 
-This is automated deployment/CI verification, not an end-to-end acceptance test. It does not establish that Google login, user-specific Firestore persistence, Telegram delivery, browser camera permissions, physical sensors or haptic wiring passed a manual test. The ESP32 firmware change is in GitHub only; it still needs to be flashed to the physical board.
+This is automated deployment/CI verification, not an end-to-end acceptance test. It does not establish that Google login, user-specific Firestore persistence, Telegram delivery, browser camera permissions, physical sensors or haptic wiring passed a manual test. The ESP32 firmware source now includes optional-sensor safety, bounded haptic commands and Wi-Fi loss recovery, but it still needs to be flashed to the physical board and bench-tested.
 
 ## 8. Remaining acceptance checks
 
