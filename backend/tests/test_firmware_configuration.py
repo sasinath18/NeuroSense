@@ -407,3 +407,128 @@ def test_disabling_https_does_not_construct_a_tls_context():
     initialize_tls()
 
     assert namespace["TLS_CONTEXT"] is None
+
+
+
+def test_wifi_reconnect_preserves_an_already_connected_station():
+    tree = _firmware_tree()
+
+    class ConnectedStation:
+        def isconnected(self):
+            return True
+
+        def active(self, _enabled):
+            raise AssertionError("A healthy Wi-Fi station must not be reset.")
+
+    station = ConnectedStation()
+
+    def unexpected_reconnect():
+        raise AssertionError("A healthy Wi-Fi station must not reconnect.")
+
+    ensure = _load_function(
+        tree,
+        "ensure_wifi_connected",
+        {
+            "connect_wifi": unexpected_reconnect,
+            "time": type("FakeTime", (), {
+                "sleep": staticmethod(lambda _seconds: None)
+            })(),
+        },
+    )
+
+    assert ensure(station) is station
+
+
+def test_wifi_reconnect_resets_disconnected_station_then_rebuilds_tls():
+    tree = _firmware_tree()
+    events = []
+
+    class DisconnectedStation:
+        def isconnected(self):
+            return False
+
+        def active(self, enabled):
+            events.append(("active", enabled))
+
+    class FakeTime:
+        @staticmethod
+        def sleep(seconds):
+            events.append(("sleep", seconds))
+
+    replacement = object()
+
+    def fake_connect_wifi():
+        events.append(("connect_wifi",))
+        return replacement
+
+    ensure = _load_function(
+        tree,
+        "ensure_wifi_connected",
+        {
+            "connect_wifi": fake_connect_wifi,
+            "time": FakeTime(),
+        },
+    )
+
+    result = ensure(DisconnectedStation())
+
+    assert result is replacement
+    assert events == [
+        ("active", False),
+        ("sleep", 1),
+        ("connect_wifi",),
+    ]
+
+
+def test_wifi_reconnect_reports_failure_instead_of_returning_stale_station():
+    tree = _firmware_tree()
+
+    class DisconnectedStation:
+        def isconnected(self):
+            return False
+
+        def active(self, _enabled):
+            pass
+
+    def fail_reconnect():
+        raise RuntimeError("Wi-Fi connection failed")
+
+    ensure = _load_function(
+        tree,
+        "ensure_wifi_connected",
+        {
+            "connect_wifi": fail_reconnect,
+            "time": type("FakeTime", (), {
+                "sleep": staticmethod(lambda _seconds: None)
+            })(),
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Wi-Fi connection failed"):
+        ensure(DisconnectedStation())
+
+
+def test_main_attempts_wifi_reconnect_only_from_oserror_recovery_path():
+    tree = _firmware_tree()
+    main = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+
+    oserror_handlers = [
+        handler
+        for node in ast.walk(main)
+        if isinstance(node, ast.Try)
+        for handler in node.handlers
+        if isinstance(handler.type, ast.Name)
+        and handler.type.id == "OSError"
+    ]
+
+    assert oserror_handlers, "Firmware main loop must retain its OSError recovery handler."
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "ensure_wifi_connected"
+        for handler in oserror_handlers
+        for node in ast.walk(handler)
+    ), "An OSError must trigger a Wi-Fi link-state check and reconnect attempt."
