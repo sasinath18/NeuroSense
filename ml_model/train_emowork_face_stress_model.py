@@ -213,8 +213,8 @@ def discover_dataset_pairs(root: Path) -> list[tuple[str, str, Path, Path]]:
         participant, condition = identity
         candidates = [
             path for path in video_files
-            if participant_matches(path, participant)
-            and condition_matches(path, condition)
+            if participant_matches(path.relative_to(root), participant)
+            and condition_matches(path.relative_to(root), condition)
         ]
         if len(candidates) != 1:
             raise ValueError(
