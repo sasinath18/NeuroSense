@@ -204,7 +204,7 @@ def discover_dataset_pairs(root: Path) -> list[tuple[str, str, Path, Path]]:
     pairs = []
     label_files = sorted(
         path for path in root.rglob("stress.csv")
-        if any(part.lower() == "label" for part in path.parts)
+        if any(part.lower() in {"label", "labels"} for part in path.parts)
     )
     for label_path in label_files:
         identity = identify_participant_condition(label_path, root)
