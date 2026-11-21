@@ -5,12 +5,15 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+import ml_model.train_face_stress_model as face_stress
 from ml_model.train_face_stress_model import (
+    audit_dataset,
     build_feature_windows,
     build_label_intervals,
     label_for_window,
     parse_stress_label,
     read_stress_labels,
+    run as run_empathicschool_training,
 )
 
 from ml_model.train_emowork_face_stress_model import (
@@ -55,6 +58,114 @@ def test_read_single_column_stress_csv_without_header(tmp_path: Path):
     path.write_text("0\n1\n2\nunknown\n", encoding="utf-8")
 
     assert read_stress_labels(path) == [0, 1, 2, None]
+
+
+def _make_fake_video_capture(monkeypatch, duration_seconds=540.0, fps=30.0):
+    class FakeCapture:
+        def isOpened(self):
+            return True
+
+        def get(self, property_id):
+            if property_id == face_stress.cv2.CAP_PROP_FPS:
+                return fps
+            if property_id == face_stress.cv2.CAP_PROP_FRAME_COUNT:
+                return duration_seconds * fps
+            return 0.0
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(face_stress.cv2, "VideoCapture", lambda _path: FakeCapture())
+
+
+def test_dataset_audit_reports_task_labels_and_loso_readiness(tmp_path: Path, monkeypatch):
+    task_dir = tmp_path / "S7" / "T2"
+    task_dir.mkdir(parents=True)
+    (task_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
+    (task_dir / "Stress_level.csv").write_text(
+        "stress_level\\n0\\n1\\n2\\n1\\n0\\n",
+        encoding="utf-8",
+    )
+    _make_fake_video_capture(monkeypatch, duration_seconds=540.0)
+
+    report = audit_dataset(tmp_path)
+
+    assert report["audit_only"] is True
+    assert report["paired_task_count"] == 1
+    assert report["valid_task_count"] == 1
+    assert report["participant_count"] == 1
+    assert report["class_counts"] == {"0": 2, "1": 2, "2": 1}
+    assert report["tasks"][0]["duration_seconds"] == pytest.approx(540.0)
+    assert report["ready_for_exploratory_training"] is False
+    assert any("at least 4" in warning for warning in report["warnings"])
+
+
+def test_dataset_audit_flags_unpaired_video_and_invalid_interval_layout(tmp_path: Path, monkeypatch):
+    valid_dir = tmp_path / "S7" / "T3"
+    invalid_dir = tmp_path / "S8" / "T2"
+    valid_dir.mkdir(parents=True)
+    invalid_dir.mkdir(parents=True)
+    (valid_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
+    (valid_dir / "Stress_level.csv").write_text(
+        "stress_level\\n0\\n1\\n2\\n",
+        encoding="utf-8",
+    )
+    (invalid_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
+    (invalid_dir / "Stress_level.csv").write_text(
+        "stress_level\\n0\\n1\\n",
+        encoding="utf-8",
+    )
+
+    durations = {"S7": 300.0, "S8": 540.0}
+
+    class FakeCapture:
+        def __init__(self, path):
+            self.duration = durations[Path(path).parent.parent.name]
+
+        def isOpened(self):
+            return True
+
+        def get(self, property_id):
+            if property_id == face_stress.cv2.CAP_PROP_FPS:
+                return 30.0
+            if property_id == face_stress.cv2.CAP_PROP_FRAME_COUNT:
+                return self.duration * 30.0
+            return 0.0
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(face_stress.cv2, "VideoCapture", FakeCapture)
+
+    report = audit_dataset(tmp_path)
+
+    assert report["valid_task_count"] == 1
+    assert report["invalid_task_count"] == 1
+    assert report["tasks"][0]["status"] == "valid"
+    assert report["tasks"][1]["status"] == "invalid"
+    assert "Only shortened T3" in report["tasks"][1]["validation_error"]
+
+
+def test_audit_only_run_does_not_download_or_require_landmarker(tmp_path: Path, monkeypatch, capsys):
+    task_dir = tmp_path / "S7" / "T2"
+    task_dir.mkdir(parents=True)
+    (task_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
+    (task_dir / "Stress_level.csv").write_text(
+        "stress_level\\n0\\n1\\n2\\n1\\n0\\n",
+        encoding="utf-8",
+    )
+    _make_fake_video_capture(monkeypatch, duration_seconds=540.0)
+    monkeypatch.setattr(
+        face_stress,
+        "ensure_landmarker_model",
+        lambda _path: (_ for _ in ()).throw(AssertionError("model download must not run")),
+    )
+
+    run_empathicschool_training(SimpleNamespace(dataset_root=tmp_path, audit_only=True))
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["audit_only"] is True
+    assert output["paired_task_count"] == 1
 
 
 def test_five_interval_labels_use_published_task_timing():
