@@ -2636,7 +2636,7 @@
                 <article class="card metric-card">
 
                     <div class="metric-top">
-                        <span class="muted small">GSR raw ADC</span>
+                        <span class="muted small">Optional GSR · Not fitted</span>
                         <span class="metric-icon">〰</span>
                     </div>
 
@@ -2653,7 +2653,7 @@
                 <article class="card metric-card">
 
                     <div class="metric-top">
-                        <span class="muted small">Skin Temperature</span>
+                        <span class="muted small">Skin Temperature · Not configured</span>
                         <span class="metric-icon">♨</span>
                     </div>
 
@@ -2988,7 +2988,7 @@
                 </article>
                 <article class="card">
                     <div class="card-header">
-                        <div><h3>GSR ADC Trend</h3><p>Uncalibrated raw galvanic skin response ADC counts</p></div>
+                        <div><h3>Optional GSR History</h3><p>Historical raw ADC counts only when a GSR module was connected</p></div>
                         <span class="badge" id="monitorGsrBadge">No data</span>
                     </div>
                     <div class="chart-wrap"><canvas id="monitorGsrChart" role="img" aria-label="My GSR history"></canvas></div>
@@ -4299,6 +4299,30 @@ function formatReadingTime(value) {
     });
 }
 
+function setOptionalSensorDisplay(
+    valueElementId,
+    footElementId,
+    value,
+    decimals,
+    unavailableMessage,
+    timestamp = null
+) {
+    const hasReading = (
+        value !== null
+        && value !== undefined
+        && value !== ""
+        && Number.isFinite(Number(value))
+    );
+
+    setText(valueElementId, displayValue(value, decimals));
+    setText(
+        footElementId,
+        hasReading
+            ? `Updated ${formatReadingTime(timestamp)}`
+            : unavailableMessage
+    );
+}
+
 function setSystemInformation() {
     const apiReady = backendHealth?.status === "healthy";
     setText(
@@ -4376,12 +4400,22 @@ async function refreshPublicSystemStatus() {
 function clearLiveSensorDisplay(message = "No authenticated wearable readings available.") {
     setText("heartRateValue", "--");
     setText("hrvValue", "--");
-    setText("gsrValue", "--");
-    setText("temperatureValue", "--");
+    setOptionalSensorDisplay(
+        "gsrValue",
+        "gsrFoot",
+        null,
+        0,
+        "GSR module not fitted in the current hardware BOM."
+    );
+    setOptionalSensorDisplay(
+        "temperatureValue",
+        "temperatureFoot",
+        null,
+        1,
+        "Temperature sensor interface is not configured yet."
+    );
     setText("heartRateFoot", message);
     setText("hrvFoot", message);
-    setText("gsrFoot", message);
-    setText("temperatureFoot", message);
     setText("deviceConnectionStatus", "Unknown");
     setText("deviceCommunicationStatus", "Not checked");
     setText("lastReadingAt", "None");
@@ -4583,14 +4617,25 @@ function applyDashboardData(overview, history, settings, recovery) {
     } else {
         setText("heartRateValue", displayValue(latest.heart_rate_bpm));
         setText("hrvValue", displayValue(latest.hrv_ms, 1));
-        setText("gsrValue", displayValue(latest.gsr_raw));
-        setText("temperatureValue", displayValue(latest.skin_temperature_c, 1));
-
         const ageText = `Updated ${formatReadingTime(latest.timestamp)}`;
         setText("heartRateFoot", ageText);
         setText("hrvFoot", ageText);
-        setText("gsrFoot", ageText);
-        setText("temperatureFoot", ageText);
+        setOptionalSensorDisplay(
+            "gsrValue",
+            "gsrFoot",
+            latest.gsr_raw,
+            0,
+            "GSR module not fitted in the current hardware BOM.",
+            latest.timestamp
+        );
+        setOptionalSensorDisplay(
+            "temperatureValue",
+            "temperatureFoot",
+            latest.skin_temperature_c,
+            1,
+            "Temperature sensor interface is not configured yet.",
+            latest.timestamp
+        );
         setText(
             "signalQualityStatus",
             latest.signal_quality || "Unknown"
