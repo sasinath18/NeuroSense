@@ -73,10 +73,12 @@ not face-only performance and must not be copied as NeuroSense results.
 ### Offline EmoWork training pipeline
 
 NeuroSense now includes `ml_model/train_emowork_face_stress_model.py`. It expects
-the provider's CSV hierarchy, including matching files such as:
+the provider's CSV hierarchy, including matching files such as (the label
+folder is called `LABELS` in the dataset description; the trainer also accepts
+the `LABEL` spelling used in the paper's example path):
 
     data/emowork/
-      LABEL/
+      LABELS/
         1/
           c1/
             stress.csv
