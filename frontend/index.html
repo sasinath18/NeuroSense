@@ -6106,6 +6106,12 @@ const FACE_RPPG_DURATION_SECONDS = 120;
 const FACE_RPPG_WINDOW_SECONDS = 30;
 const FACE_RPPG_SAMPLE_RATE = 15;
 const FACE_RPPG_ROI_LANDMARKS = [10, 109, 338, 50, 280];
+
+// Keep the browser feature contract aligned with the offline EmpathicSchool trainer.
+const FACE_STRESS_SAMPLE_INTERVAL_MS = 200; // 5 samples/second
+const FACE_STRESS_WINDOW_SECONDS = 20;
+const FACE_STRESS_STEP_SECONDS = 5;
+const FACE_STRESS_MIN_WINDOW_COVERAGE = 0.60;
 let faceRppgCanvas = null;
 let faceRppgContext = null;
 let faceRppgSamples = [];
@@ -6114,6 +6120,12 @@ let faceOnlyScanActive = false;
 let faceOnlyScanStartedAt = 0;
 let faceOnlyScanTimer = null;
 let faceLastRppgEstimateAt = 0;
+
+// Derived blendshape samples/windows stay in browser memory; no camera frames or
+// face-stress feature payloads are sent to the backend by this preparation path.
+let faceStressSamples = [];
+let faceStressFeatureWindows = [];
+let faceStressLastSampleAt = 0;
 let faceValenceBusy = false;
 let faceValenceBackendReady = false;
 
@@ -6155,7 +6167,7 @@ async function loadFaceLandmarker() {
                 minFaceDetectionConfidence: 0.55,
                 minFacePresenceConfidence: 0.55,
                 minTrackingConfidence: 0.55,
-                outputFaceBlendshapes: false,
+                outputFaceBlendshapes: true,
                 outputFacialTransformationMatrixes: false
             }
         );
@@ -6728,7 +6740,10 @@ function runFaceDetectionLoop() {
                 const landmarks = faces[0];
                 checkFaceLighting(video, now, landmarks);
                 drawFaceLandmarks(landmarks);
-                if (faceOnlyScanActive) updateBlinkCounter(landmarks, now);
+                if (faceOnlyScanActive) {
+                    updateBlinkCounter(landmarks, now);
+                    recordFaceStressSample(result, now);
+                }
 
                 if (faceOnlyScanActive) {
                     const rppgSample = collectFaceRppgSample(video, landmarks, now);
@@ -7209,11 +7224,104 @@ function displayFacePulseEstimate(result) {
     }
 }
 
+function recordFaceStressSample(result, now) {
+    if (!faceOnlyScanActive ||
+        !Number.isFinite(now) ||
+        now - faceStressLastSampleAt < FACE_STRESS_SAMPLE_INTERVAL_MS) {
+        return false;
+    }
+
+    const categories = result?.faceBlendshapes?.[0]?.categories || [];
+    if (!Array.isArray(categories) || categories.length === 0) return false;
+
+    const scores = {};
+    for (const category of categories) {
+        const name = String(
+            category?.categoryName ?? category?.category_name ?? ""
+        ).trim();
+        const score = Number(category?.score);
+        if (name && Number.isFinite(score)) scores[name] = score;
+    }
+    if (Object.keys(scores).length === 0) return false;
+
+    faceStressSamples.push({
+        timestamp: Math.max(0, (now - faceOnlyScanStartedAt) / 1000),
+        scores
+    });
+    faceStressLastSampleAt = now;
+    return true;
+}
+
+function buildFaceStressFeatureWindows(samples, durationSeconds) {
+    if (!Array.isArray(samples) || !Number.isFinite(durationSeconds) ||
+        durationSeconds < FACE_STRESS_WINDOW_SECONDS) {
+        return [];
+    }
+
+    const names = [...new Set(
+        samples.flatMap(sample => Object.keys(sample?.scores || {}))
+    )].sort();
+    if (names.length === 0) return [];
+
+    const minimumSamples = Math.max(
+        5,
+        Math.floor(
+            FACE_STRESS_WINDOW_SECONDS *
+            (1000 / FACE_STRESS_SAMPLE_INTERVAL_MS) *
+            FACE_STRESS_MIN_WINDOW_COVERAGE
+        )
+    );
+    const windows = [];
+
+    for (
+        let start = 0;
+        start <= durationSeconds - FACE_STRESS_WINDOW_SECONDS + 1e-9;
+        start += FACE_STRESS_STEP_SECONDS
+    ) {
+        const end = start + FACE_STRESS_WINDOW_SECONDS;
+        const selected = samples.filter(sample =>
+            Number.isFinite(sample?.timestamp) &&
+            sample.timestamp >= start &&
+            sample.timestamp < end
+        );
+        if (selected.length < minimumSamples) continue;
+
+        const features = {};
+        for (const name of names) {
+            const values = selected
+                .map(sample => sample?.scores?.[name])
+                .filter(Number.isFinite);
+            if (values.length === 0) {
+                features[`blendshape_${name}_mean`] = null;
+                features[`blendshape_${name}_std`] = null;
+                continue;
+            }
+            const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+            const variance = values.reduce(
+                (sum, value) => sum + ((value - mean) ** 2), 0
+            ) / values.length;
+            features[`blendshape_${name}_mean`] = mean;
+            features[`blendshape_${name}_std`] = Math.sqrt(variance);
+        }
+
+        windows.push({
+            startSeconds: Math.round(start * 1000) / 1000,
+            endSeconds: Math.round(end * 1000) / 1000,
+            sampleCount: selected.length,
+            features
+        });
+    }
+    return windows;
+}
+
 function beginFaceOnlyScan() {
     if (!cameraStream || !faceProcessingActive || faceOnlyScanActive) return;
 
     faceRppgSamples = [];
     faceRppgEstimates = [];
+    faceStressSamples = [];
+    faceStressFeatureWindows = [];
+    faceStressLastSampleAt = 0;
     faceBlinkCount = 0;
     resetBlinkCalibration();
     setText("blinkCountValue", "0");
@@ -7279,6 +7387,13 @@ function finishFaceOnlyScan() {
         FACE_RPPG_DURATION_SECONDS,
         (performance.now() - faceOnlyScanStartedAt) / 1000
     );
+    faceStressFeatureWindows = buildFaceStressFeatureWindows(
+        faceStressSamples,
+        elapsedSeconds
+    );
+    // Keep only the window aggregates after the scan; discard the per-sample
+    // feature stream as soon as its 20-second windows have been formed.
+    faceStressSamples = [];
     const trackedSeconds = faceBlinkTrackedDurationMs / 1000;
     const blinkRate = trackedSeconds > 0
         ? faceBlinkCount * 60 / trackedSeconds
@@ -7326,6 +7441,9 @@ function stopFaceOnlyScan() {
         clearInterval(faceOnlyScanTimer);
         faceOnlyScanTimer = null;
     }
+    faceStressSamples = [];
+    faceStressFeatureWindows = [];
+    faceStressLastSampleAt = 0;
     $("startFaceOnlyScanBtn").disabled = false;
     $("stopFaceOnlyScanBtn").disabled = true;
     $("faceScanProgressText").textContent = "Face-only analysis stopped by the user.";

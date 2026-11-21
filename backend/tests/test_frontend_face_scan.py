@@ -102,3 +102,43 @@ def test_affec_felt_valence_remains_separate_from_face_stress():
     )
     cards = metric_card_texts(section)
     assert not any("Felt valence estimate" in card for card in cards)
+
+
+def _js_function_body(script: str, name: str) -> str:
+    signature = f"function {name}("
+    start = script.find(signature)
+    assert start >= 0, f"{name}() is missing."
+    next_function = re.search(
+        r"\\n(?:async\\s+)?function\\s+",
+        script[start + len(signature):],
+    )
+    end = len(script) if not next_function else start + len(signature) + next_function.start()
+    return script[start:end]
+
+
+def test_face_scan_collects_local_blendshape_features_using_training_window_schema():
+    _, script = face_scan_source()
+
+    assert "outputFaceBlendshapes: true" in script
+    assert "FACE_STRESS_SAMPLE_INTERVAL_MS = 200" in script
+    assert "FACE_STRESS_WINDOW_SECONDS = 20" in script
+    assert "FACE_STRESS_STEP_SECONDS = 5" in script
+    assert "FACE_STRESS_MIN_WINDOW_COVERAGE = 0.60" in script
+    assert "recordFaceStressSample(result, now)" in script
+    assert "faceStressFeatureWindows = buildFaceStressFeatureWindows(" in script
+    assert "`blendshape_${name}_mean`" in script
+    assert "`blendshape_${name}_std`" in script
+
+
+def test_face_stress_feature_preparation_never_uploads_frames_or_feature_payloads():
+    _, script = face_scan_source()
+
+    for name in ("recordFaceStressSample", "buildFaceStressFeatureWindows"):
+        body = _js_function_body(script, name)
+        assert "apiRequest(" not in body
+        assert "fetch(" not in body
+        assert "XMLHttpRequest" not in body
+        assert "MediaRecorder" not in body
+
+    assert "faceStressSamples = []" in script
+    assert "faceStressFeatureWindows = []" in script
