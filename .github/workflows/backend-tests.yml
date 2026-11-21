@@ -64,6 +64,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.12.0"
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -93,6 +98,9 @@ jobs:
           Path("/tmp/neurosense-frontend.js").write_text(scripts[0], encoding="utf-8")
           PY
           node --check /tmp/neurosense-frontend.js
+
+      - name: Test browser-local FaceScan feature windows
+        run: node --test frontend/tests/face-stress-features.test.mjs
 
       - name: Run backend tests
         run: |
