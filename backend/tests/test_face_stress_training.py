@@ -702,6 +702,27 @@ def test_empathicschool_loso_reports_partial_coverage_when_a_fold_has_one_traini
         require_complete_loso_evaluation(report)
 
 
+def test_empathicschool_loso_single_class_heldout_fold_does_not_emit_metric_warning():
+    import warnings
+
+    frame = _balanced_empathicschool_loso_frame()
+    frame.loc[frame["participant_id"] == "S1", "stress_label"] = 0
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        report = evaluate_loso(
+            frame,
+            ["blendshape_jawOpen_mean", "blendshape_eyeBlinkLeft_std"],
+        )
+
+    assert report["evaluated_windows"] == len(frame)
+    assert report["not_evaluated_windows"] == 0
+    assert all(
+        warning.category is not UserWarning
+        for warning in captured
+    )
+
+
 def test_empathicschool_loso_gate_rejects_incomplete_or_empty_reports():
     with pytest.raises(ValueError, match="did not cover every labelled window"):
         require_complete_loso_evaluation({
