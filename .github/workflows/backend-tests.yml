@@ -104,7 +104,7 @@ jobs:
 
       - name: Run backend tests
         run: |
-          python -m pytest backend/tests/test_main.py backend/tests/test_face_stress_training.py backend/tests/test_recovery_features.py backend/tests/test_face_valence.py backend/tests/test_frontend_face_scan.py -v
+          python -m pytest backend/tests/test_main.py backend/tests/test_face_stress_training.py backend/tests/test_recovery_features.py backend/tests/test_face_valence.py backend/tests/test_frontend_face_scan.py backend/tests/test_firmware_configuration.py -v
 
   openface-docker-smoke:
     name: Build OpenFace image and run sample extraction
