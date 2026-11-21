@@ -260,18 +260,22 @@ def audit_dataset(root: Path) -> dict[str, Any]:
         path for path in sorted(root.rglob("*.mp4"))
         if find_subject_task(path, root) is not None
     ]
-    tasks = discover_video_tasks(root)
-    paired_videos = {video.resolve() for _, _, video, _ in tasks}
+    tasks: list[tuple[str, str, Path, Path]] = []
     unpaired_video_tasks = []
     for video in video_candidates:
-        if video.resolve() in paired_videos:
-            continue
         identity = find_subject_task(video, root)
-        if identity:
+        if identity is None:
+            continue
+        label_path = find_label_file(video.parent)
+        if label_path is None:
             unpaired_video_tasks.append({
                 "participant_id": identity[0],
                 "task_id": identity[1],
+                "video_file": video.name,
+                "reason": "No task-level Stress_level.csv found.",
             })
+            continue
+        tasks.append((identity[0], identity[1], video, label_path))
 
     task_reports: list[dict[str, Any]] = []
     class_totals = {str(label): 0 for label in LABEL_NAMES}
@@ -321,6 +325,16 @@ def audit_dataset(root: Path) -> dict[str, Any]:
             f"{len(unpaired_video_tasks)} released video task(s) have no matching "
             "task-level Stress_level.csv and will not be used."
         )
+    if not video_candidates:
+        warnings.append(
+            "No eligible consented MP4 video tasks were found under the dataset root."
+        )
+    elif not tasks and unpaired_video_tasks:
+        warnings.append(
+            "No video task has a matching Stress_level.csv; the audit could not "
+            "validate any task labels."
+        )
+
     invalid_count = len(tasks) - valid_task_count
     if invalid_count:
         warnings.append(
