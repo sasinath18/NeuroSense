@@ -189,9 +189,11 @@ def condition_matches(path: Path, condition: str) -> bool:
 def discover_dataset_pairs(root: Path) -> list[tuple[str, str, Path, Path]]:
     """Find matching facial-video-feature and stress-label CSVs.
 
-    The expected hierarchy is LABEL/<participant>/<condition>/stress.csv and
-    CSV/VIDEO/<participant>/<condition>.csv (or a nested CSV in that folder).
-    Ambiguous pairs fail closed instead of selecting a wrong participant file.
+    EmoWork v3's official CSV mirror stores files under
+    CSV/LABEL_CSV/<participant>/<condition>/stress.csv and
+    CSV/VIDEO_csv/<participant>/<condition>.csv. The legacy LABEL/LABELS and
+    VIDEO folder spellings are also accepted for small exported fixtures.
+    Ambiguous pairs fail closed instead of selecting the wrong participant file.
     """
     if not root.exists():
         raise FileNotFoundError(
@@ -200,15 +202,19 @@ def discover_dataset_pairs(root: Path) -> list[tuple[str, str, Path, Path]]:
             "the authorized archive locally."
         )
 
+    video_folder_names = {"video", "video_csv"}
+    label_folder_names = {"label", "labels", "label_csv"}
+    csv_files = sorted(root.rglob("*.csv"))
     video_files = [
-        path for path in root.rglob("*.csv")
-        if any(part.lower() == "video" for part in path.parts)
+        path for path in csv_files
+        if any(part.casefold() in video_folder_names for part in path.parts)
     ]
     pairs = []
-    label_files = sorted(
-        path for path in root.rglob("stress.csv")
-        if any(part.lower() in {"label", "labels"} for part in path.parts)
-    )
+    label_files = [
+        path for path in csv_files
+        if path.stem.casefold() == "stress"
+        and any(part.casefold() in label_folder_names for part in path.parts)
+    ]
     for label_path in label_files:
         identity = identify_participant_condition(label_path, root)
         if identity is None:
@@ -228,8 +234,9 @@ def discover_dataset_pairs(root: Path) -> list[tuple[str, str, Path, Path]]:
 
     if not pairs:
         raise FileNotFoundError(
-            f"No LABEL/<participant>/<condition>/stress.csv and "
-            f"CSV/VIDEO/<participant>/<condition>.csv pairs found under {root}."
+            f"No EmoWork CSV mirror pairs found under {root}. Expected "
+            "CSV/LABEL_CSV/<participant>/<condition>/stress.csv and "
+            "CSV/VIDEO_csv/<participant>/<condition>.csv."
         )
     return pairs
 
