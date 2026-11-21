@@ -16,4 +16,5 @@ opencv-contrib-python
 mediapipe
 python-multipart
 pytest
-httpx
+# Starlette TestClient now prefers httpx2; avoids its httpx deprecation warning.
+httpx2>=2.16.2,<3
