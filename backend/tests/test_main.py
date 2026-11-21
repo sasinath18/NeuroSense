@@ -2400,6 +2400,11 @@ def test_public_config_exposes_telegram_readiness_without_fcm(client, monkeypatc
         for route in api.app.routes
     )
     assert not any(route.path == "/firebase-messaging-sw.js" for route in api.app.routes)
+    with api.db_connection() as db:
+        legacy_tables = db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'emergency_push_%'"
+        ).fetchall()
+    assert legacy_tables == []
 
 
 def configure_test_telegram(monkeypatch):
