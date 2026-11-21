@@ -2954,6 +2954,24 @@ def create_due_summaries() -> int:
                         "created_at": iso(),
                     }
 
+                    # Persist the cloud summary before advancing the checkpoint.
+                    # If Firestore is temporarily unavailable, leave this period
+                    # uncommitted so the next scheduler pass can retry it. The
+                    # deterministic summary ID makes a retry idempotent.
+                    cloud_sync = firestore_write(
+                        ("users", user_id, "summaries"),
+                        summary_id,
+                        summary,
+                    )
+                    if cloud_sync not in {"synced", "not_configured"}:
+                        logger.warning(
+                            "Could not persist monitoring summary for user %s at %s; "
+                            "leaving the checkpoint unchanged for retry.",
+                            user_id,
+                            end_iso,
+                        )
+                        break
+
                     db.execute(
                         """
                         INSERT OR IGNORE INTO summaries (
@@ -2977,14 +2995,8 @@ def create_due_summaries() -> int:
                             summary["created_at"],
                         ),
                     )
-                    cloud_sync = firestore_write(
-                        ("users", user_id, "summaries"),
-                        summary_id,
-                        summary,
-                    )
-                    if cloud_sync in {"synced", "not_configured"}:
-                        created += 1
-                        existing_period_ends.add(end_iso)
+                    created += 1
+                    existing_period_ends.add(end_iso)
 
                 period_start = period_end
                 windows += 1
