@@ -690,11 +690,19 @@ def test_empathicschool_loso_reports_partial_coverage_when_a_fold_has_one_traini
             })
     frame = pd.DataFrame(rows)
 
-    report = evaluate_loso(
-        frame,
-        ["blendshape_jawOpen_mean", "blendshape_eyeBlinkLeft_std"],
-    )
+    import warnings
 
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        report = evaluate_loso(
+            frame,
+            ["blendshape_jawOpen_mean", "blendshape_eyeBlinkLeft_std"],
+        )
+
+    assert not any(
+        issubclass(warning.category, UserWarning)
+        for warning in captured
+    )
     assert report["evaluated_windows"] == 18
     assert report["not_evaluated_windows"] == 6
     assert len(report["folds"]) == 3
