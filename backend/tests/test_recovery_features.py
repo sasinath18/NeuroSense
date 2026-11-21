@@ -1487,7 +1487,6 @@ def test_high_stress_prediction_uses_telegram_only(client, monkeypatch):
     """High-probability wearable predictions use Telegram, never legacy FCM."""
     user_id = "automatic-telegram-only-user"
     telegram_calls = []
-    push_calls = []
 
     class HighStressModel:
         classes_ = [0, 1]
@@ -1514,14 +1513,6 @@ def test_high_stress_prediction_uses_telegram_only(client, monkeypatch):
             telegram_calls.append((received_user, probability)) or "sent"
         ),
     )
-    monkeypatch.setattr(
-        api,
-        "maybe_send_emergency_push_alert",
-        lambda received_user, probability: (
-            push_calls.append((received_user, probability)) or "sent"
-        ),
-    )
-
     reading = {
         "id": "automatic-telegram-only-reading",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1566,7 +1557,7 @@ def test_high_stress_prediction_uses_telegram_only(client, monkeypatch):
     assert result["telegram_alert"] == "sent"
     assert "push_alert" not in result
     assert telegram_calls == [(user_id, 0.92)]
-    assert push_calls == []
+    assert not hasattr(api, "maybe_send_emergency_push_alert")
 
     with api.db_connection() as db:
         event = db.execute(
