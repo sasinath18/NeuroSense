@@ -3589,10 +3589,14 @@ def health():
 
         "database": database_status,
         "firebase_configured": FIREBASE_APP is not None,
-        # Configuration presence only; this does not verify bucket reachability.
+        "firebase_sign_in_ready": (
+            firebase_web_configured() and FIREBASE_APP is not None
+        ),
+        # These are configuration-presence indicators, not external service probes.
         "firebase_storage_configured": bool(
             FIREBASE_APP is not None and FIREBASE_STORAGE_BUCKET
         ),
+        "telegram_alerts_configured": telegram_configured(),
         "ml_model_loaded": STRESS_MODEL is not None,
         "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
         "timestamp": iso()
@@ -3611,8 +3615,8 @@ def public_config():
         "firebase_sign_in_ready": web_ready and admin_ready,
         # Safe capability flag only; never expose the bucket name or credentials.
         "firebase_storage_configured": configured_music_bucket() is not None,
-        "firebase_push_configured": firebase_push_configured(),
-        "firebase_vapid_key": FIREBASE_WEB_VAPID_KEY or None,
+        # Emergency-contact notifications use Telegram; legacy FCM is not exposed
+        # to the browser configuration surface.
         "telegram_alerts_configured": telegram_configured(),
         "telegram_bot_username": TELEGRAM_BOT_USERNAME or None,
         "firebase": (
