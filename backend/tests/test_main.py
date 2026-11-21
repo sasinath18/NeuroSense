@@ -841,6 +841,35 @@ def test_device_reading_requires_valid_x_device_token(client):
     assert status_response.json()["connected"] is True
 
 
+def test_device_reading_accepts_optional_gsr_and_temperature_as_null(client):
+    """The current BOM can upload PPG/IBI while optional sensors are absent."""
+    user_id = "neurosense-no-gsr-device-user"
+    device_id = "neurosense-no-gsr-device"
+    paired = pair_test_device(client, user_id, device_id)
+
+    response = client.post(
+        f"/api/devices/{device_id}/readings",
+        json={
+            "heart_rate_bpm": 76,
+            "hrv_ms": 35,
+            "gsr_raw": None,
+            "skin_temperature_c": None,
+            "ibi_ms": [800, 810, 820],
+            "signal_quality": "moderate",
+            "source": "wearable",
+        },
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+
+    assert response.status_code == 201, response.text
+    reading = response.json()["reading"]
+    assert reading["heart_rate_bpm"] == 76
+    assert reading["hrv_ms"] == 35
+    assert reading["gsr_raw"] is None
+    assert reading["skin_temperature_c"] is None
+    assert reading["ibi_ms"] == [800, 810, 820]
+
+
 def test_device_cannot_be_paired_to_two_different_users(client):
     """API Test 3c: a device already owned by one user cannot be reassigned."""
     device_id = "neurosense-shared-test-device"
