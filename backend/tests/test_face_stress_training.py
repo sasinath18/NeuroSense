@@ -151,8 +151,17 @@ def test_emowork_timestamp_conversion_accepts_relative_seconds_and_epoch_ms():
         "epoch",
     )
 
+    long_relative_seconds = timestamp_to_seconds(
+        pd.Series([20_000.0, 20_000.1, 20_000.2]), "long relative seconds"
+    )
+    relative_milliseconds = timestamp_to_seconds(
+        pd.Series([100_000.0, 100_100.0, 100_200.0]), "relative milliseconds"
+    )
+
     assert seconds.tolist() == [0.0, 1.0, 2.0]
     assert milliseconds.iloc[1] - milliseconds.iloc[0] == pytest.approx(1.0)
+    assert long_relative_seconds.iloc[-1] - long_relative_seconds.iloc[0] == pytest.approx(0.2)
+    assert relative_milliseconds.iloc[-1] - relative_milliseconds.iloc[0] == pytest.approx(0.2)
 
 
 def test_emowork_loader_aligns_face_only_frames_with_stress_labels(tmp_path: Path):
