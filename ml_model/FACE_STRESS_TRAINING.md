@@ -253,6 +253,11 @@ Evaluation uses Leave-One-Subject-Out (LOSO) validation, so windows from a held-
 participant are not mixed into that participant's training fold. Accuracy,
 balanced accuracy, macro F1, the confusion matrix and per-class metrics are written
 to the JSON report. Class weighting is used instead of creating synthetic examples.
+The trainer also fails closed before saving a model artifact if LOSO skips any
+participant fold or leaves labelled windows unevaluated. This can happen when a
+held-out participant is the only source of one class, leaving a single-class
+training fold. Resolve the participant-level class-support problem and rerun the
+complete evaluation; do not treat partial-fold metrics as validated model results.
 
 Do not report training-set accuracy as model performance. Do not deploy a
 user-facing stress score simply because the script completes. First review the
