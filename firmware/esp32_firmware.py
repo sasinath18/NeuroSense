@@ -418,6 +418,24 @@ def connect_wifi():
     return wlan
 
 
+def ensure_wifi_connected(wlan):
+    """Reconnect the station after a link drop without resetting a healthy link."""
+    if wlan is not None and wlan.isconnected():
+        return wlan
+
+    print("Wi-Fi link is down. Reconnecting the ESP32 station...")
+
+    if wlan is not None:
+        try:
+            wlan.active(False)
+            time.sleep(1)
+        except Exception as error:
+            print("Could not reset the previous Wi-Fi interface:", error)
+
+    # connect_wifi() also refreshes device time and rebuilds verified TLS.
+    return connect_wifi()
+
+
 # ============================================================
 # 6. PULSE AND HRV FEATURE EXTRACTION
 # ============================================================
@@ -872,7 +890,7 @@ def main():
     motor.value(0)
 
     validate_configuration()
-    connect_wifi()
+    wlan = connect_wifi()
 
     sensor = MAX30102(i2c)
 
@@ -993,6 +1011,11 @@ def main():
             )
 
             motor.value(0)
+
+            try:
+                wlan = ensure_wifi_connected(wlan)
+            except Exception as reconnect_error:
+                print("Wi-Fi reconnect attempt failed:", reconnect_error)
 
             time.sleep(2)
 
