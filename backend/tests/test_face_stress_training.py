@@ -276,6 +276,28 @@ def test_emowork_pair_discovery_accepts_labels_plural_directory(tmp_path: Path):
 
     assert pairs == [("2", "c2", video_file, label_file)]
 
+def test_emowork_v3_csv_mirror_layout_is_supported(tmp_path: Path):
+    """Match the official v3 CSV/LABEL_CSV and CSV/VIDEO_csv hierarchy."""
+    label_dir = tmp_path / "CSV" / "LABEL_CSV" / "1" / "C1"
+    video_dir = tmp_path / "CSV" / "VIDEO_csv" / "1"
+    label_dir.mkdir(parents=True)
+    video_dir.mkdir(parents=True)
+    label_file = label_dir / "stress.csv"
+    video_file = video_dir / "c1.csv"
+    label_file.write_text(
+        "Timestamp,stress\\n1700000000000,7\\n",
+        encoding="utf-8",
+    )
+    video_file.write_text(
+        "timestamp,rotation_x\\n1700000000000,0.1\\n",
+        encoding="utf-8",
+    )
+
+    pairs = discover_dataset_pairs(tmp_path)
+
+    assert pairs == [("1", "c1", video_file, label_file)]
+
+
 def test_emowork_training_runs_end_to_end_on_isolated_synthetic_fixture(tmp_path: Path):
     """Smoke-test the entire trainer without using or exporting participant data."""
     import numpy as np
