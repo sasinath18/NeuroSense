@@ -285,11 +285,11 @@ def test_emowork_v3_csv_mirror_layout_is_supported(tmp_path: Path):
     label_file = label_dir / "stress.csv"
     video_file = video_dir / "c1.csv"
     label_file.write_text(
-        "Timestamp,stress\\n1700000000000,7\\n",
+        "Timestamp,stress\n1700000000000,7\n",
         encoding="utf-8",
     )
     video_file.write_text(
-        "timestamp,rotation_x\\n1700000000000,0.1\\n",
+        "timestamp,rotation_x\n1700000000000,0.1\n",
         encoding="utf-8",
     )
 
