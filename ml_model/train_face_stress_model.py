@@ -574,6 +574,7 @@ def evaluate_loso(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, 
     if y.nunique() < 2:
         raise ValueError("At least two stress classes are required.")
 
+    ordered_labels = [0, 1, 2]
     predictions = np.full(len(frame), -1, dtype=int)
     folds = []
     for train_idx, test_idx in LeaveOneGroupOut().split(x, y, groups):
@@ -590,6 +591,7 @@ def evaluate_loso(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, 
             "test_windows": int(len(test_idx)),
             "macro_f1": float(f1_score(
                 y.iloc[test_idx], fold_predictions,
+                labels=ordered_labels,
                 average="macro", zero_division=0,
             )),
         })
@@ -599,7 +601,6 @@ def evaluate_loso(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, 
         raise ValueError("LOSO validation produced no valid held-out predictions.")
     y_true = y.iloc[np.flatnonzero(valid)]
     y_pred = predictions[valid]
-    ordered_labels = [0, 1, 2]
     return {
         "validation": "Leave-One-Subject-Out (LOSO)",
         "participants": int(groups.nunique()),
