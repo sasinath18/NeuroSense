@@ -3286,7 +3286,8 @@
                     </div>
 
                     <div class="notice face-stress-notice">
-                        The 120-second scan reports an experimental camera pulse estimate (rPPG) and blink metrics. The separate AFFEC felt-valence model is currently disabled for ordinary webcam selfies: it was trained on stimulus-locked video-phase windows, not arbitrary 4.8-second clips. Numerical feature parity and new-user validation are pending. It does not estimate stress.
+                        <strong>Face-only stress estimate: not available yet.</strong>
+                        This 120-second scan currently measures blink behaviour and an experimental camera pulse estimate (rPPG). A dedicated face-stress model still needs licensed-dataset training, participant-held-out evaluation and live feature validation. Blink rate and pulse alone are not treated as a stress score.
                     </div>
 
                     <div class="face-scan-metrics">
@@ -3307,28 +3308,18 @@
                             <strong id="blinkRateValue">0 <small>/ min</small></strong>
                         </div>
                         <div class="face-scan-metric">
-                            <span class="muted small">Felt valence estimate</span>
-                            <strong id="faceValenceValue">--</strong>
-                            <span class="muted small">AFFEC research output · not stress</span>
+                            <span class="muted small">Face stress estimate</span>
+                            <strong id="faceStressValue">Not available</strong>
+                            <span id="faceStressStatus" class="muted small">Dedicated face-stress model pending</span>
                         </div>
                         <div class="face-scan-metric">
                             <span class="muted small">Scan duration</span>
                             <strong id="faceScanElapsed">0 / 120 sec</strong>
                         </div>
                         <div class="face-scan-metric">
-                            <span class="muted small">Left eye EAR</span>
-                            <strong id="leftEyeEarValue">--</strong>
-                            <span class="muted small">Eye aspect ratio</span>
-                        </div>
-                        <div class="face-scan-metric">
-                            <span class="muted small">Right eye EAR</span>
-                            <strong id="rightEyeEarValue">--</strong>
-                            <span class="muted small">Eye aspect ratio</span>
-                        </div>
-                        <div class="face-scan-metric">
                             <span class="muted small">Eye tracking quality</span>
                             <strong id="eyeTrackingQualityValue">--</strong>
-                            <span class="muted small">Valid tracked time / scan time</span>
+                            <span class="muted small">Both-eye tracking coverage / scan time</span>
                         </div>
                     </div>
 
@@ -3365,6 +3356,7 @@
                     </p>
 
                     <div class="face-actions" style="margin-top:14px">
+                        <span id="faceValenceValue" hidden>--</span>
                         <button id="runFaceValenceBtn" class="secondary-btn" type="button" disabled>
                             AFFEC Felt-Valence Test · Validation Pending
                         </button>
@@ -6609,13 +6601,8 @@ function updateBlinkCounter(landmarks, now) {
         !Number.isFinite(left) || !Number.isFinite(right)
     ) {
         resetBlinkFrameContinuity();
-        setText("leftEyeEarValue", "--");
-        setText("rightEyeEarValue", "--");
         return;
     }
-
-    setText("leftEyeEarValue", left.toFixed(3));
-    setText("rightEyeEarValue", right.toFixed(3));
 
     // Count only time between consecutive valid face/eye frames.
     // Long gaps are not treated as observed time and cannot create a blink.
@@ -7166,8 +7153,8 @@ function resetFaceOnlyScanUI() {
     $("faceSignalQuality").textContent = "Not measured";
     $("blinkCountValue").textContent = "0";
     $("blinkRateValue").innerHTML = '0 <small>/ min</small>';
-    setText("leftEyeEarValue", "--");
-    setText("rightEyeEarValue", "--");
+    setText("faceStressValue", "Not available");
+    setText("faceStressStatus", "Dedicated face-stress model pending");
     setText("eyeTrackingQualityValue", "--");
     $("faceScanElapsed").textContent = "0 / 120 sec";
     $("faceScanProgressBar").style.width = "0%";
