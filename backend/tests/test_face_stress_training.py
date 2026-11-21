@@ -14,6 +14,8 @@ from ml_model.train_face_stress_model import (
     label_for_window,
     parse_stress_label,
     read_stress_labels,
+    evaluate_loso,
+    require_complete_loso_evaluation,
     run as run_empathicschool_training,
 )
 
@@ -635,4 +637,82 @@ def test_emowork_training_runs_end_to_end_on_isolated_synthetic_fixture(tmp_path
     assert artifact["input_modality"] == "facial landmark-derived features only"
     assert artifact["target"] == "self-reported stress score (1–20)"
     assert len(artifact["feature_columns"]) == report["feature_count"]
+
+
+
+
+def _balanced_empathicschool_loso_frame(participants=4):
+    rows = []
+    for participant_index in range(participants):
+        participant = f"S{participant_index + 1}"
+        for window_index in range(8):
+            label = window_index % 2
+            rows.append({
+                "participant_id": participant,
+                "task_id": "T2",
+                "window_start_seconds": float(window_index * 20),
+                "stress_label": label,
+                "blendshape_jawOpen_mean": float(label + participant_index * 0.01),
+                "blendshape_eyeBlinkLeft_std": float((window_index % 3) * 0.1 + participant_index * 0.02),
+            })
+    return pd.DataFrame(rows)
+
+
+def test_empathicschool_loso_evaluates_every_window_with_participant_holdout():
+    frame = _balanced_empathicschool_loso_frame()
+    report = evaluate_loso(
+        frame,
+        ["blendshape_jawOpen_mean", "blendshape_eyeBlinkLeft_std"],
+    )
+
+    assert report["validation"] == "Leave-One-Subject-Out (LOSO)"
+    assert report["participants"] == 4
+    assert report["windows"] == len(frame)
+    assert report["evaluated_windows"] == len(frame)
+    assert report["not_evaluated_windows"] == 0
+    assert len(report["folds"]) == 4
+    assert sum(fold["test_windows"] for fold in report["folds"]) == len(frame)
+    require_complete_loso_evaluation(report)
+
+
+def test_empathicschool_loso_reports_partial_coverage_when_a_fold_has_one_training_class():
+    rows = []
+    for participant in ("S1", "S2", "S3", "S4"):
+        for window_index in range(6):
+            label = 0 if participant == "S1" else 1
+            rows.append({
+                "participant_id": participant,
+                "task_id": "T2",
+                "window_start_seconds": float(window_index * 20),
+                "stress_label": label,
+                "blendshape_jawOpen_mean": float(label + window_index * 0.01),
+                "blendshape_eyeBlinkLeft_std": float(window_index * 0.02),
+            })
+    frame = pd.DataFrame(rows)
+
+    report = evaluate_loso(
+        frame,
+        ["blendshape_jawOpen_mean", "blendshape_eyeBlinkLeft_std"],
+    )
+
+    assert report["evaluated_windows"] == 18
+    assert report["not_evaluated_windows"] == 6
+    assert len(report["folds"]) == 3
+    with pytest.raises(ValueError, match="did not cover every labelled window"):
+        require_complete_loso_evaluation(report)
+
+
+def test_empathicschool_loso_gate_rejects_incomplete_or_empty_reports():
+    with pytest.raises(ValueError, match="did not cover every labelled window"):
+        require_complete_loso_evaluation({
+            "windows": 12,
+            "evaluated_windows": 10,
+            "not_evaluated_windows": 2,
+        })
+    with pytest.raises(ValueError, match="did not cover every labelled window"):
+        require_complete_loso_evaluation({
+            "windows": 0,
+            "evaluated_windows": 0,
+            "not_evaluated_windows": 0,
+        })
 
