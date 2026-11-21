@@ -2140,14 +2140,19 @@ def build_model_features(
             return float("nan")
         return float(current) - float(base)
 
+    # WESAD training uses EDA in microsiemens (uS), while current ESP32
+    # firmware sends an uncalibrated 0-4095 ADC count. Do not feed those counts
+    # into a model feature trained in a different physical unit. Keep the GSR
+    # fields missing so the fitted imputer uses its training median until a
+    # hardware-specific ADC-to-uS calibration path is implemented and verified.
     return {
         "heart_rate_bpm": number_or_nan(reading.get("heart_rate_bpm")),
         "hrv_ms": number_or_nan(reading.get("hrv_ms")),
-        "gsr_raw": number_or_nan(reading.get("gsr_raw")),
+        "gsr_raw": float("nan"),
         "skin_temperature_c": number_or_nan(reading.get("skin_temperature_c")),
         "heart_rate_delta": delta("heart_rate_bpm"),
         "hrv_delta": delta("hrv_ms"),
-        "gsr_delta": delta("gsr_raw"),
+        "gsr_delta": float("nan"),
         "skin_temperature_delta": delta("skin_temperature_c"),
     }
 
@@ -2245,7 +2250,10 @@ def predict_stress(
                 "stress_probability": round(
                     probability, 4
                 ),
-                "model_validated": False
+                "model_validated": False,
+                "model_input_warnings": [
+                    "GSR was excluded from this prediction because the ESP32 sends raw ADC counts while the training data uses EDA in microsiemens. Hardware calibration is required before GSR can be used."
+                ]
             }
 
             if probability >= HIGH_STRESS_THRESHOLD:
