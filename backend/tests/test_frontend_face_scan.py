@@ -94,6 +94,7 @@ def test_affec_felt_valence_remains_separate_from_face_stress():
     section, _ = face_scan_source()
 
     assert "AFFEC Felt-Valence Test" in section
+    assert "This optional AFFEC research experiment estimates felt valence, not stress." in section
     assert "The webcam inference test stays disabled" in section
     assert re.search(
         r'<span id="faceValenceValue"\s+hidden>--</span>',
