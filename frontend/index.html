@@ -9097,11 +9097,6 @@ function initializeApp() {
     setTheme(savedTheme);
     refreshPublicSystemStatus();
     configureFirebaseAuthentication();
-    if ("serviceWorker" in navigator && window.isSecureContext) {
-        navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" })
-            .catch(error => console.debug("FCM service worker is not ready:", error.message));
-    }
-
     if (backendRefreshTimer === null) {
         backendRefreshTimer = setInterval(() => {
             if (!document.hidden && hasPrivateApiAccess()) refreshBackendData();
