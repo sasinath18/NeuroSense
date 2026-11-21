@@ -2334,6 +2334,9 @@ def stored_or_predicted_stress(user_id: str, reading: dict) -> dict:
             "stress_score": reading.get("stress_score"),
             "stress_probability": reading.get("stress_probability"),
             "model_validated": False,
+            "model_input_warnings": [
+                "GSR was excluded from this prediction because the ESP32 sends raw ADC counts while the training data uses EDA in microsiemens. Hardware calibration is required before GSR can be used."
+            ],
         }
     return predict_stress(user_id, reading)
 
