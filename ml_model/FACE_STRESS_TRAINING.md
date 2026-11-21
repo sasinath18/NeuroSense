@@ -21,6 +21,30 @@ The dataset agreement is for research use and includes privacy/security obligati
 Do not upload the downloaded archive, participant videos, labels or derived feature
 CSV to GitHub or a public service.
 
+## Dataset audit — do not substitute emotion labels for stress labels
+
+The NeuroSense Library was audited on 2026-11-21. The available AFFEC pack contains
+face, pupil and GSR recordings/features, but its behavioural labels are felt/perceived
+emotion valence and arousal (`f_emotion_v`, `f_emotion_a`, `p_emotion_v`,
+`p_emotion_a`). Its `trial_type` field is the emotion category of the presented
+stimulus (sad, fear, happy, neutral, disgust or angry), not a participant stress
+rating. These columns must not be remapped to stress classes.
+
+The available DevEmo+ archive contains facial-expression categories such as neutral,
+confusion, happiness, surprise, disgust and anger. It does not contain self-reported
+stress labels. It is suitable only for an explicitly labelled facial-expression
+experiment, not this stress-training pipeline.
+
+The separate AFFEC felt-valence model is not a face-only stress detector. Do not use
+its output as a stress target or silently relabel arousal/valence as stress.
+
+The EmpathicSchool stress-training path below remains the intended source, subject to
+the dataset's access restrictions and Research Use License. Training may proceed only
+when each included video can be paired with the provider's documented self-reported
+stress labels and the participant has consented to video sharing. If the authorized
+video/label files are unavailable, stop and report the missing data instead of
+creating a proxy stress label.
+
 ## Expected extracted folder layout
 
 Extract the authorized dataset under data/empathicschool/. The script searches
