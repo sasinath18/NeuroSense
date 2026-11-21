@@ -6,6 +6,7 @@ time, so these tests compile only the small functions under test from its AST.
 from __future__ import annotations
 
 import ast
+import pytest
 from pathlib import Path
 
 
@@ -252,3 +253,157 @@ def test_server_haptic_commands_respect_local_disabled_gate():
 
     assert pulses == []
     assert motor_values == [0]
+
+
+
+def _valid_firmware_config(**overrides):
+    return {
+        "WIFI_SSID": "test-network",
+        "WIFI_PASSWORD": "test-password",
+        "DEVICE_TOKEN": "test-device-token",
+        "USE_HTTPS": True,
+        "API_PORT": 443,
+        "API_HOST": "neurosense-app.onrender.com",
+        **overrides,
+    }
+
+
+def test_firmware_configuration_rejects_missing_wifi_ssid():
+    tree = _firmware_tree()
+    validate = _load_function(
+        tree,
+        "validate_configuration",
+        _valid_firmware_config(WIFI_SSID=""),
+    )
+
+    with pytest.raises(RuntimeError, match="WIFI_SSID"):
+        validate()
+
+
+def test_firmware_configuration_rejects_missing_wifi_password():
+    tree = _firmware_tree()
+    validate = _load_function(
+        tree,
+        "validate_configuration",
+        _valid_firmware_config(WIFI_PASSWORD="YOUR_WIFI_PASSWORD"),
+    )
+
+    with pytest.raises(RuntimeError, match="WIFI_PASSWORD"):
+        validate()
+
+
+def test_firmware_configuration_rejects_unpaired_device_token():
+    tree = _firmware_tree()
+    validate = _load_function(
+        tree,
+        "validate_configuration",
+        _valid_firmware_config(DEVICE_TOKEN="PASTE_NEW_DEVICE_TOKEN_HERE"),
+    )
+
+    with pytest.raises(RuntimeError, match="one-time device token"):
+        validate()
+
+
+def test_firmware_configuration_blocks_public_cloud_http_downgrade():
+    tree = _firmware_tree()
+    validate = _load_function(
+        tree,
+        "validate_configuration",
+        _valid_firmware_config(USE_HTTPS=False),
+    )
+
+    with pytest.raises(RuntimeError, match="Plain HTTP is not permitted"):
+        validate()
+
+
+def test_firmware_configuration_requires_standard_cloud_https_port():
+    tree = _firmware_tree()
+    validate = _load_function(
+        tree,
+        "validate_configuration",
+        _valid_firmware_config(API_PORT=8443),
+    )
+
+    with pytest.raises(RuntimeError, match="port 443"):
+        validate()
+
+
+def test_firmware_configuration_allows_verified_cloud_https_and_local_http():
+    tree = _firmware_tree()
+
+    cloud_validate = _load_function(
+        tree,
+        "validate_configuration",
+        _valid_firmware_config(),
+    )
+    cloud_validate()
+
+    local_validate = _load_function(
+        tree,
+        "validate_configuration",
+        _valid_firmware_config(
+            USE_HTTPS=False,
+            API_HOST="192.168.1.25",
+            API_PORT=8000,
+        ),
+    )
+    local_validate()
+
+
+def test_tls_context_requires_certificate_validation_and_configured_ca_bundle():
+    tree = _firmware_tree()
+    captured = {}
+
+    class FakeTLSContext:
+        def __init__(self):
+            self.verify_mode = None
+
+        def load_verify_locations(self, cafile):
+            captured["cafile"] = cafile
+
+    class FakeSSL:
+        PROTOCOL_TLS_CLIENT = "tls-client"
+        CERT_REQUIRED = "certificate-required"
+
+        @staticmethod
+        def SSLContext(protocol):
+            captured["protocol"] = protocol
+            context = FakeTLSContext()
+            captured["context"] = context
+            return context
+
+    initialize_tls = _load_function(
+        tree,
+        "initialize_tls",
+        {
+            "USE_HTTPS": True,
+            "CA_CERT_PATH": "/render_ca_bundle.pem",
+            "ssl": FakeSSL(),
+            "TLS_CONTEXT": None,
+        },
+    )
+
+    initialize_tls()
+
+    assert captured["protocol"] == FakeSSL.PROTOCOL_TLS_CLIENT
+    assert captured["context"].verify_mode == FakeSSL.CERT_REQUIRED
+    assert captured["cafile"] == "/render_ca_bundle.pem"
+
+
+def test_disabling_https_does_not_construct_a_tls_context():
+    tree = _firmware_tree()
+
+    class UnexpectedSSL:
+        def SSLContext(self, _protocol):
+            raise AssertionError("TLS context must not be created for local HTTP.")
+
+    namespace = {
+        "USE_HTTPS": False,
+        "ssl": UnexpectedSSL(),
+        "TLS_CONTEXT": object(),
+    }
+    initialize_tls = _load_function(tree, "initialize_tls", namespace)
+
+    initialize_tls()
+
+    assert namespace["TLS_CONTEXT"] is None
