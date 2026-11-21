@@ -263,6 +263,38 @@ def test_blendshape_windows_are_grouped_and_labelled_without_wearable_features()
     assert "gsr_raw" not in rows[0]
 
 
+def test_training_preflight_stops_before_downloading_landmarker_when_dataset_not_ready(
+    tmp_path: Path, monkeypatch
+):
+    task_dir = tmp_path / "S7" / "T2"
+    task_dir.mkdir(parents=True)
+    (task_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
+    (task_dir / "Stress_level.csv").write_text(
+        "stress_level\\n0\\n1\\n2\\n1\\n0\\n",
+        encoding="utf-8",
+    )
+    _make_fake_video_capture(monkeypatch, duration_seconds=540.0)
+
+    def unexpected_download(_path):
+        pytest.fail("MediaPipe must not download before the dataset passes preflight")
+
+    monkeypatch.setattr(face_stress, "ensure_landmarker_model", unexpected_download)
+    args = SimpleNamespace(
+        dataset_root=tmp_path,
+        audit_only=False,
+        model_path=tmp_path / "model.joblib",
+        report_path=tmp_path / "evaluation.json",
+        output_csv=tmp_path / "windows.csv",
+        landmarker_model=tmp_path / "face_landmarker.task",
+        sample_fps=5.0,
+        window_seconds=20.0,
+        step_seconds=5.0,
+    )
+
+    with pytest.raises(ValueError, match="Dataset is not ready for exploratory training"):
+        run_empathicschool_training(args)
+
+
 def _emowork_video_frame(count: int = 150) -> pd.DataFrame:
     import pandas as pd
 
