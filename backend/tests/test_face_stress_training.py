@@ -717,8 +717,8 @@ def test_empathicschool_loso_single_class_heldout_fold_does_not_emit_metric_warn
 
     assert report["evaluated_windows"] == len(frame)
     assert report["not_evaluated_windows"] == 0
-    assert all(
-        warning.category is not UserWarning
+    assert not any(
+        issubclass(warning.category, UserWarning)
         for warning in captured
     )
 
