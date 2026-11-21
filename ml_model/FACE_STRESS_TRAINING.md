@@ -67,12 +67,54 @@ the official code repository: https://github.com/Kaist-ICLab/EmoWork
 
 The EmoWork context is simulated customer-service interactions and emotional
 workload, not students' everyday study stress. Its features are derived facial
-measurements, not raw video. A dedicated loader, timestamp-alignment step and
-facial-feature-only model have **not** been implemented in NeuroSense yet. The
-published paper's multimodal stress metrics are not face-only performance and
-must not be copied as NeuroSense results. Any future face-only experiment must
-use only the video-derived face features, keep participants grouped for
-Leave-One-Subject-Out validation, and report independent-user limitations.
+measurements, not raw video. The published paper's multimodal stress metrics are
+not face-only performance and must not be copied as NeuroSense results.
+
+### Offline EmoWork training pipeline
+
+NeuroSense now includes `ml_model/train_emowork_face_stress_model.py`. It expects
+the provider's CSV hierarchy, including matching files such as:
+
+    data/emowork/
+      LABEL/
+        1/
+          c1/
+            stress.csv
+      CSV/
+        VIDEO/
+          1/
+            c1.csv
+
+The loader strictly selects the documented timestamped facial-feature columns
+(head rotation/translation, total translation, blink, gaze and left/right lip
+corner movement). It filters unsuccessful landmark rows using `error_type`,
+then aligns each face frame to its nearest self-reported stress observation
+within 250 ms. It uses only video-derived facial features and the self-reported
+stress target; it does not open the dataset's SENSORS, AUDIO, pupil, EDA/GSR,
+BVP, temperature, HR or EEG data.
+
+The trainer creates 5-second windows with a 2.5-second step, aggregates facial
+features using mean and standard deviation, and predicts the continuous 1–20
+stress score with a Random Forest regressor. Evaluation is Leave-One-Participant-Out
+(LOSO), not a random window split. The output is an offline research artifact,
+not enabled in FaceScan.
+
+After receiving access and accepting the dataset DUA, extract the authorized
+dataset locally and run:
+
+    python ml_model/train_emowork_face_stress_model.py --dataset-root data/emowork
+
+Outputs are local and ignored by Git:
+
+- `data/emowork_face_stress_windows.csv`
+- `ml_model/emowork_face_stress_rf.joblib`
+- `ml_model/emowork_face_stress_evaluation.json`
+
+The face-only experiment still requires independent-user validation and a
+student/study-context dataset before a NeuroSense student-facing stress score can
+be justified. The EmoWork face-feature schema must also be matched by a live
+browser-side facial extractor before product integration. Do not enable it merely
+because offline training completes.
 
 The EmpathicSchool stress-training path below remains the intended source, subject to
 the dataset's access restrictions and Research Use License. Training may proceed only
