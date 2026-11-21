@@ -270,6 +270,10 @@ def load_aligned_face_stress(
     label_work = labels[[label_time, stress_column]].copy()
     video_work["_time_seconds"] = timestamp_to_seconds(video_work[video_time], "video")
     label_work["_time_seconds"] = timestamp_to_seconds(label_work[label_time], "label")
+    video_work = video_work.dropna(subset=["_time_seconds"]).copy()
+    label_work = label_work.dropna(subset=["_time_seconds"]).copy()
+    if video_work.empty or label_work.empty:
+        raise ValueError("No valid timestamps remain in the video or stress CSV.")
     video_work["_error_code"] = pd.to_numeric(
         video_work[error_column], errors="coerce"
     )
