@@ -151,7 +151,7 @@ unless the product architecture is deliberately changed and the rules are review
 - The main API keeps scikit-learn 1.9.1 for the existing wearable model. AFFEC runs in a separate `/opt/affec-venv` environment pinned to the model's serialized scikit-learn 1.6.1, NumPy 2.4.6, pandas 2.2.3 and joblib 1.6.0. The model is loaded only by this isolated worker, not by the wearable inference process.
 - The AFFEC model's reported subject-wise cross-validation is weak (mean-fold R² around 0.08; high/low-valence balanced accuracy around 0.60). The metadata explicitly says numerical feature parity is still required, and new-user validation has not been performed. Do not interpret its output as a reliable emotion classification, stress score, diagnosis or treatment recommendation.
 - ESP32 firmware includes authenticated one-time pairing and verified HTTPS transport. Physical sensor accuracy and end-to-end hardware operation remain to be validated on the actual device.
-- The wearable stress model is experimental. Raw ESP32 GSR ADC counts are not calibrated EDA units from WESAD; MAX30102 signal quality, HR/HRV extraction, GSR calibration, temperature sensing, motor-driver wiring and live cloud operation require hardware validation.
+- The wearable stress model is experimental. WESAD training uses wrist EDA in microsiemens (uS), but the current ESP32 firmware sends raw GSR ADC counts (0–4095). NeuroSense therefore excludes the uncalibrated GSR mean/delta from live model features and lets the fitted median imputer handle those fields; the dashboard and prediction API disclose this limitation. Do not re-enable GSR model features until the actual sensor/circuit has a validated ADC-to-uS calibration. MAX30102 signal quality, HR/HRV extraction, temperature sensing, motor-driver wiring and live cloud operation still require hardware validation.
 - Firebase Google Sign-In and Firestore cloud persistence require the project's Firebase Web App configuration and a valid server-side Firebase Admin service account.
 - The free Render service currently uses SQLite and local music storage under `/tmp`; this filesystem is ephemeral. Configure Firebase Storage for durable per-user music uploads and cloud data backup.
 - Telegram emergency alerts require a configured Telegram bot token and a contact who explicitly accepts the invite. This is a check-in feature, not an emergency-response service.
@@ -207,6 +207,8 @@ Do not commit `.env`, Firebase service-account files, device tokens, Wi-Fi crede
 - Telegram replaces the legacy WhatsApp emergency-alert flow. Contacts must explicitly opt in through the invite flow, and the app exposes test-send and `/stop` controls.
 
 ### Telegram emergency-alert setup
+
+NeuroSense uses **Telegram as its only emergency-contact notification channel**. Browser Web Push / Firebase Cloud Messaging endpoints and the old emergency-invite page are not part of the active application.
 
 Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_BOT_USERNAME` in Render's secret environment. The backend registers its HTTPS webhook at startup. Each emergency contact must open the invite link and press Start before receiving check-in alerts. Use the in-app test message and explain the experimental nature of the underlying stress signal; this is not an emergency service.
 

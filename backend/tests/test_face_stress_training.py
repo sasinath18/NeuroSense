@@ -1,5 +1,8 @@
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from ml_model.train_face_stress_model import (
@@ -8,6 +11,15 @@ from ml_model.train_face_stress_model import (
     label_for_window,
     parse_stress_label,
     read_stress_labels,
+)
+
+from ml_model.train_emowork_face_stress_model import (
+    build_face_windows,
+    discover_dataset_pairs,
+    load_aligned_face_stress,
+    select_face_feature_columns,
+    timestamp_to_seconds,
+    run as run_emowork_training,
 )
 
 
@@ -88,3 +100,250 @@ def test_blendshape_windows_are_grouped_and_labelled_without_wearable_features()
     assert "blendshape_jawOpen_mean" in rows[0]
     assert "heart_rate_bpm" not in rows[0]
     assert "gsr_raw" not in rows[0]
+
+
+def _emowork_video_frame(count: int = 150) -> pd.DataFrame:
+    import pandas as pd
+
+    return pd.DataFrame({
+        "timestamp": [index / 30.0 for index in range(count)],
+        "rotation_x": [0.1] * count,
+        "rotation_y": [0.2] * count,
+        "rotation_z": [0.3] * count,
+        "translation_x": [1.0] * count,
+        "translation_y": [2.0] * count,
+        "translation_z": [3.0] * count,
+        "total_translation": [0.5] * count,
+        "blink": [0.0] * count,
+        "gaze_x": [0.1] * count,
+        "gaze_y": [0.2] * count,
+        "left_lip_corner_x": [0.3] * count,
+        "left_lip_corner_y": [0.4] * count,
+        "right_lip_corner_x": [0.5] * count,
+        "right_lip_corner_y": [0.6] * count,
+        "error_type": [0] * count,
+        "pupil_diameter": [3.0] * count,
+        "gsr_raw": [1500] * count,
+        "heart_rate_bpm": [72.0] * count,
+        "audio_mfcc_1": [0.2] * count,
+    })
+
+
+def test_emowork_feature_selector_excludes_pupil_gsr_hr_and_audio():
+    frame = _emowork_video_frame()
+    error_column, selected = select_face_feature_columns(frame)
+
+    assert error_column == "error_type"
+    assert "rotation_x" in selected
+    assert "gaze_x" in selected
+    assert "left_lip_corner_x" in selected
+    assert "right_lip_corner_y" in selected
+    assert not any(
+        forbidden in column.lower()
+        for column in selected
+        for forbidden in ("pupil", "gsr", "heart", "audio", "mfcc", "eda", "bvp")
+    )
+
+
+def test_emowork_timestamp_conversion_accepts_relative_seconds_and_epoch_ms():
+    import pandas as pd
+
+    seconds = timestamp_to_seconds(pd.Series([0.0, 1.0, 2.0]), "relative")
+    milliseconds = timestamp_to_seconds(
+        pd.Series([1_700_000_000_000, 1_700_000_001_000]),
+        "epoch",
+    )
+
+    long_relative_seconds = timestamp_to_seconds(
+        pd.Series([20_000.0, 20_000.1, 20_000.2]), "long relative seconds"
+    )
+    relative_milliseconds = timestamp_to_seconds(
+        pd.Series([100_000.0, 100_100.0, 100_200.0]), "relative milliseconds"
+    )
+
+    assert seconds.tolist() == [0.0, 1.0, 2.0]
+    assert milliseconds.iloc[1] - milliseconds.iloc[0] == pytest.approx(1.0)
+    assert long_relative_seconds.iloc[-1] - long_relative_seconds.iloc[0] == pytest.approx(0.2)
+    assert relative_milliseconds.iloc[-1] - relative_milliseconds.iloc[0] == pytest.approx(0.2)
+
+
+def test_emowork_loader_aligns_face_only_frames_with_stress_labels(tmp_path: Path):
+    import pandas as pd
+
+    video = _emowork_video_frame()
+    video.loc[10, "error_type"] = 2
+    labels = pd.DataFrame({
+        "timestamp": [index / 10.0 for index in range(50)],
+        "stress": [float(5 + (index % 10)) for index in range(50)],
+        "arousal": [8.0] * 50,
+        "valence": [4.0] * 50,
+    })
+    video_path = tmp_path / "video.csv"
+    label_path = tmp_path / "stress.csv"
+    video.to_csv(video_path, index=False)
+    labels.to_csv(label_path, index=False)
+
+    aligned, face_columns = load_aligned_face_stress(
+        video_path, label_path, label_tolerance_ms=60.0
+    )
+
+    # One invalid face row is filtered, and the final frame is outside the
+    # 60 ms stress-label alignment tolerance.
+    assert len(aligned) == 148
+    assert "pupil_diameter" not in face_columns
+    assert "gsr_raw" not in face_columns
+    assert "heart_rate_bpm" not in face_columns
+    assert "_stress_score" in aligned.columns
+    assert aligned["_stress_score"].between(1, 20).all()
+
+
+def test_emowork_windows_keep_subject_and_continuous_stress_target(tmp_path: Path):
+    import pandas as pd
+
+    video = _emowork_video_frame()
+    labels = pd.DataFrame({
+        "timestamp": [index / 10.0 for index in range(50)],
+        "stress": [12.0] * 50,
+    })
+    video_path = tmp_path / "video.csv"
+    label_path = tmp_path / "stress.csv"
+    video.to_csv(video_path, index=False)
+    labels.to_csv(label_path, index=False)
+
+    aligned, face_columns = load_aligned_face_stress(
+        video_path, label_path, label_tolerance_ms=60.0
+    )
+    rows = build_face_windows(
+        aligned,
+        face_columns,
+        participant_id="1",
+        condition="c1",
+        window_seconds=5.0,
+        step_seconds=2.5,
+        min_frame_ratio=0.5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["participant_id"] == "1"
+    assert rows[0]["condition"] == "c1"
+    assert rows[0]["stress_score"] == pytest.approx(12.0)
+    assert "rotation_x_mean" in rows[0]
+    assert "pupil_diameter_mean" not in rows[0]
+
+
+def test_emowork_dataset_pair_discovery_requires_matching_video_and_stress_csv(tmp_path: Path):
+    label_dir = tmp_path / "LABEL" / "1" / "c1"
+    video_dir = tmp_path / "CSV" / "VIDEO" / "1"
+    label_dir.mkdir(parents=True)
+    video_dir.mkdir(parents=True)
+    label_file = label_dir / "stress.csv"
+    video_file = video_dir / "c1.csv"
+    label_file.write_text("timestamp,stress\n0,7\n", encoding="utf-8")
+    video_file.write_text("timestamp,rotation_x\n0,0.1\n", encoding="utf-8")
+
+    pairs = discover_dataset_pairs(tmp_path)
+
+    assert pairs == [("1", "c1", video_file, label_file)]
+
+
+def test_emowork_pair_discovery_does_not_confuse_condition_with_participant(tmp_path: Path):
+    label_dir = tmp_path / "LABEL" / "1" / "c1"
+    video_dir = tmp_path / "CSV" / "VIDEO" / "2"
+    label_dir.mkdir(parents=True)
+    video_dir.mkdir(parents=True)
+    (label_dir / "stress.csv").write_text(
+        "timestamp,stress\n0,7\n", encoding="utf-8"
+    )
+    (video_dir / "c1.csv").write_text(
+        "timestamp,rotation_x\n0,0.1\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="Expected one video-feature CSV"):
+        discover_dataset_pairs(tmp_path)
+
+
+def test_emowork_pair_discovery_accepts_labels_plural_directory(tmp_path: Path):
+    label_dir = tmp_path / "LABELS" / "2" / "c2"
+    video_dir = tmp_path / "CSV" / "VIDEO" / "2"
+    label_dir.mkdir(parents=True)
+    video_dir.mkdir(parents=True)
+    label_file = label_dir / "stress.csv"
+    video_file = video_dir / "c2.csv"
+    label_file.write_text("timestamp,stress\n0,9\n", encoding="utf-8")
+    video_file.write_text("timestamp,rotation_x\n0,0.2\n", encoding="utf-8")
+
+    pairs = discover_dataset_pairs(tmp_path)
+
+    assert pairs == [("2", "c2", video_file, label_file)]
+
+def test_emowork_training_runs_end_to_end_on_isolated_synthetic_fixture(tmp_path: Path):
+    """Smoke-test the entire trainer without using or exporting participant data."""
+    import numpy as np
+    import joblib
+
+    dataset_root = tmp_path / "emowork"
+    participants = 6
+    epoch_start_ms = 1_700_000_000_000
+
+    for participant_index in range(1, participants + 1):
+        participant = str(participant_index)
+        video_dir = dataset_root / "CSV" / "VIDEO" / participant
+        label_dir = dataset_root / "LABELS" / participant / "c1"
+        video_dir.mkdir(parents=True)
+        label_dir.mkdir(parents=True)
+
+        frame_count = 26 * 30
+        frame_index = np.arange(frame_count, dtype=float)
+        video = _emowork_video_frame(count=frame_count)
+        video["timestamp"] = epoch_start_ms + participant_index * 10_000 + frame_index * (1000.0 / 30.0)
+        video["rotation_x"] = 0.05 * np.sin(frame_index / 15.0) + participant_index * 0.01
+        video["rotation_y"] = 0.04 * np.cos(frame_index / 18.0)
+        video["translation_x"] = frame_index / frame_count
+        video["blink"] = ((frame_index.astype(int) % 90) == 0).astype(float)
+        video.to_csv(video_dir / "c1.csv", index=False)
+
+        label_index = np.arange(261, dtype=float)
+        stress = 5.0 + ((label_index.astype(int) // 20 + participant_index) % 12)
+        labels = pd.DataFrame({
+            "Timestamp": epoch_start_ms + participant_index * 10_000 + label_index * 100.0,
+            "stress": stress,
+            # These non-face labels must never enter the model feature matrix.
+            "arousal": 8.0,
+            "valence": 4.0,
+        })
+        labels.to_csv(label_dir / "stress.csv", index=False)
+
+    args = SimpleNamespace(
+        dataset_root=dataset_root,
+        model_path=tmp_path / "model.joblib",
+        report_path=tmp_path / "evaluation.json",
+        output_csv=tmp_path / "windows.csv",
+        window_seconds=5.0,
+        step_seconds=2.5,
+        label_tolerance_ms=250.0,
+        min_frame_ratio=0.5,
+    )
+
+    run_emowork_training(args)
+
+    assert args.model_path.is_file()
+    assert args.report_path.is_file()
+    assert args.output_csv.is_file()
+
+    report = json.loads(args.report_path.read_text(encoding="utf-8"))
+    assert report["dataset"] == "EmoWork"
+    assert report["target"] == "self-reported stress score (1–20)"
+    assert report["evaluation"]["validation"] == "Leave-One-Participant-Out (LOSO)"
+    assert report["evaluation"]["participants"] == participants
+    assert report["evaluation"]["evaluated_windows"] >= 50
+    assert not any(
+        forbidden in column.lower()
+        for column in report["feature_columns"]
+        for forbidden in ("pupil", "gsr", "heart", "audio", "arousal", "valence")
+    )
+
+    artifact = joblib.load(args.model_path)
+    assert artifact["input_modality"] == "facial landmark-derived features only"
+    assert artifact["target"] == "self-reported stress score (1–20)"
+    assert len(artifact["feature_columns"]) == report["feature_count"]
+

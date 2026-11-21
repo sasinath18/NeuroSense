@@ -1,4 +1,5 @@
 """
+
 NeuroSense - Backend API Tests
 
 Run from the project root:
@@ -7,6 +8,8 @@ Run from the project root:
 Tests use an isolated temporary SQLite database. They do not modify
 the developer's local NeuroSense database or require real hardware.
 """
+
+import json
 
 from datetime import datetime, timedelta, timezone
 
@@ -134,6 +137,10 @@ def test_health_endpoint(client):
 
     assert body["status"] == "healthy"
     assert body["database"] == "healthy"
+    assert isinstance(body["firebase_configured"], bool)
+    assert isinstance(body["firebase_sign_in_ready"], bool)
+    assert isinstance(body["firebase_storage_configured"], bool)
+    assert isinstance(body["telegram_alerts_configured"], bool)
 
 
 def test_system_status_endpoint(client):
@@ -1036,6 +1043,7 @@ def test_stress_prediction_api_uses_baseline_and_records_high_stress_event(
     assert body["stress_score"] == 80.0
     assert body["stress_probability"] == 0.8
     assert body["model_validated"] is False
+    assert any("GSR was excluded" in warning for warning in body["model_input_warnings"])
 
     events = client.get(
         "/api/events/high-stress",
@@ -2143,8 +2151,8 @@ def test_model_features_preserve_missing_sensor_values_for_imputation():
     assert api.np.isnan(features["skin_temperature_delta"])
 
 
-def test_model_features_preserve_valid_zero_measurement():
-    """A supplied numeric zero is not confused with a missing value."""
+def test_model_features_preserve_valid_zero_measurement_and_exclude_raw_gsr():
+    """HRV zero is valid, but uncalibrated ADC counts must not enter the model."""
     features = api.build_model_features(
         {
             "heart_rate_bpm": 72.0,
@@ -2161,10 +2169,33 @@ def test_model_features_preserve_valid_zero_measurement():
     )
 
     assert features["hrv_ms"] == 0.0
-    assert features["gsr_raw"] == 0.0
     assert features["hrv_delta"] == -10.0
-    assert features["gsr_delta"] == -100.0
+    assert api.np.isnan(features["gsr_raw"])
+    assert api.np.isnan(features["gsr_delta"])
     assert api.np.isnan(features["skin_temperature_c"])
+
+
+def test_model_features_exclude_unscaled_esp32_gsr_adc_counts():
+    """0-4095 ADC counts are not WESAD EDA microsiemens."""
+    features = api.build_model_features(
+        {
+            "heart_rate_bpm": 82.0,
+            "hrv_ms": 38.0,
+            "gsr_raw": 2300,
+            "skin_temperature_c": 33.2,
+        },
+        {
+            "heart_rate_bpm": 70.0,
+            "hrv_ms": 45.0,
+            "gsr_raw": 1500,
+            "skin_temperature_c": 33.0,
+        },
+    )
+
+    assert features["heart_rate_bpm"] == 82.0
+    assert features["heart_rate_delta"] == 12.0
+    assert api.np.isnan(features["gsr_raw"])
+    assert api.np.isnan(features["gsr_delta"])
 
 
 def test_haptic_command_status_reports_pending_delivered_and_acknowledged(client):
@@ -2370,211 +2401,34 @@ def test_monitoring_interval_preferences_support_units_and_are_per_user(client):
     assert too_short.status_code == 422
 
 
-def configure_test_fcm(monkeypatch):
-    monkeypatch.setattr(api, "FIREBASE_APP", object())
-    monkeypatch.setattr(
-        api, "FIREBASE_WEB_CONFIG",
-        {
-            "apiKey": "test-web-key",
-            "authDomain": "neurosense-test.firebaseapp.com",
-            "projectId": "neurosense-test",
-            "appId": "1:123:web:test",
-            "messagingSenderId": "123",
-        },
-    )
-    monkeypatch.setattr(api, "FIREBASE_WEB_VAPID_KEY", "B" + "x" * 86)
-
-
-def create_test_push_invite(client, user_id, contact_name="Parent"):
-    client.app.dependency_overrides[api.current_user_id] = lambda: user_id
-    response = client.post(
-        "/api/emergency-contacts/invites",
-        json={"contact_name": contact_name},
-        headers={"X-Demo-User": user_id},
-    )
-    assert response.status_code == 200
-    return response.json()
-
-
-def register_test_push_device(client, invite_token, fcm_fid):
-    return client.post(
-        "/api/emergency-contacts/register",
-        json={"invite_token": invite_token, "fcm_fid": fcm_fid, "device_name": "Test browser"},
-    )
-
-
-def test_public_firebase_config_exposes_vapid_key_but_never_admin_secrets(client, monkeypatch):
-    configure_test_fcm(monkeypatch)
+def test_public_config_exposes_telegram_readiness_without_fcm(client, monkeypatch):
+    """Telegram is the only contact-alert channel exposed by NeuroSense."""
+    monkeypatch.setattr(api, "TELEGRAM_BOT_TOKEN", "test-telegram-token")
+    monkeypatch.setattr(api, "TELEGRAM_BOT_USERNAME", "NeuroSense_Wellness_Alert_Bot")
     response = client.get("/api/public-config")
+
     assert response.status_code == 200
     body = response.json()
-    assert body["firebase_push_configured"] is True
-    assert body["firebase_vapid_key"] == api.FIREBASE_WEB_VAPID_KEY
+    assert body["telegram_alerts_configured"] is True
+    assert body["telegram_bot_username"] == "NeuroSense_Wellness_Alert_Bot"
+    assert "firebase_push_configured" not in body
+    assert "firebase_vapid_key" not in body
     assert "FIREBASE_SERVICE_ACCOUNT_JSON" not in response.text
     assert "private_key" not in response.text
 
-
-def test_emergency_push_invites_register_multiple_contacts_and_list_status(client, monkeypatch):
-    configure_test_fcm(monkeypatch)
-    user_id = "neurosense-push-invites"
-    first = create_test_push_invite(client, user_id, "Parent")
-    second = create_test_push_invite(client, user_id, "Partner")
-    registered = register_test_push_device(client, first["invite_token"], "firebase-installation-" + ("a" * 24))
-    assert registered.status_code == 200
-    assert registered.json()["contact_name"] == "Parent"
+    # The legacy Firebase Web Push interface and transport are not registered.
+    assert not hasattr(api, "firebase_push_configured")
+    assert not hasattr(api, "maybe_send_emergency_push_alert")
+    assert not any(
+        route.path.startswith("/api/emergency-contacts")
+        for route in api.app.routes
+    )
+    assert not any(route.path == "/firebase-messaging-sw.js" for route in api.app.routes)
     with api.db_connection() as db:
-        db.execute(
-            "UPDATE emergency_push_invites SET expires_at = ? WHERE invite_id = ?",
-            (api.iso(api.utc_now() - timedelta(days=1)), first["id"]),
-        )
-
-    listed = client.get("/api/emergency-contacts", headers={"X-Demo-User": user_id})
-    assert listed.status_code == 200
-    contacts = {item["contact_name"]: item for item in listed.json()["contacts"]}
-    assert contacts["Parent"]["status"] == "connected"
-    assert contacts["Parent"]["device_count"] == 1
-    assert contacts["Partner"]["status"] == "pending"
-    assert listed.json()["push_configured"] is True
-    assert second["id"] == contacts["Partner"]["id"]
-
-
-def test_emergency_push_registration_rejects_invalid_and_expired_invites(client, monkeypatch):
-    configure_test_fcm(monkeypatch)
-    invalid = register_test_push_device(
-        client, "not-a-real-invitation-token-" + ("x" * 40), "firebase-installation-" + ("b" * 24)
-    )
-    assert invalid.status_code == 404
-    invite = create_test_push_invite(client, "neurosense-push-expired", "Contact")
-    with api.db_connection() as db:
-        db.execute(
-            "UPDATE emergency_push_invites SET expires_at = ? WHERE invite_id = ?",
-            (api.iso(api.utc_now() - timedelta(days=1)), invite["id"]),
-        )
-    expired = register_test_push_device(
-        client, invite["invite_token"], "firebase-installation-" + ("c" * 24)
-    )
-    assert expired.status_code == 410
-
-    active_invite = create_test_push_invite(client, "neurosense-push-unregister", "Contact")
-    f_id = "firebase-installation-" + ("g" * 24)
-    assert register_test_push_device(client, active_invite["invite_token"], f_id).status_code == 200
-    removed = client.post(
-        "/api/emergency-contacts/unregister",
-        json={"invite_token": active_invite["invite_token"], "fcm_fid": f_id},
-    )
-    assert removed.status_code == 200
-    assert removed.json()["removed"] is True
-
-
-def test_emergency_push_test_endpoint_sends_to_registered_devices(client, monkeypatch):
-    configure_test_fcm(monkeypatch)
-    sent_messages = []
-
-    class FakeBatchResponse:
-        success_count = 2
-        failure_count = 0
-        responses = []
-
-    def fake_send_each(messages, app=None):
-        sent_messages.extend(messages)
-        assert app is api.FIREBASE_APP
-        return FakeBatchResponse()
-
-    monkeypatch.setattr(api.firebase_messaging, "send_each", fake_send_each)
-    user_id = "neurosense-push-test-send"
-    for name, suffix in (("Parent", "d"), ("Partner", "e")):
-        invite = create_test_push_invite(client, user_id, name)
-        assert register_test_push_device(
-            client, invite["invite_token"], "firebase-installation-" + (suffix * 24)
-        ).status_code == 200
-
-    response = client.post(
-        "/api/emergency-contacts/test",
-        headers={"X-Demo-User": user_id},
-    )
-    assert response.status_code == 200
-    assert response.json() == {"success": True, "status": "sent", "recipient_count": 2}
-    assert len(sent_messages) == 2
-    assert all(item.data["title"] == "NeuroSense test notification" for item in sent_messages)
-
-
-def test_emergency_push_test_endpoint_requires_a_registered_contact(client, monkeypatch):
-    configure_test_fcm(monkeypatch)
-    client.app.dependency_overrides[api.current_user_id] = lambda: "neurosense-push-no-recipient"
-    response = client.post(
-        "/api/emergency-contacts/test",
-        headers={"X-Demo-User": "neurosense-push-no-recipient"},
-    )
-    assert response.status_code == 409
-    assert "accepted an invitation" in response.json()["detail"]
-
-
-def test_automatic_emergency_push_waits_for_three_events_and_applies_cooldown(client, monkeypatch):
-    configure_test_fcm(monkeypatch)
-    sent_messages = []
-
-    class FakeBatchResponse:
-        success_count = 1
-        failure_count = 0
-        responses = []
-
-    def fake_send_each(messages, app=None):
-        sent_messages.extend(messages)
-        return FakeBatchResponse()
-
-    monkeypatch.setattr(api.firebase_messaging, "send_each", fake_send_each)
-    user_id = "neurosense-push-automatic"
-    invite = create_test_push_invite(client, user_id, "Trusted contact")
-    assert register_test_push_device(
-        client, invite["invite_token"], "firebase-installation-" + ("f" * 24)
-    ).status_code == 200
-    with api.db_connection() as db:
-        db.execute(
-            "UPDATE emergency_push_invites SET expires_at = ? WHERE invite_id = ?",
-            (api.iso(api.utc_now() - timedelta(days=1)), invite["id"]),
-        )
-
-    def add_high_stress_event(index):
-        occurred_at = (datetime.now(timezone.utc) - timedelta(minutes=index)).isoformat()
-        reading_id = "push-test-reading-" + str(index)
-        with api.db_connection() as db:
-            db.execute(
-                """
-                INSERT INTO sensor_readings (
-                    id, user_id, device_id, timestamp, received_at,
-                    heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
-                    signal_quality, source, stress_score,
-                    stress_probability, stress_status
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    reading_id, user_id, "push-test-device",
-                    occurred_at, occurred_at, 92, 24, 2300, 33.5,
-                    "good", "wearable", 90, 0.9, "prediction_available",
-                ),
-            )
-            db.execute(
-                """
-                INSERT INTO high_stress_events (
-                    event_id, user_id, reading_id, stress_probability, occurred_at
-                )
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                ("push-test-event-" + str(index), user_id, reading_id, 0.9, occurred_at),
-            )
-
-    add_high_stress_event(1)
-    add_high_stress_event(2)
-    assert api.maybe_send_emergency_push_alert(user_id, 0.9) == "awaiting_repeated_readings"
-    assert sent_messages == []
-    add_high_stress_event(3)
-    assert api.maybe_send_emergency_push_alert(user_id, 0.9) == "sent"
-    assert len(sent_messages) == 1
-    assert sent_messages[0].fid == "firebase-installation-" + ("f" * 24)
-    assert api.maybe_send_emergency_push_alert(user_id, 0.9) == "cooldown"
-    assert len(sent_messages) == 1
-
+        legacy_tables = db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'emergency_push_%'"
+        ).fetchall()
+    assert legacy_tables == []
 
 
 def configure_test_telegram(monkeypatch):

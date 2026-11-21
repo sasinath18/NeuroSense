@@ -2636,7 +2636,7 @@
                 <article class="card metric-card">
 
                     <div class="metric-top">
-                        <span class="muted small">GSR</span>
+                        <span class="muted small">GSR raw ADC</span>
                         <span class="metric-icon">〰</span>
                     </div>
 
@@ -2821,6 +2821,7 @@
                         <div class="card-header"><div><h3>Personal Stress Learning</h3><p>Build a reference from your own readings</p></div><span class="badge" id="personalLearningBadge">Collecting</span></div>
                         <p id="personalLearningStatus" class="muted small">Collect reliable wearable readings across at least two different days.</p>
                         <p id="personalLearningDetails" class="muted small">Three days are recommended before considering the personal reference stable.</p>
+                        <p id="personalBlinkLearningDetails" class="muted small">Camera blink reference: awaiting completed camera scans.</p>
                     </article>
 
                     <article class="card" style="margin-top:17px">
@@ -2987,7 +2988,7 @@
                 </article>
                 <article class="card">
                     <div class="card-header">
-                        <div><h3>GSR Trend</h3><p>Raw galvanic skin response readings</p></div>
+                        <div><h3>GSR ADC Trend</h3><p>Uncalibrated raw galvanic skin response ADC counts</p></div>
                         <span class="badge" id="monitorGsrBadge">No data</span>
                     </div>
                     <div class="chart-wrap"><canvas id="monitorGsrChart" role="img" aria-label="My GSR history"></canvas></div>
@@ -3027,6 +3028,9 @@
                     <p id="monitorLearningNotice" class="muted small">
                         Preliminary analysis is a personal reference, not a diagnosis or a newly trained ML model.
                     </p>
+                    <p id="monitorBlinkLearningNotice" class="muted small">
+                        Camera blink reference: awaiting completed scans. It is descriptive and is not used to infer stress.
+                    </p>
                     <div class="feedback-label-controls">
                         <p class="muted small">Label your latest reliable wearable reading (optional):</p>
                         <div class="button-row">
@@ -3048,7 +3052,7 @@
                     </div>
                     <div class="table-wrap monitoring-table-wrap">
                         <table class="monitoring-table">
-                            <thead><tr><th>Time</th><th>HR</th><th>HRV</th><th>GSR</th><th>Quality</th></tr></thead>
+                            <thead><tr><th>Time</th><th>HR</th><th>HRV</th><th>GSR raw ADC</th><th>Quality</th></tr></thead>
                             <tbody id="monitorReadingsBody">
                                 <tr><td colspan="5" class="empty-state">No wearable readings available.</td></tr>
                             </tbody>
@@ -3145,14 +3149,14 @@
                 <article class="card">
                     <div class="card-header">
                         <div>
-                            <h3>GSR History</h3>
+                            <h3>GSR raw ADC History</h3>
                             <p>Backend wearable history</p>
                         </div>
                     </div>
                     <div class="chart-wrap">
                         <canvas id="analyticsGsrChart"
                                 role="img"
-                                aria-label="Wearable GSR history chart"></canvas>
+                                aria-label="Wearable GSR raw ADC history chart"></canvas>
                     </div>
                 </article>
 
@@ -3812,7 +3816,7 @@
                     </div>
                     <p id="pushContactStatus" class="muted small" role="status" aria-live="polite" style="margin-top:12px">Create an invite and ask your contact to press Start in Telegram.</p>
                     <div id="pushContactsList" style="display:grid;gap:10px;margin-top:14px"><p class="muted small">No Telegram contacts connected yet.</p></div>
-                    <div class="notice" style="margin-top:12px">Automatic alerts require three elevated model readings within 30 minutes and use a six-hour cooldown. Push delivery depends on browser support, permission and internet access. This is not an emergency service or medical diagnosis.</div>
+                    <div class="notice" style="margin-top:12px">Automatic Telegram alerts require three elevated wearable-model readings within 30 minutes and use a six-hour cooldown. Delivery requires a configured Telegram bot and a contact who has accepted the invite. This is not an emergency service or medical diagnosis.</div>
                 </article>
 
 
@@ -4415,7 +4419,7 @@ function applyStressResult(stress) {
         setText("stressSummary", "Experimental model estimate");
         setText(
             "stressDescription",
-            "WESAD-trained model output. This model is not clinically validated and is not a diagnosis."
+            "WESAD-trained experimental estimate. Raw ESP32 GSR ADC counts are excluded because WESAD training expects EDA in microsiemens; this model is not clinically validated and is not a diagnosis."
         );
         setText("stressStatusBadge", "Experimental");
         if (ring) {
@@ -4462,7 +4466,7 @@ function formatRecoveryReading(values) {
         parts.push(`HRV ${displayValue(values.hrv_ms, 1)} ms`);
     }
     if (values.gsr_raw !== null && values.gsr_raw !== undefined) {
-        parts.push(`GSR ${displayValue(values.gsr_raw)}`);
+        parts.push(`GSR raw ADC ${displayValue(values.gsr_raw)}`);
     }
     if (values.skin_temperature_c !== null && values.skin_temperature_c !== undefined) {
         parts.push(`Temp ${displayValue(values.skin_temperature_c, 1)} °C`);
@@ -4725,6 +4729,17 @@ async function refreshExtendedFeatures() {
         setText("personalLearningStatus", item.days_observed + " distinct day(s) · " + item.reading_count + " reliable wearable readings · " + Number(item.labeled_readings || 0) + " user-labelled readings in the last 72 hours.");
         personalMonitoringProfile = item;
         setText("personalLearningDetails", item.notice);
+        const blinkReference = item.blink_reference || {};
+        const blinkRate = blinkReference.median_blinks_per_minute;
+        const blinkRateText = blinkRate !== null && blinkRate !== undefined && Number.isFinite(Number(blinkRate))
+            ? Number(blinkRate).toFixed(1) + " blinks/min median"
+            : "no usable blink-rate median yet";
+        const blinkDetail = Number(blinkReference.summary_count || 0) > 0
+            ? "Camera blink reference: " + blinkRateText + " across " +
+              Number(blinkReference.days_observed || 0) + " distinct day(s) and " +
+              Number(blinkReference.summary_count || 0) + " completed scan(s). Descriptive only; not used in stress scoring."
+            : "Camera blink reference: complete scans on multiple days to build a personal descriptive reference. It is not used in stress scoring.";
+        setText("personalBlinkLearningDetails", blinkDetail);
         updateMonitoringLearning();
     }
     if (results[1].status === "fulfilled") {
@@ -4781,6 +4796,17 @@ function updateMonitoringLearning() {
         observed + " distinct day(s) · " + (profile.reading_count || 0) +
         " reliable wearable readings in the latest 72 hours.");
     setText("monitorLearningNotice", profile.notice || "Three days are recommended for a more stable personal reference.");
+    const blinkReference = profile.blink_reference || {};
+    const blinkRate = blinkReference.median_blinks_per_minute;
+    const blinkRateText = blinkRate !== null && blinkRate !== undefined && Number.isFinite(Number(blinkRate))
+        ? Number(blinkRate).toFixed(1) + " blinks/min median"
+        : "no usable rate yet";
+    setText("monitorBlinkLearningNotice",
+        Number(blinkReference.summary_count || 0) > 0
+            ? "Separate camera reference: " + blinkRateText + " across " +
+              Number(blinkReference.days_observed || 0) + " day(s) and " +
+              Number(blinkReference.summary_count || 0) + " scan(s). Descriptive only; not used for stress scoring."
+            : "Camera blink reference: awaiting completed scans on multiple days. Not used to infer stress.");
     const progress = $("monitorLearningProgress");
     if (progress) progress.style.width = percent + "%";
 }
@@ -9071,9 +9097,25 @@ function initializeApp() {
     setTheme(savedTheme);
     refreshPublicSystemStatus();
     configureFirebaseAuthentication();
-    if ("serviceWorker" in navigator && window.isSecureContext) {
-        navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" })
-            .catch(error => console.debug("FCM service worker is not ready:", error.message));
+
+    // Remove the old Firebase Messaging worker from browsers that installed it
+    // before NeuroSense switched emergency-contact notifications to Telegram.
+    if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.getRegistrations()
+            .then(registrations => Promise.all(
+                registrations
+                    .filter(registration => {
+                        const worker = registration.active
+                            || registration.waiting
+                            || registration.installing;
+                        return Boolean(
+                            worker
+                            && new URL(worker.scriptURL).pathname === "/firebase-messaging-sw.js"
+                        );
+                    })
+                    .map(registration => registration.unregister())
+            ))
+            .catch(error => console.debug("Legacy FCM worker cleanup skipped:", error.message));
     }
 
     if (backendRefreshTimer === null) {

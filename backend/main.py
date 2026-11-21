@@ -57,7 +57,7 @@ from scipy.signal import butter, find_peaks, sosfiltfilt
 
 import firebase_admin
 from firebase_admin import auth as firebase_auth
-from firebase_admin import credentials, firestore, messaging as firebase_messaging, storage as firebase_storage
+from firebase_admin import credentials, firestore, storage as firebase_storage
 
 
 # ============================================================
@@ -96,16 +96,14 @@ MAX_MUSIC_FILE_BYTES = 20 * 1024 * 1024
 MAX_MUSIC_TRACKS_PER_USER = 10
 ALLOWED_MUSIC_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".webm"}
 
-FIREBASE_WEB_VAPID_KEY = os.getenv("FIREBASE_WEB_VAPID_KEY", "").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+TELEGRAM_INVITE_TTL_DAYS = 7
+TELEGRAM_MAX_CONTACTS = 10
 NEUROSENSE_PUBLIC_URL = os.getenv(
     "NEUROSENSE_PUBLIC_URL",
     os.getenv("RENDER_EXTERNAL_URL", "https://neurosense-app.onrender.com")
 ).strip().rstrip("/")
-MAX_EMERGENCY_CONTACTS = 10
-MAX_DEVICES_PER_EMERGENCY_CONTACT = 3
-EMERGENCY_INVITE_TTL_DAYS = 7
 GOOGLE_DRIVE_API_KEY = os.getenv("GOOGLE_DRIVE_API_KEY", "").strip()
 GOOGLE_DRIVE_APP_ID = os.getenv("GOOGLE_DRIVE_APP_ID", "").strip()
 
@@ -226,6 +224,42 @@ def median_or_none(values: list[float]) -> float | None:
         round(float(np.median(values)), 3)
         if values else None
     )
+
+
+def select_latest_sensor_reading(
+    local_reading,
+    cloud_readings: list[dict],
+    source: str | None = None,
+) -> dict | None:
+    """Select the newest valid timestamped reading from SQLite and Firestore."""
+    candidates = []
+    if local_reading is not None:
+        candidates.append(dict(local_reading))
+
+    candidates.extend(
+        dict(item) for item in cloud_readings if isinstance(item, dict)
+    )
+
+    newest = None
+    newest_timestamp = None
+    for item in candidates:
+        if source is not None and str(item.get("source") or "") != source:
+            continue
+
+        raw_timestamp = item.get("timestamp")
+        if not raw_timestamp:
+            continue
+
+        try:
+            parsed_timestamp = parse_iso(str(raw_timestamp))
+        except (TypeError, ValueError):
+            continue
+
+        if newest is None or parsed_timestamp > newest_timestamp:
+            newest = item
+            newest_timestamp = parsed_timestamp
+
+    return newest
 
 
 def row_dict(row: sqlite3.Row | None) -> dict | None:
@@ -370,40 +404,6 @@ def initialize_database() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_blink_user_time
         ON blink_summaries(user_id, recorded_at);
-
-        CREATE TABLE IF NOT EXISTS emergency_push_invites (
-            invite_id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            contact_name TEXT NOT NULL,
-            token_hash TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            revoked_at TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_emergency_push_invites_user
-        ON emergency_push_invites(user_id, created_at);
-
-        CREATE TABLE IF NOT EXISTS emergency_push_devices (
-            device_id TEXT PRIMARY KEY,
-            invite_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            fcm_fid TEXT NOT NULL UNIQUE,
-            device_name TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            active INTEGER NOT NULL DEFAULT 1,
-            FOREIGN KEY(invite_id) REFERENCES emergency_push_invites(invite_id)
-                ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_emergency_push_devices_user
-        ON emergency_push_devices(user_id, active);
-
-        CREATE TABLE IF NOT EXISTS emergency_push_alert_state (
-            user_id TEXT PRIMARY KEY,
-            last_alert_at TEXT NOT NULL
-        );
 
         CREATE TABLE IF NOT EXISTS telegram_emergency_invites (
             invite_id TEXT PRIMARY KEY,
@@ -662,13 +662,6 @@ def firebase_web_configured() -> bool:
     )
     return all(FIREBASE_WEB_CONFIG.get(field) for field in required_fields)
 
-
-def firebase_push_configured() -> bool:
-    return bool(
-        FIREBASE_APP is not None
-        and firebase_web_configured()
-        and FIREBASE_WEB_VAPID_KEY
-    )
 
 
 # ============================================================
@@ -1003,6 +996,7 @@ def telegram_global_document(collection_name: str, document_id: str):
     return FIRESTORE_CLIENT.collection(collection_name).document(document_id)
 
 
+
 def telegram_firestore_documents(collection_ref) -> list[dict]:
     """Return a Firestore collection with document IDs included."""
     return [
@@ -1142,63 +1136,150 @@ def configured_music_bucket():
         return None
 
 
-def send_emergency_push_message(fids: list[str], title: str, body: str) -> tuple[str, int]:
-    """Send data-only Web Push notifications to opted-in contact devices."""
-    if not firebase_push_configured():
-        return "not_configured", 0
-    if not fids:
-        return "no_registered_contacts", 0
-
-    messages = [
-        firebase_messaging.Message(
-            fid=fid,
-            data={"title": title[:100], "body": body[:500], "url": "/dashboard"},
-            webpush=firebase_messaging.WebpushConfig(headers={"Urgency": "high"}),
-        )
-        for fid in fids[:500]
-    ]
-    try:
-        response = firebase_messaging.send_each(messages, app=FIREBASE_APP)
-        invalid_tokens = []
-        for index, item in enumerate(response.responses):
-            if item.success:
-                continue
-            error_code = getattr(item.exception, "code", "")
-            if error_code in {
-                "messaging/registration-token-not-registered",
-                "messaging/invalid-registration-token",
-            }:
-                invalid_tokens.append(fids[index])
-        if invalid_tokens:
-            with db_connection() as db:
-                db.executemany(
-                    "UPDATE emergency_push_devices SET active = 0 WHERE fcm_fid = ?",
-                    [(fid,) for fid in invalid_tokens],
-                )
-        if response.success_count:
-            return "sent", int(response.success_count)
-        logger.warning("FCM delivery failed for all %s emergency contact device(s).", len(messages))
-        return "failed", 0
-    except Exception:
-        logger.exception("FCM emergency push delivery failed.")
-        return "failed", 0
-
 
 def maybe_send_emergency_telegram_alert(user_id: str, probability: float) -> str:
-    """Send a Telegram check-in after three elevated readings within 30 minutes; six-hour cooldown."""
+    """Send a Telegram check-in using cloud-backed event history and cooldown."""
     if probability < HIGH_STRESS_THRESHOLD:
         return "not_triggered"
+    if not telegram_configured():
+        return "not_configured"
 
     now = utc_now()
     now_text = iso(now)
+    cutoff = now - timedelta(minutes=30)
+
+    # Local SQLite is a development cache. In production, recover the rolling
+    # event window and alert reservation from Firestore so a Render restart
+    # cannot erase the three-reading threshold or cause a duplicate alert.
+    if FIRESTORE_CLIENT is not None:
+        try:
+            local_events = []
+            with db_connection() as db:
+                local_events = [
+                    dict(row) for row in db.execute(
+                        """
+                        SELECT event_id, reading_id, stress_probability, occurred_at
+                        FROM high_stress_events
+                        WHERE user_id = ? AND occurred_at >= ?
+                        """,
+                        (user_id, iso(cutoff)),
+                    ).fetchall()
+                ]
+
+            event_ref = telegram_user_collection(user_id, "high_stress_events")
+            event_query = event_ref.order_by(
+                "occurred_at", direction=firestore.Query.DESCENDING
+            ).limit(500)
+            cloud_events = [
+                {**(snapshot.to_dict() or {}), "document_id": snapshot.id}
+                for snapshot in event_query.stream()
+            ]
+
+            state_ref = telegram_user_collection(
+                user_id, "telegram_emergency_alert_state"
+            ).document("current")
+            state_snapshot = state_ref.get()
+            cloud_state = (
+                state_snapshot.to_dict() or {}
+                if state_snapshot.exists else {}
+            )
+            active_chat_ids = telegram_firestore_active_chat_ids(user_id)
+        except Exception:
+            logger.exception("Could not recover Telegram alert history or cooldown from Firestore.")
+            return "storage_failed"
+
+        event_by_reading: dict[str, dict] = {}
+        for event in [*local_events, *cloud_events]:
+            reading_id = str(
+                event.get("reading_id") or event.get("event_id")
+                or event.get("document_id") or ""
+            )
+            raw_occurred_at = event.get("occurred_at")
+            if not reading_id or not raw_occurred_at:
+                continue
+            try:
+                occurred_at = parse_iso(str(raw_occurred_at))
+            except (TypeError, ValueError):
+                continue
+            if cutoff <= occurred_at <= now:
+                event_by_reading[reading_id] = event
+
+        if len(event_by_reading) < 3:
+            return "awaiting_repeated_readings"
+
+        last_attempt = cloud_state.get("last_attempt_at") or cloud_state.get("last_alert_at")
+        if last_attempt:
+            try:
+                if now - parse_iso(str(last_attempt)) < timedelta(hours=6):
+                    return "cooldown"
+            except (TypeError, ValueError):
+                logger.warning("Ignoring invalid Telegram alert cooldown timestamp for user %s.", user_id)
+
+        if not active_chat_ids:
+            return "no_registered_contacts"
+
+        # Reserve the cooldown before contacting Telegram. If the process
+        # stops after delivery but before the response is persisted, a restart
+        # must not immediately send the same check-in again.
+        reserved_state = {
+            **cloud_state,
+            "user_id": user_id,
+            "last_attempt_at": now_text,
+            "last_attempt_id": uuid.uuid4().hex,
+            "last_attempt_status": "pending",
+        }
+        try:
+            state_ref.set(reserved_state)
+        except Exception:
+            logger.exception("Could not reserve durable Telegram alert cooldown.")
+            return "storage_failed"
+
+        delivery, sent_count = send_user_telegram_alert(
+            user_id,
+            "NeuroSense wellness check-in",
+            "Repeated elevated stress-related readings were recorded. Please check in with the NeuroSense user. "
+            "This is an experimental wellness alert, not a medical diagnosis or emergency service.",
+        )
+
+        final_state = {
+            **reserved_state,
+            "last_attempt_status": delivery,
+            "last_delivery_count": int(sent_count),
+        }
+        if delivery == "sent" and sent_count:
+            final_state["last_alert_at"] = now_text
+
+        try:
+            state_ref.set(final_state)
+        except Exception:
+            # The pre-send reservation remains durable, preventing duplicates.
+            logger.exception("Telegram alert sent/attempted but final cooldown metadata could not be saved.")
+
+        if delivery == "sent" and sent_count:
+            try:
+                with db_connection() as db:
+                    db.execute(
+                        """
+                        INSERT INTO telegram_emergency_alert_state (user_id, last_alert_at)
+                        VALUES (?, ?)
+                        ON CONFLICT(user_id) DO UPDATE SET last_alert_at = excluded.last_alert_at
+                        """,
+                        (user_id, now_text),
+                    )
+            except Exception:
+                logger.exception("Could not update the local Telegram alert cooldown cache.")
+
+        return delivery
+
+    # Local development fallback: Firestore is not configured.
     with db_connection() as db:
         recent = db.execute(
             """
-            SELECT COUNT(*) AS total
+            SELECT COUNT(DISTINCT reading_id) AS total
             FROM high_stress_events
             WHERE user_id = ? AND occurred_at >= ?
             """,
-            (user_id, iso(now - timedelta(minutes=30))),
+            (user_id, iso(cutoff)),
         ).fetchone()["total"]
         if int(recent) < 3:
             return "awaiting_repeated_readings"
@@ -1221,67 +1302,6 @@ def maybe_send_emergency_telegram_alert(user_id: str, probability: float) -> str
             db.execute(
                 """
                 INSERT INTO telegram_emergency_alert_state (user_id, last_alert_at)
-                VALUES (?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET last_alert_at = excluded.last_alert_at
-                """,
-                (user_id, now_text),
-            )
-    return delivery
-
-
-def maybe_send_emergency_push_alert(user_id: str, probability: float) -> str:
-    """Send after repeated elevated estimates, with opt-in and six-hour cooldown."""
-    if probability < HIGH_STRESS_THRESHOLD:
-        return "not_triggered"
-
-    now = utc_now()
-    now_text = iso(now)
-    with db_connection() as db:
-        recent = db.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM high_stress_events
-            WHERE user_id = ? AND occurred_at >= ?
-            """,
-            (user_id, iso(now - timedelta(minutes=30))),
-        ).fetchone()["total"]
-        if int(recent) < 3:
-            return "awaiting_repeated_readings"
-
-        alert_state = db.execute(
-            "SELECT last_alert_at FROM emergency_push_alert_state WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()
-        if alert_state and now - parse_iso(alert_state["last_alert_at"]) < timedelta(hours=6):
-            return "cooldown"
-
-        device_rows = db.execute(
-            """
-            SELECT d.fcm_fid
-            FROM emergency_push_devices d
-            JOIN emergency_push_invites i ON i.invite_id = d.invite_id
-            WHERE d.user_id = ? AND d.active = 1
-              AND i.revoked_at IS NULL
-            ORDER BY d.created_at
-            """,
-            (user_id,),
-        ).fetchall()
-
-    fids = [row["fcm_fid"] for row in device_rows]
-    if not fids:
-        return "no_registered_contacts"
-
-    delivery, sent_count = send_emergency_push_message(
-        fids,
-        "NeuroSense check-in",
-        "Repeated elevated stress-related readings were recorded. Please check in with the user. "
-        "This is an experimental wellness alert, not a medical diagnosis or emergency service.",
-    )
-    if delivery == "sent" and sent_count:
-        with db_connection() as db:
-            db.execute(
-                """
-                INSERT INTO emergency_push_alert_state (user_id, last_alert_at)
                 VALUES (?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET last_alert_at = excluded.last_alert_at
                 """,
@@ -1431,21 +1451,6 @@ class MonitoringIntervalIn(StrictModel):
 
 class TelegramEmergencyInviteIn(StrictModel):
     contact_name: str = Field(min_length=2, max_length=60)
-
-
-class EmergencyPushInviteIn(StrictModel):
-    contact_name: str = Field(min_length=2, max_length=60)
-
-
-class EmergencyPushRegisterIn(StrictModel):
-    invite_token: str = Field(min_length=40, max_length=128)
-    fcm_fid: str = Field(min_length=10, max_length=128)
-    device_name: str = Field(default="Browser device", min_length=1, max_length=120)
-
-
-class EmergencyPushUnregisterIn(StrictModel):
-    invite_token: str = Field(min_length=40, max_length=128)
-    fcm_fid: str = Field(min_length=10, max_length=128)
 
 
 class HapticCommandIn(StrictModel):
@@ -2135,14 +2140,19 @@ def build_model_features(
             return float("nan")
         return float(current) - float(base)
 
+    # WESAD training uses EDA in microsiemens (uS), while current ESP32
+    # firmware sends an uncalibrated 0-4095 ADC count. Do not feed those counts
+    # into a model feature trained in a different physical unit. Keep the GSR
+    # fields missing so the fitted imputer uses its training median until a
+    # hardware-specific ADC-to-uS calibration path is implemented and verified.
     return {
         "heart_rate_bpm": number_or_nan(reading.get("heart_rate_bpm")),
         "hrv_ms": number_or_nan(reading.get("hrv_ms")),
-        "gsr_raw": number_or_nan(reading.get("gsr_raw")),
+        "gsr_raw": float("nan"),
         "skin_temperature_c": number_or_nan(reading.get("skin_temperature_c")),
         "heart_rate_delta": delta("heart_rate_bpm"),
         "hrv_delta": delta("hrv_ms"),
-        "gsr_delta": delta("gsr_raw"),
+        "gsr_delta": float("nan"),
         "skin_temperature_delta": delta("skin_temperature_c"),
     }
 
@@ -2240,7 +2250,10 @@ def predict_stress(
                 "stress_probability": round(
                     probability, 4
                 ),
-                "model_validated": False
+                "model_validated": False,
+                "model_input_warnings": [
+                    "GSR was excluded from this prediction because the ESP32 sends raw ADC counts while the training data uses EDA in microsiemens. Hardware calibration is required before GSR can be used."
+                ]
             }
 
             if probability >= HIGH_STRESS_THRESHOLD:
@@ -2281,6 +2294,8 @@ def predict_stress(
                     }
                 )
 
+                # NeuroSense uses Telegram as its only emergency-contact channel.
+                # Do not dispatch the legacy Firebase Web Push path.
                 result["telegram_alert"] = maybe_send_emergency_telegram_alert(
                     user_id, probability
                 )
@@ -2319,6 +2334,9 @@ def stored_or_predicted_stress(user_id: str, reading: dict) -> dict:
             "stress_score": reading.get("stress_score"),
             "stress_probability": reading.get("stress_probability"),
             "model_validated": False,
+            "model_input_warnings": [
+                "GSR was excluded from this prediction because the ESP32 sends raw ADC counts while the training data uses EDA in microsiemens. Hardware calibration is required before GSR can be used."
+            ],
         }
     return predict_stress(user_id, reading)
 
@@ -2353,7 +2371,7 @@ def maybe_queue_personal_haptic_nudge(
         return {"queued": False, "reason": "invalid_baseline"}
 
     with db_connection() as db:
-        rows = db.execute(
+        local_rows = db.execute(
             """
             SELECT id, timestamp, heart_rate_bpm, hrv_ms, signal_quality
             FROM sensor_readings
@@ -2380,6 +2398,54 @@ def maybe_queue_personal_haptic_nudge(
             """,
             (user_id,),
         ).fetchone()
+
+    rows = [dict(row) for row in local_rows]
+    if len(rows) < 3:
+        # After an ephemeral Render reset, the current upload may be the only
+        # local row. Rehydrate prior wearable samples before evaluating the
+        # consecutive-reading and 60-second persistence gates.
+        cloud_rows = firestore_read_collection(
+            ("users", user_id, "sensor_readings"),
+            limit=100,
+            order_by="timestamp",
+        )
+        readings_by_id = {
+            str(item.get("id") or ""): item
+            for item in rows
+            if item.get("id")
+        }
+        for item in cloud_rows:
+            reading_id = str(item.get("id") or item.get("document_id") or "")
+            if (
+                not reading_id
+                or str(item.get("source") or "") != "wearable"
+                or reading_id in readings_by_id
+            ):
+                continue
+            readings_by_id[reading_id] = dict(item)
+        rows = sorted(
+            readings_by_id.values(),
+            key=lambda item: str(item.get("timestamp") or ""),
+            reverse=True,
+        )[:3]
+
+    if last_command is None:
+        cloud_commands = firestore_read_collection(
+            ("users", user_id, "haptic_commands"),
+            limit=1,
+            order_by="created_at",
+        )
+        if cloud_commands:
+            last_command = cloud_commands[0]
+
+    if active_label is None:
+        cloud_feedback = firestore_read_collection(
+            ("users", user_id, "reading_feedback"),
+            limit=1,
+            order_by="created_at",
+        )
+        if cloud_feedback:
+            active_label = cloud_feedback[0]
 
     if len(rows) < 3 or any(row["signal_quality"] != "good" for row in rows):
         return {"queued": False, "reason": "not_enough_consecutive_good_readings"}
@@ -2608,11 +2674,13 @@ def average(
 
 
 def create_due_summaries() -> int:
-    """Create per-user monitoring summaries using each account's chosen interval."""
+    """Create per-user monitoring summaries from local and cloud-backed readings."""
     created = 0
     now = utc_now()
 
     with db_connection() as db:
+        # A user is discovered once their device sends a post-restart reading.
+        # At that point, old history can be restored from that user's cloud path.
         users = db.execute(
             """
             SELECT DISTINCT user_id
@@ -2622,7 +2690,7 @@ def create_due_summaries() -> int:
         ).fetchall()
 
         for user_row in users:
-            user_id = user_row["user_id"]
+            user_id = str(user_row["user_id"])
 
             settings = db.execute(
                 """
@@ -2659,33 +2727,178 @@ def create_due_summaries() -> int:
                 """,
                 (user_id,),
             ).fetchone()
+            local_last_summary = db.execute(
+                """
+                SELECT MAX(period_end) AS end_time
+                FROM summaries
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
 
+            checkpoints = []
             if state and state["last_period_end"]:
-                period_start = parse_iso(state["last_period_end"])
-            else:
-                last_summary = db.execute(
-                    """
-                    SELECT MAX(period_end) AS end_time
-                    FROM summaries
-                    WHERE user_id = ?
-                    """,
-                    (user_id,),
-                ).fetchone()
+                try:
+                    checkpoints.append(parse_iso(state["last_period_end"]))
+                except (TypeError, ValueError):
+                    pass
+            if local_last_summary and local_last_summary["end_time"]:
+                try:
+                    checkpoints.append(parse_iso(local_last_summary["end_time"]))
+                except (TypeError, ValueError):
+                    pass
 
-                if last_summary and last_summary["end_time"]:
-                    period_start = parse_iso(last_summary["end_time"])
-                else:
-                    first = db.execute(
-                        """
-                        SELECT MIN(timestamp) AS start_time
-                        FROM sensor_readings
-                        WHERE user_id = ? AND source = 'wearable'
-                        """,
-                        (user_id,),
-                    ).fetchone()
-                    if not first or not first["start_time"]:
+            existing_period_ends = set()
+            # Cloud checkpoint reconciliation is needed only after a local DB
+            # reset (or before the first generated summary). Once restored, the
+            # local checkpoint prevents repeatedly downloading history each second.
+            if state is None:
+                cloud_state = firestore_read_document(
+                    ("users", user_id, "monitoring_summary_state"), "current"
+                ) or {}
+                cloud_checkpoint = cloud_state.get("last_period_end")
+                if cloud_checkpoint:
+                    try:
+                        checkpoints.append(parse_iso(str(cloud_checkpoint)))
+                    except (TypeError, ValueError):
+                        pass
+
+                cloud_summaries = firestore_read_collection(
+                    ("users", user_id, "summaries"),
+                    limit=2000,
+                    order_by="period_end",
+                )
+                for item in cloud_summaries:
+                    raw_period_end = str(item.get("period_end") or "")
+                    if not raw_period_end:
                         continue
-                    period_start = parse_iso(first["start_time"])
+                    try:
+                        normalized_period_end = iso(parse_iso(raw_period_end))
+                        existing_period_ends.add(normalized_period_end)
+                        checkpoints.append(parse_iso(raw_period_end))
+                    except (TypeError, ValueError):
+                        continue
+
+            period_start = max(checkpoints) if checkpoints else None
+            if period_start is not None and period_start > now:
+                period_start = now
+
+            # Most passes run every second. Do not fetch thousands of cloud
+            # documents until a complete summary interval is actually due.
+            if period_start is not None and now - period_start < interval:
+                next_checkpoint = iso(period_start)
+                db.execute(
+                    """
+                    INSERT INTO monitoring_summary_state (user_id, last_period_end)
+                    VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        last_period_end = excluded.last_period_end
+                    """,
+                    (user_id, next_checkpoint),
+                )
+                if state is None:
+                    firestore_write(
+                        ("users", user_id, "monitoring_summary_state"),
+                        "current",
+                        {"user_id": user_id, "last_period_end": next_checkpoint},
+                    )
+                continue
+
+            local_sensor_rows = db.execute(
+                """
+                SELECT *
+                FROM sensor_readings
+                WHERE user_id = ? AND source = 'wearable'
+                ORDER BY timestamp ASC
+                """,
+                (user_id,),
+            ).fetchall()
+            cloud_sensor_rows = firestore_read_collection(
+                ("users", user_id, "sensor_readings"),
+                limit=5000,
+                order_by="timestamp",
+            )
+
+            readings_by_id = {}
+            for row in local_sensor_rows:
+                item = dict(row)
+                reading_id = str(item.get("id") or "")
+                if reading_id:
+                    readings_by_id[reading_id] = item
+            for item in cloud_sensor_rows:
+                if str(item.get("source") or "") != "wearable":
+                    continue
+                reading_id = str(item.get("id") or item.get("document_id") or "")
+                if reading_id:
+                    readings_by_id.setdefault(reading_id, dict(item))
+
+            readings = []
+            for item in readings_by_id.values():
+                timestamp = str(item.get("timestamp") or "")
+                if not timestamp:
+                    continue
+                try:
+                    recorded_at = parse_iso(timestamp)
+                except (TypeError, ValueError):
+                    continue
+                item["timestamp"] = timestamp
+                readings.append((recorded_at, item))
+            readings.sort(key=lambda pair: pair[0])
+            if not readings:
+                continue
+
+            if period_start is None:
+                period_start = readings[0][0]
+
+            if now - period_start < interval:
+                next_checkpoint = iso(period_start)
+                db.execute(
+                    """
+                    INSERT INTO monitoring_summary_state (user_id, last_period_end)
+                    VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        last_period_end = excluded.last_period_end
+                    """,
+                    (user_id, next_checkpoint),
+                )
+                firestore_write(
+                    ("users", user_id, "monitoring_summary_state"),
+                    "current",
+                    {"user_id": user_id, "last_period_end": next_checkpoint},
+                )
+                continue
+
+            local_events = db.execute(
+                """
+                SELECT event_id, reading_id, stress_probability, occurred_at
+                FROM high_stress_events
+                WHERE user_id = ?
+                ORDER BY occurred_at ASC
+                """,
+                (user_id,),
+            ).fetchall()
+            cloud_events = firestore_read_collection(
+                ("users", user_id, "high_stress_events"),
+                limit=5000,
+                order_by="occurred_at",
+            )
+            events_by_id = {}
+            for row in local_events:
+                item = dict(row)
+                events_by_id[str(item["event_id"])] = item
+            for item in cloud_events:
+                event_id = str(item.get("event_id") or item.get("document_id") or "")
+                if event_id:
+                    events_by_id.setdefault(event_id, dict(item))
+            events = []
+            for item in events_by_id.values():
+                occurred_at = str(item.get("occurred_at") or "")
+                if not occurred_at:
+                    continue
+                try:
+                    events.append((parse_iso(occurred_at), item))
+                except (TypeError, ValueError):
+                    continue
 
             windows = 0
             while now - period_start >= interval and windows < MAX_SUMMARY_WINDOWS_PER_PASS:
@@ -2693,48 +2906,42 @@ def create_due_summaries() -> int:
                 start_iso = iso(period_start)
                 end_iso = iso(period_end)
 
-                rows = db.execute(
-                    """
-                    SELECT *
-                    FROM sensor_readings
-                    WHERE user_id = ?
-                      AND source = 'wearable'
-                      AND timestamp >= ?
-                      AND timestamp < ?
-                    ORDER BY timestamp ASC
-                    """,
-                    (user_id, start_iso, end_iso),
-                ).fetchall()
+                window_rows = [
+                    item for recorded_at, item in readings
+                    if period_start <= recorded_at < period_end
+                ]
 
-                if rows:
+                if window_rows and end_iso not in existing_period_ends:
                     reliable = [
-                        row for row in rows
-                        if row["signal_quality"] in ("good", "moderate")
+                        row for row in window_rows
+                        if row.get("signal_quality") in ("good", "moderate")
                     ]
                     stress_rows = [
                         row for row in reliable
-                        if row["stress_score"] is not None
+                        if row.get("stress_score") is not None
                     ]
                     peak_row = (
                         max(stress_rows, key=lambda row: float(row["stress_score"]))
                         if stress_rows else None
                     )
-                    event_count = db.execute(
-                        """
-                        SELECT COUNT(*) AS total
-                        FROM high_stress_events
-                        WHERE user_id = ? AND occurred_at >= ? AND occurred_at < ?
-                        """,
-                        (user_id, start_iso, end_iso),
-                    ).fetchone()["total"]
+                    event_count = sum(
+                        1 for occurred_at, _event in events
+                        if period_start <= occurred_at < period_end
+                    )
 
+                    # Deterministic IDs make cloud writes idempotent if the
+                    # process exits after Firestore commits but before SQLite.
+                    summary_id = str(uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"neurosense:{user_id}:summary:{end_iso}",
+                    ))
                     summary = {
-                        "summary_id": str(uuid.uuid4()),
+                        "summary_id": summary_id,
                         "user_id": user_id,
                         "period_start": start_iso,
                         "period_end": end_iso,
                         "interval_seconds": interval_seconds,
-                        "reading_count": len(rows),
+                        "reading_count": len(window_rows),
                         "reliable_reading_count": len(reliable),
                         "avg_heart_rate": average(reliable, "heart_rate_bpm"),
                         "avg_hrv": average(reliable, "hrv_ms"),
@@ -2746,9 +2953,27 @@ def create_due_summaries() -> int:
                             if peak_row else None
                         ),
                         "peak_stress_at": peak_row["timestamp"] if peak_row else None,
-                        "high_stress_event_count": int(event_count or 0),
+                        "high_stress_event_count": int(event_count),
                         "created_at": iso(),
                     }
+
+                    # Persist the cloud summary before advancing the checkpoint.
+                    # If Firestore is temporarily unavailable, leave this period
+                    # uncommitted so the next scheduler pass can retry it. The
+                    # deterministic summary ID makes a retry idempotent.
+                    cloud_sync = firestore_write(
+                        ("users", user_id, "summaries"),
+                        summary_id,
+                        summary,
+                    )
+                    if cloud_sync not in {"synced", "not_configured"}:
+                        logger.warning(
+                            "Could not persist monitoring summary for user %s at %s; "
+                            "leaving the checkpoint unchanged for retry.",
+                            user_id,
+                            end_iso,
+                        )
+                        break
 
                     db.execute(
                         """
@@ -2773,16 +2998,13 @@ def create_due_summaries() -> int:
                             summary["created_at"],
                         ),
                     )
-                    firestore_write(
-                        ("users", user_id, "summaries"),
-                        summary["summary_id"],
-                        summary,
-                    )
                     created += 1
+                    existing_period_ends.add(end_iso)
 
                 period_start = period_end
                 windows += 1
 
+            next_checkpoint = iso(period_start)
             db.execute(
                 """
                 INSERT INTO monitoring_summary_state (user_id, last_period_end)
@@ -2790,10 +3012,16 @@ def create_due_summaries() -> int:
                 ON CONFLICT(user_id) DO UPDATE SET
                     last_period_end = excluded.last_period_end
                 """,
-                (user_id, iso(period_start)),
+                (user_id, next_checkpoint),
+            )
+            firestore_write(
+                ("users", user_id, "monitoring_summary_state"),
+                "current",
+                {"user_id": user_id, "last_period_end": next_checkpoint},
             )
 
     return created
+
 
 async def summary_scheduler():
 
@@ -2900,57 +3128,6 @@ def dashboard():
     )
 
 
-@app.get("/emergency-invite", include_in_schema=False)
-def emergency_invite_page():
-    """Serve the public, consent-based push subscription page."""
-    invite_file = BASE_DIR / "frontend" / "emergency-invite.html"
-    if not invite_file.is_file():
-        raise HTTPException(status_code=503, detail="Emergency invite page is unavailable.")
-    return FileResponse(invite_file, media_type="text/html", headers={"Cache-Control": "no-store"})
-
-
-@app.get("/firebase-messaging-sw.js", include_in_schema=False)
-def firebase_messaging_service_worker():
-    """Serve a root-scoped Firebase worker with public web config only."""
-    if not firebase_web_configured():
-        return Response(
-            "self.addEventListener('push', function () {});",
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-store", "Service-Worker-Allowed": "/"},
-        )
-
-    config_json = json.dumps(FIREBASE_WEB_CONFIG, separators=(",", ":"))
-    script = (
-        'importScripts("https://www.gstatic.com/firebasejs/13.2.0/firebase-app-compat.js");\n'
-        'importScripts("https://www.gstatic.com/firebasejs/13.2.0/firebase-messaging-compat.js");\n'
-        f"firebase.initializeApp({config_json});\n"
-        "const messaging = firebase.messaging();\n"
-        "messaging.onBackgroundMessage(function(payload) {\n"
-        "  const data = payload.data || {};\n"
-        "  const options = { body: data.body || 'Please check in with your NeuroSense contact.', tag: 'neurosense-emergency', requireInteraction: true, data: { url: data.url || '/dashboard' } };\n"
-        "  return self.registration.showNotification(data.title || 'NeuroSense check-in', options);\n"
-        "});\n"
-        "self.addEventListener('notificationclick', function(event) {\n"
-        "  event.notification.close();\n"
-        "  const destination = new URL(event.notification.data && event.notification.data.url || '/dashboard', self.location.origin).href;\n"
-        "  event.waitUntil(self.clients.matchAll({type: 'window', includeUncontrolled: true}).then(function(windows) {\n"
-        "    for (const client of windows) {\n"
-        "      if (client.url.startsWith(self.location.origin) && 'focus' in client) {\n"
-        "        if ('navigate' in client) client.navigate(destination);\n"
-        "        return client.focus();\n"
-        "      }\n"
-        "    }\n"
-        "    return self.clients.openWindow(destination);\n"
-        "  }));\n"
-        "});\n"
-    )
-    return Response(
-        script,
-        media_type="application/javascript",
-        headers={"Cache-Control": "no-store", "Service-Worker-Allowed": "/"},
-    )
-
-
 @app.get("/")
 def home():
 
@@ -2984,10 +3161,14 @@ def health():
 
         "database": database_status,
         "firebase_configured": FIREBASE_APP is not None,
-        # Configuration presence only; this does not verify bucket reachability.
+        "firebase_sign_in_ready": (
+            firebase_web_configured() and FIREBASE_APP is not None
+        ),
+        # These are configuration-presence indicators, not external service probes.
         "firebase_storage_configured": bool(
             FIREBASE_APP is not None and FIREBASE_STORAGE_BUCKET
         ),
+        "telegram_alerts_configured": telegram_configured(),
         "ml_model_loaded": STRESS_MODEL is not None,
         "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
         "timestamp": iso()
@@ -3006,8 +3187,6 @@ def public_config():
         "firebase_sign_in_ready": web_ready and admin_ready,
         # Safe capability flag only; never expose the bucket name or credentials.
         "firebase_storage_configured": configured_music_bucket() is not None,
-        "firebase_push_configured": firebase_push_configured(),
-        "firebase_vapid_key": FIREBASE_WEB_VAPID_KEY or None,
         "telegram_alerts_configured": telegram_configured(),
         "telegram_bot_username": TELEGRAM_BOT_USERNAME or None,
         "firebase": (
@@ -3291,23 +3470,24 @@ def latest_reading(
             (user_id,)
         ).fetchone()
 
-    data = row_dict(row)
+    local_data = row_dict(row)
 
-    if data:
-
-        data["ibi_ms"] = (
-            json.loads(data.pop("ibi_ms_json"))
-            if data.get("ibi_ms_json")
+    if local_data:
+        local_data["ibi_ms"] = (
+            json.loads(local_data.pop("ibi_ms_json"))
+            if local_data.get("ibi_ms_json")
             else None
         )
 
-    else:
-        cloud_rows = firestore_read_collection(
-            ("users", user_id, "sensor_readings"),
-            limit=1,
-            order_by="timestamp"
-        )
-        data = cloud_rows[0] if cloud_rows else None
+    cloud_rows = firestore_read_collection(
+        ("users", user_id, "sensor_readings"),
+        limit=100,
+        order_by="timestamp",
+    )
+    data = select_latest_sensor_reading(
+        local_data,
+        cloud_rows,
+    )
 
     return {
         "data": data
@@ -3493,20 +3673,23 @@ def latest_stress_estimate(
             (user_id,)
         ).fetchone()
 
-    if row is None:
-        cloud_rows = firestore_read_collection(
-            ("users", user_id, "sensor_readings"),
-            limit=1,
-            order_by="timestamp",
-        )
-        if not cloud_rows:
-            return {
-                "status": "waiting_for_data",
-                "stress_score": None
-            }
-        reading = cloud_rows[0]
-    else:
-        reading = dict(row)
+    # Always check the cloud copy: Render can retain an older local row
+    # while Firestore already contains a newer wearable reading.
+    cloud_rows = firestore_read_collection(
+        ("users", user_id, "sensor_readings"),
+        limit=100,
+        order_by="timestamp",
+    )
+    reading = select_latest_sensor_reading(
+        row,
+        cloud_rows,
+        source="wearable",
+    )
+    if reading is None:
+        return {
+            "status": "waiting_for_data",
+            "stress_score": None
+        }
 
     prediction = stored_or_predicted_stress(user_id, reading)
     return {
@@ -3579,15 +3762,15 @@ def dashboard_overview(
                 )
             }
 
-    reading = row_dict(latest)
-
-    if reading is None:
-        cloud_readings = firestore_read_collection(
-            ("users", user_id, "sensor_readings"),
-            limit=1,
-            order_by="timestamp"
-        )
-        reading = cloud_readings[0] if cloud_readings else None
+    cloud_readings = firestore_read_collection(
+        ("users", user_id, "sensor_readings"),
+        limit=1,
+        order_by="timestamp",
+    )
+    reading = select_latest_sensor_reading(
+        latest,
+        cloud_readings,
+    )
 
     if (
         reading
@@ -4302,6 +4485,57 @@ def recovery_history(
     for session in sessions:
         session.setdefault("comparison", None)
 
+    # When Render's ephemeral SQLite database is recreated, both recovery
+    # sessions and sensor readings may exist only in Firestore. Rebuild a
+    # missing before/after comparison from this user's cloud wearable data.
+    if any(session.get("comparison") is None for session in sessions):
+        cloud_sensor_rows = firestore_read_collection(
+            ("users", user_id, "sensor_readings"),
+            limit=500,
+            order_by="timestamp",
+        )
+        cloud_wearable_readings = []
+        for reading in cloud_sensor_rows:
+            if str(reading.get("source") or "") != "wearable":
+                continue
+            timestamp = str(reading.get("timestamp") or "")
+            if not timestamp:
+                continue
+            try:
+                recorded_at = parse_iso(timestamp)
+            except (TypeError, ValueError):
+                continue
+            cloud_wearable_readings.append((recorded_at, {
+                "timestamp": timestamp,
+                "heart_rate_bpm": reading.get("heart_rate_bpm"),
+                "hrv_ms": reading.get("hrv_ms"),
+                "gsr_raw": reading.get("gsr_raw"),
+                "skin_temperature_c": reading.get("skin_temperature_c"),
+            }))
+
+        for session in sessions:
+            if session.get("comparison") is not None:
+                continue
+            try:
+                started_at = parse_iso(str(session.get("started_at") or ""))
+                completed_at = parse_iso(str(session.get("completed_at") or ""))
+            except (TypeError, ValueError):
+                continue
+
+            before_candidates = [
+                (recorded_at, reading)
+                for recorded_at, reading in cloud_wearable_readings
+                if recorded_at <= started_at
+            ]
+            after_candidates = [
+                (recorded_at, reading)
+                for recorded_at, reading in cloud_wearable_readings
+                if recorded_at >= completed_at
+            ]
+            before = max(before_candidates, key=lambda item: item[0])[1] if before_candidates else None
+            after = min(after_candidates, key=lambda item: item[0])[1] if after_candidates else None
+            session["comparison"] = build_recovery_comparison(before, after)
+
     return {
         "total": len(sessions),
         "sessions": sessions
@@ -4977,9 +5211,10 @@ def personalization_profile(
 ):
     since = iso(utc_now() - timedelta(days=3))
     with db_connection() as db:
-        rows = db.execute(
+        local_sensor_rows = db.execute(
             """
-            SELECT timestamp, heart_rate_bpm, hrv_ms, gsr_raw
+            SELECT id, timestamp, heart_rate_bpm, hrv_ms, gsr_raw,
+                   source, signal_quality
             FROM sensor_readings
             WHERE user_id = ? AND source = 'wearable'
               AND signal_quality IN ('good', 'moderate')
@@ -4988,12 +5223,103 @@ def personalization_profile(
             """,
             (user_id, since),
         ).fetchall()
+
+        local_blink_rows = db.execute(
+            """
+            SELECT summary_id, blink_count, duration_seconds,
+                   blinks_per_minute, recorded_at
+            FROM blink_summaries
+            WHERE user_id = ? AND recorded_at >= ?
+            ORDER BY recorded_at ASC
+            """,
+            (user_id, since),
+        ).fetchall()
+
+    # Render's filesystem is ephemeral. Rebuild the learning window from
+    # Firestore as well as SQLite, deduplicating by the stable reading ID.
+    sensor_by_id = {
+        str(row["id"]): dict(row)
+        for row in local_sensor_rows
+        if row["id"]
+    }
+    cloud_sensor_rows = firestore_read_collection(
+        ("users", user_id, "sensor_readings"),
+        limit=500,
+        order_by="timestamp",
+    )
+    for item in cloud_sensor_rows:
+        reading_id = str(item.get("id") or item.get("document_id") or "")
+        timestamp = str(item.get("timestamp") or "")
+        if (
+            not reading_id
+            or not timestamp
+            or timestamp < since
+            or str(item.get("source") or "") != "wearable"
+            or str(item.get("signal_quality") or "") not in {"good", "moderate"}
+        ):
+            continue
+        sensor_by_id.setdefault(reading_id, item)
+
+    rows = sorted(
+        sensor_by_id.values(),
+        key=lambda item: str(item.get("timestamp") or ""),
+    )
     day_keys = {str(row["timestamp"])[:10] for row in rows}
     def med(field):
         return median_or_none([
-            float(row[field]) for row in rows if row[field] is not None
+            float(row[field]) for row in rows if row.get(field) is not None
         ])
     days = len(day_keys)
+
+    # Build a separate descriptive blink reference from completed scans.
+    # Blink rate is not treated as a stress label and is not fused into the
+    # wearable Random Forest prediction.
+    blink_by_id = {
+        str(row["summary_id"]): dict(row)
+        for row in local_blink_rows
+        if row["summary_id"]
+    }
+    cloud_blink_rows = firestore_read_collection(
+        ("users", user_id, "blink_summaries"),
+        limit=200,
+        order_by="recorded_at",
+    )
+    for item in cloud_blink_rows:
+        summary_id = str(item.get("summary_id") or item.get("document_id") or "")
+        recorded_at = str(item.get("recorded_at") or "")
+        if not summary_id or not recorded_at or recorded_at < since:
+            continue
+        blink_by_id.setdefault(summary_id, item)
+
+    blink_summaries = sorted(
+        blink_by_id.values(),
+        key=lambda item: str(item.get("recorded_at") or ""),
+    )
+    blink_day_keys = {
+        str(item.get("recorded_at") or "")[:10]
+        for item in blink_summaries
+        if item.get("recorded_at")
+    }
+    blink_rates = []
+    for item in blink_summaries:
+        try:
+            rate = float(item.get("blinks_per_minute"))
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(rate) and rate >= 0:
+            blink_rates.append(rate)
+    blink_days = len(blink_day_keys)
+    blink_count = len(blink_summaries)
+    blink_reference = {
+        "summary_count": blink_count,
+        "days_observed": blink_days,
+        "median_blinks_per_minute": median_or_none(blink_rates),
+        "ready_for_preliminary_reference": blink_days >= 2 and blink_count >= 2,
+        "recommended_reference_ready": blink_days >= 3 and blink_count >= 3,
+        "notice": (
+            "Descriptive camera blink reference only; it is not used as a stress score."
+        ),
+    }
     with db_connection() as db:
         label_rows = db.execute(
             "SELECT label, COUNT(*) AS total FROM reading_feedback WHERE user_id = ? GROUP BY label",
@@ -5038,7 +5364,8 @@ def personalization_profile(
             "hrv_ms": med("hrv_ms"),
             "gsr_raw": med("gsr_raw"),
         },
-        "notice": "Two distinct days allow a preliminary personal reference; three or more days are recommended. This is baseline analysis, not a newly trained or clinically validated model.",
+        "blink_reference": blink_reference,
+        "notice": "Two distinct days allow a preliminary wearable reference; three or more days are recommended. Camera blink history is reported separately and is not used to infer stress. These are descriptive references, not a newly trained or clinically validated model.",
     }
 
 
@@ -5239,7 +5566,7 @@ def create_telegram_emergency_invite(
         raise HTTPException(status_code=422, detail="Enter a contact name with at least 2 characters.")
 
     now = utc_now()
-    expires_at = now + timedelta(days=EMERGENCY_INVITE_TTL_DAYS)
+    expires_at = now + timedelta(days=TELEGRAM_INVITE_TTL_DAYS)
     invite_token = secrets.token_urlsafe(24)
     invite_id = uuid.uuid4().hex
     token_hash = token_digest(invite_token)
@@ -5264,10 +5591,10 @@ def create_telegram_emergency_invite(
                 if not item.get("revoked_at")
                 and parse_iso(item["expires_at"]) > now
             )
-            if active_count >= MAX_EMERGENCY_CONTACTS:
+            if active_count >= TELEGRAM_MAX_CONTACTS:
                 raise HTTPException(
                     status_code=429,
-                    detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active Telegram contacts.",
+                    detail=f"You can have up to {TELEGRAM_MAX_CONTACTS} active Telegram contacts.",
                 )
             telegram_user_collection(
                 user_id, "telegram_emergency_invites"
@@ -5547,7 +5874,7 @@ def telegram_webhook(
                     item for item in telegram_firestore_documents(contacts_ref)
                     if item.get("active")
                 ]
-                if len(active_contacts) >= MAX_EMERGENCY_CONTACTS:
+                if len(active_contacts) >= TELEGRAM_MAX_CONTACTS:
                     send_telegram_message(chat_id, "This NeuroSense account has reached its Telegram contact limit.")
                     return {"ok": True}
 
@@ -5658,7 +5985,7 @@ def telegram_webhook(
                 "SELECT COUNT(*) AS total FROM telegram_emergency_contacts WHERE user_id = ? AND active = 1",
                 (invite["user_id"],),
             ).fetchone()["total"]
-            if int(count) >= MAX_EMERGENCY_CONTACTS:
+            if int(count) >= TELEGRAM_MAX_CONTACTS:
                 send_telegram_message(chat_id, "This NeuroSense account has reached its Telegram contact limit.")
                 return {"ok": True}
             db.execute(
@@ -5700,217 +6027,6 @@ def telegram_webhook(
     return {"ok": True}
 
 
-@app.get("/api/emergency-contacts")
-def list_emergency_contacts(user_id: str = Depends(current_user_id)):
-    with db_connection() as db:
-        rows = db.execute(
-            """
-            SELECT i.invite_id, i.contact_name, i.created_at, i.expires_at,
-                   COUNT(d.device_id) AS device_count, MAX(d.last_seen_at) AS last_seen_at
-            FROM emergency_push_invites i
-            LEFT JOIN emergency_push_devices d
-                ON d.invite_id = i.invite_id AND d.active = 1
-            WHERE i.user_id = ? AND i.revoked_at IS NULL
-            GROUP BY i.invite_id
-            ORDER BY i.created_at DESC
-            """,
-            (user_id,),
-        ).fetchall()
-
-    contacts = []
-    now = utc_now()
-    for row in rows:
-        state = (
-            "connected" if int(row["device_count"]) > 0
-            else "expired" if parse_iso(row["expires_at"]) <= now
-            else "pending"
-        )
-        contacts.append({
-            "id": row["invite_id"],
-            "contact_name": row["contact_name"],
-            "created_at": row["created_at"],
-            "expires_at": row["expires_at"],
-            "device_count": int(row["device_count"]),
-            "last_seen_at": row["last_seen_at"],
-            "status": state,
-        })
-    return {"contacts": contacts, "push_configured": firebase_push_configured()}
-
-
-@app.post("/api/emergency-contacts/invites")
-def create_emergency_contact_invite(
-    payload: EmergencyPushInviteIn,
-    user_id: str = Depends(current_user_id),
-):
-    if not firebase_push_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Firebase Web Push is not configured. Add Firebase web app settings, the Admin service account and FIREBASE_WEB_VAPID_KEY first.",
-        )
-    contact_name = payload.contact_name.strip()
-    if len(contact_name) < 2:
-        raise HTTPException(status_code=422, detail="Enter a contact name with at least 2 characters.")
-    now = utc_now()
-    expires_at = now + timedelta(days=EMERGENCY_INVITE_TTL_DAYS)
-
-    with db_connection() as db:
-        active_count = db.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM emergency_push_invites
-            WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
-            """,
-            (user_id, iso(now)),
-        ).fetchone()["total"]
-        if int(active_count) >= MAX_EMERGENCY_CONTACTS:
-            raise HTTPException(status_code=429, detail=f"You can have up to {MAX_EMERGENCY_CONTACTS} active emergency contacts.")
-
-        invite_token = secrets.token_urlsafe(40)
-        invite_id = uuid.uuid4().hex
-        db.execute(
-            """
-            INSERT INTO emergency_push_invites (
-                invite_id, user_id, contact_name, token_hash, created_at, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                invite_id, user_id, contact_name,
-                hashlib.sha256(invite_token.encode("utf-8")).hexdigest(),
-                iso(now), iso(expires_at),
-            ),
-        )
-    return {
-        "success": True, "id": invite_id, "contact_name": contact_name,
-        "invite_token": invite_token, "expires_at": iso(expires_at),
-    }
-
-
-@app.post("/api/emergency-contacts/register")
-def register_emergency_contact_device(payload: EmergencyPushRegisterIn):
-    """Accept a public invite and bind this browser's FCM token to its owner."""
-    token_hash = hashlib.sha256(payload.invite_token.encode("utf-8")).hexdigest()
-    now = utc_now()
-    now_text = iso(now)
-    with db_connection() as db:
-        invite = db.execute(
-            """
-            SELECT invite_id, user_id, contact_name, expires_at
-            FROM emergency_push_invites
-            WHERE token_hash = ? AND revoked_at IS NULL
-            """,
-            (token_hash,),
-        ).fetchone()
-        if invite is None:
-            raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
-        if parse_iso(invite["expires_at"]) <= now:
-            raise HTTPException(status_code=410, detail="This invitation has expired. Ask the NeuroSense user to create a new link.")
-
-        existing = db.execute(
-            "SELECT invite_id, user_id FROM emergency_push_devices WHERE fcm_fid = ?",
-            (payload.fcm_fid,),
-        ).fetchone()
-        if existing and (existing["invite_id"] != invite["invite_id"] or existing["user_id"] != invite["user_id"]):
-            raise HTTPException(status_code=409, detail="This browser is already linked to another emergency contact.")
-
-        if existing is None:
-            device_count = db.execute(
-                "SELECT COUNT(*) AS total FROM emergency_push_devices WHERE invite_id = ? AND active = 1",
-                (invite["invite_id"],),
-            ).fetchone()["total"]
-            if int(device_count) >= MAX_DEVICES_PER_EMERGENCY_CONTACT:
-                raise HTTPException(status_code=429, detail=f"This invitation already has {MAX_DEVICES_PER_EMERGENCY_CONTACT} registered devices.")
-            db.execute(
-                """
-                INSERT INTO emergency_push_devices (
-                    device_id, invite_id, user_id, fcm_fid, device_name,
-                    created_at, last_seen_at, active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-                """,
-                (
-                    uuid.uuid4().hex, invite["invite_id"], invite["user_id"],
-                    payload.fcm_fid, payload.device_name.strip()[:120] or "Browser device",
-                    now_text, now_text,
-                ),
-            )
-        else:
-            db.execute(
-                """
-                UPDATE emergency_push_devices
-                SET device_name = ?, last_seen_at = ?, active = 1
-                WHERE fcm_fid = ?
-                """,
-                (payload.device_name.strip()[:120] or "Browser device", now_text, payload.fcm_fid),
-            )
-    return {
-        "success": True,
-        "contact_name": invite["contact_name"],
-        "message": "This browser is now registered to receive NeuroSense push alerts.",
-    }
-
-
-@app.post("/api/emergency-contacts/unregister")
-def unregister_emergency_contact_device(payload: EmergencyPushUnregisterIn):
-    """Remove an FID when Firebase reports this browser was unregistered."""
-    token_hash = hashlib.sha256(payload.invite_token.encode("utf-8")).hexdigest()
-    with db_connection() as db:
-        invite = db.execute(
-            """
-            SELECT invite_id
-            FROM emergency_push_invites
-            WHERE token_hash = ? AND revoked_at IS NULL
-            """,
-            (token_hash,),
-        ).fetchone()
-        if invite is None:
-            raise HTTPException(status_code=404, detail="This emergency contact invitation is invalid or has been revoked.")
-        deleted = db.execute(
-            "DELETE FROM emergency_push_devices WHERE invite_id = ? AND fcm_fid = ?",
-            (invite["invite_id"], payload.fcm_fid),
-        )
-    return {"success": True, "removed": deleted.rowcount > 0}
-
-
-@app.delete("/api/emergency-contacts/{invite_id}")
-def revoke_emergency_contact(invite_id: str, user_id: str = Depends(current_user_id)):
-    with db_connection() as db:
-        deleted = db.execute(
-            "DELETE FROM emergency_push_invites WHERE invite_id = ? AND user_id = ?",
-            (invite_id, user_id),
-        )
-        if deleted.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Emergency contact was not found.")
-    return {"success": True}
-
-
-@app.post("/api/emergency-contacts/test")
-def test_emergency_contact_push(user_id: str = Depends(current_user_id)):
-    if not firebase_push_configured():
-        raise HTTPException(status_code=503, detail="Firebase Web Push is not configured on the server.")
-    with db_connection() as db:
-        rows = db.execute(
-            """
-            SELECT d.fcm_fid
-            FROM emergency_push_devices d
-            JOIN emergency_push_invites i ON i.invite_id = d.invite_id
-            WHERE d.user_id = ? AND d.active = 1
-              AND i.revoked_at IS NULL
-            """,
-            (user_id,),
-        ).fetchall()
-    fids = [row["fcm_fid"] for row in rows]
-    if not fids:
-        raise HTTPException(status_code=409, detail="No emergency contact has accepted an invitation yet.")
-
-    result, sent_count = send_emergency_push_message(
-        fids,
-        "NeuroSense test notification",
-        "Push notifications are connected. This is a test, not an emergency alert.",
-    )
-    if result == "not_configured":
-        raise HTTPException(status_code=503, detail="Firebase Web Push is not configured on the server.")
-    if result != "sent" or sent_count == 0:
-        raise HTTPException(status_code=502, detail="FCM could not deliver the test notification to any registered device.")
-    return {"success": True, "status": "sent", "recipient_count": sent_count}
 
 
 # ============================================================

@@ -227,28 +227,23 @@ def test_dashboard_api_request_paths_are_registered_by_backend():
     )
 
 
-def test_dashboard_pages_have_mobile_viewports_and_unique_static_ids():
-    """Keep the dashboard and emergency invite usable on narrow mobile screens."""
+def test_dashboard_has_mobile_viewport_and_unique_static_ids():
+    """Keep the active NeuroSense dashboard usable on narrow mobile screens."""
     dashboard = (
         api.BASE_DIR / "frontend" / "index.html"
     ).read_text(encoding="utf-8")
-    invite = (
-        api.BASE_DIR / "frontend" / "emergency-invite.html"
-    ).read_text(encoding="utf-8")
 
-    for name, html in (("dashboard", dashboard), ("emergency invite", invite)):
-        assert re.search(
-            r"""<meta\s+name=["']viewport["']""",
-            html,
-            flags=re.IGNORECASE,
-        ), f"{name} page is missing its mobile viewport declaration."
+    assert re.search(
+        r"""<meta\s+name=["']viewport["']""",
+        dashboard,
+        flags=re.IGNORECASE,
+    ), "Dashboard page is missing its mobile viewport declaration."
 
-        ids = re.findall(r"""id\s*=\s*["']([^"']+)["']""", html)
-        duplicates = sorted({element_id for element_id in ids if ids.count(element_id) > 1})
-        assert not duplicates, f"{name} page has duplicate IDs: {duplicates}"
+    ids = re.findall(r"""id\s*=\s*["']([^"']+)["']""", dashboard)
+    duplicates = sorted({element_id for element_id in ids if ids.count(element_id) > 1})
+    assert not duplicates, f"Dashboard page has duplicate IDs: {duplicates}"
 
     assert re.search(r"@media\s*\(max-width\s*:", dashboard)
-    assert re.search(r"width\s*:\s*min\(100%\s*,\s*520px\)", invite)
 
 
 def test_music_mode_does_not_change_haptic_preference(client):
@@ -871,3 +866,905 @@ def test_cloud_music_delete_keeps_firestore_metadata_when_metadata_delete_fails(
     assert track_id not in cloud_documents
     assert bucket.objects == {}
     assert delete_attempts == 2
+
+
+def test_personalization_profile_restores_cloud_sensor_and_blink_history(client, monkeypatch):
+    """Personal reference progress must survive an ephemeral SQLite reset."""
+    now = datetime.now(timezone.utc)
+    cloud_sensor_rows = []
+    for day_offset in (1, 2):
+        for index in range(5):
+            timestamp = (now - timedelta(days=day_offset, minutes=index)).isoformat()
+            cloud_sensor_rows.append({
+                "id": f"cloud-reading-{day_offset}-{index}",
+                "timestamp": timestamp,
+                "heart_rate_bpm": 70 + index,
+                "hrv_ms": 40 + index,
+                "gsr_raw": 1700 + index,
+                "source": "wearable",
+                "signal_quality": "good",
+            })
+
+    cloud_blink_rows = [
+        {
+            "summary_id": f"cloud-blink-{day_offset}",
+            "blink_count": 30 + day_offset,
+            "duration_seconds": 120,
+            "blinks_per_minute": 15.0 + day_offset,
+            "recorded_at": (now - timedelta(days=day_offset)).isoformat(),
+        }
+        for day_offset in (1, 2)
+    ]
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", "cloud-learning-user", "sensor_readings"):
+            return cloud_sensor_rows
+        if path == ("users", "cloud-learning-user", "blink_summaries"):
+            return cloud_blink_rows
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+
+    response = client.get(
+        "/api/personalization/profile",
+        headers=auth("cloud-learning-user"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["days_observed"] == 2
+    assert payload["reading_count"] == 10
+    assert payload["ready_for_preliminary_profile"] is True
+    assert payload["recommended_profile_ready"] is False
+    assert payload["personalized_model_ready"] is False
+    assert payload["blink_reference"]["summary_count"] == 2
+    assert payload["blink_reference"]["days_observed"] == 2
+    assert payload["blink_reference"]["median_blinks_per_minute"] == 16.5
+    assert payload["blink_reference"]["ready_for_preliminary_reference"] is True
+    assert payload["blink_reference"]["recommended_reference_ready"] is False
+
+
+def test_personalization_profile_deduplicates_local_and_cloud_blink_summaries(client, monkeypatch):
+    """A Firestore backup of a local scan must not count as a second scan."""
+    now = datetime.now(timezone.utc)
+    recorded_at = (now - timedelta(days=1)).isoformat()
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO blink_summaries (
+                summary_id, user_id, blink_count, duration_seconds,
+                blinks_per_minute, recorded_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("same-blink-id", "dedupe-user", 30, 120, 15.0, recorded_at),
+        )
+
+    monkeypatch.setattr(
+        api,
+        "firestore_read_collection",
+        lambda path, **kwargs: (
+            [{
+                "summary_id": "same-blink-id",
+                "blink_count": 30,
+                "duration_seconds": 120,
+                "blinks_per_minute": 15.0,
+                "recorded_at": recorded_at,
+            }]
+            if path == ("users", "dedupe-user", "blink_summaries")
+            else []
+        ),
+    )
+
+    response = client.get(
+        "/api/personalization/profile",
+        headers=auth("dedupe-user"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["blink_reference"]["summary_count"] == 1
+    assert response.json()["blink_reference"]["days_observed"] == 1
+    assert response.json()["blink_reference"]["ready_for_preliminary_reference"] is False
+
+
+
+def test_personalization_profile_deduplicates_local_and_cloud_sensor_readings(client, monkeypatch):
+    """A cloud copy of a SQLite wearable reading must count only once."""
+    now = datetime.now(timezone.utc)
+    timestamp = (now - timedelta(days=1)).isoformat()
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "same-reading-id", "sensor-dedupe-user", "device-1",
+                timestamp, timestamp, 75.0, 42.0, 1700,
+                "good", "wearable",
+            ),
+        )
+
+    cloud_sensor_rows = [
+        {
+            "id": "same-reading-id",
+            "timestamp": timestamp,
+            "heart_rate_bpm": 999.0,
+            "hrv_ms": 999.0,
+            "gsr_raw": 9999,
+            "source": "wearable",
+            "signal_quality": "good",
+        },
+        {
+            "id": "cloud-only-reading",
+            "timestamp": timestamp,
+            "heart_rate_bpm": 80.0,
+            "hrv_ms": 44.0,
+            "gsr_raw": 1800,
+            "source": "wearable",
+            "signal_quality": "moderate",
+        },
+    ]
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", "sensor-dedupe-user", "sensor_readings"):
+            return cloud_sensor_rows
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+
+    response = client.get(
+        "/api/personalization/profile",
+        headers=auth("sensor-dedupe-user"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reading_count"] == 2
+    assert payload["personal_reference"]["heart_rate_bpm"] == 77.5
+    assert payload["days_observed"] == 1
+    assert payload["ready_for_preliminary_profile"] is False
+
+
+def test_recovery_history_rebuilds_cloud_only_before_after_comparison(client, monkeypatch):
+    """Recovery comparison must survive a Render restart with Firestore-only data."""
+    now = datetime.now(timezone.utc)
+    started = now - timedelta(seconds=120)
+    completed = now - timedelta(seconds=60)
+    before_at = started - timedelta(seconds=10)
+    after_at = completed + timedelta(seconds=10)
+
+    cloud_session = {
+        "session_id": "cloud-recovery-session",
+        "user_id": "cloud-recovery-user",
+        "activity": "breathing",
+        "started_at": started.isoformat(),
+        "completed_at": completed.isoformat(),
+        "duration_seconds": 60,
+        "completed": True,
+    }
+    cloud_readings = [
+        {
+            "id": "cloud-before-reading",
+            "timestamp": before_at.isoformat(),
+            "heart_rate_bpm": 84,
+            "hrv_ms": 30,
+            "gsr_raw": 2000,
+            "skin_temperature_c": 33.4,
+            "source": "wearable",
+            "signal_quality": "good",
+        },
+        {
+            "id": "cloud-after-reading",
+            "timestamp": after_at.isoformat(),
+            "heart_rate_bpm": 76,
+            "hrv_ms": 39,
+            "gsr_raw": 1650,
+            "skin_temperature_c": 33.1,
+            "source": "wearable",
+            "signal_quality": "good",
+        },
+    ]
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", "cloud-recovery-user", "recovery_sessions"):
+            return [cloud_session]
+        if path == ("users", "cloud-recovery-user", "sensor_readings"):
+            return cloud_readings
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+
+    response = client.get(
+        "/api/recovery/history",
+        headers=auth("cloud-recovery-user"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    recovered = payload["sessions"][0]
+    assert recovered["session_id"] == "cloud-recovery-session"
+    comparison = recovered["comparison"]
+    assert comparison["heart_rate_bpm"]["before"] == 84
+    assert comparison["heart_rate_bpm"]["after"] == 76
+    assert comparison["heart_rate_bpm"]["change"] == -8
+    assert comparison["hrv_ms"]["change"] == 9
+    assert comparison["gsr_raw"]["change"] == -350
+    assert comparison["skin_temperature_c"]["change"] == -0.3
+
+
+def test_latest_dashboard_and_stress_endpoints_prefer_newer_cloud_readings(client, monkeypatch):
+    """A newer Firestore reading must not be hidden by an older local SQLite row."""
+    user_id = "latest-cloud-reading-user"
+    now = datetime.now(timezone.utc)
+    local_at = (now - timedelta(minutes=6)).isoformat()
+    cloud_wearable_at = (now - timedelta(minutes=3)).isoformat()
+    cloud_simulated_at = (now - timedelta(minutes=1)).isoformat()
+
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "local-wearable-reading", user_id, "device-1",
+                local_at, local_at, 82.0, 31.0, 1950, 33.4,
+                "good", "wearable",
+            ),
+        )
+
+    cloud_rows = [
+        {
+            "id": "cloud-newer-wearable",
+            "timestamp": cloud_wearable_at,
+            "heart_rate_bpm": 76.0,
+            "hrv_ms": 42.0,
+            "gsr_raw": 1700,
+            "skin_temperature_c": 33.1,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        {
+            "id": "cloud-newest-simulated",
+            "timestamp": cloud_simulated_at,
+            "heart_rate_bpm": 90.0,
+            "hrv_ms": 25.0,
+            "gsr_raw": 2200,
+            "skin_temperature_c": 34.0,
+            "signal_quality": "moderate",
+            "source": "simulated",
+        },
+    ]
+
+    def fake_firestore_read_collection(path, **kwargs):
+        return cloud_rows if path == (
+            "users", user_id, "sensor_readings"
+        ) else []
+
+    predicted_readings = []
+    def fake_stored_or_predicted_stress(received_user_id, reading):
+        predicted_readings.append((received_user_id, reading))
+        return {"status": "test_prediction", "stress_score": None}
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(api, "firestore_read_document", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api, "stored_or_predicted_stress", fake_stored_or_predicted_stress)
+
+    headers = auth(user_id)
+    stress = client.get("/api/stress/latest", headers=headers)
+    assert stress.status_code == 200
+    assert stress.json()["reading_id"] == "cloud-newer-wearable"
+    assert stress.json()["reading_timestamp"] == cloud_wearable_at
+    assert predicted_readings[-1][1]["source"] == "wearable"
+
+    latest = client.get("/api/sensors/latest", headers=headers)
+    assert latest.status_code == 200
+    assert latest.json()["data"]["id"] == "cloud-newest-simulated"
+    assert latest.json()["data"]["heart_rate_bpm"] == 90.0
+
+    dashboard = client.get("/api/dashboard/overview", headers=headers)
+    assert dashboard.status_code == 200
+    assert dashboard.json()["latest_reading"]["id"] == "cloud-newest-simulated"
+    assert dashboard.json()["latest_reading"]["heart_rate_bpm"] == 90.0
+    assert dashboard.json()["stress"]["status"] == "waiting_for_wearable_data"
+
+
+def test_summary_scheduler_rebuilds_periods_from_cloud_history_after_restart(client, monkeypatch):
+    """A fresh local row should rehydrate and summarize the user's older cloud history."""
+    user_id = "cloud-summary-recovery-user"
+    now = datetime.now(timezone.utc)
+    first_at = now - timedelta(hours=2, minutes=20)
+    second_at = now - timedelta(hours=2, minutes=10)
+    third_at = now - timedelta(hours=1, minutes=10)
+    local_at = now - timedelta(minutes=2)
+
+    # This new post-restart row lets the scheduler discover the UID; the older
+    # readings are deliberately cloud-only to simulate Render's lost SQLite file.
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "fresh-local-reading", user_id, "device-1",
+                local_at.isoformat(), local_at.isoformat(),
+                72.0, 45.0, 1600, 33.0, "good", "wearable",
+            ),
+        )
+
+    cloud_sensor_rows = [
+        {
+            "id": "cloud-reading-1",
+            "timestamp": first_at.isoformat(),
+            "heart_rate_bpm": 80.0,
+            "hrv_ms": 35.0,
+            "gsr_raw": 1800,
+            "skin_temperature_c": 33.2,
+            "signal_quality": "good",
+            "source": "wearable",
+            "stress_score": 70.0,
+        },
+        {
+            "id": "cloud-reading-2",
+            "timestamp": second_at.isoformat(),
+            "heart_rate_bpm": 84.0,
+            "hrv_ms": 31.0,
+            "gsr_raw": 1900,
+            "skin_temperature_c": 33.3,
+            "signal_quality": "moderate",
+            "source": "wearable",
+            "stress_score": 80.0,
+        },
+        {
+            "id": "cloud-reading-3",
+            "timestamp": third_at.isoformat(),
+            "heart_rate_bpm": 76.0,
+            "hrv_ms": 42.0,
+            "gsr_raw": 1700,
+            "skin_temperature_c": 33.1,
+            "signal_quality": "good",
+            "source": "wearable",
+            "stress_score": 60.0,
+        },
+    ]
+    cloud_events = [
+        {
+            "event_id": "cloud-high-stress-event",
+            "reading_id": "cloud-reading-2",
+            "stress_probability": 0.8,
+            "occurred_at": second_at.isoformat(),
+        }
+    ]
+    writes = []
+
+    def fake_firestore_read_document(path, document_id):
+        return None
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_sensor_rows
+        if path == ("users", user_id, "high_stress_events"):
+            return cloud_events
+        if path == ("users", user_id, "summaries"):
+            return []
+        return []
+
+    def fake_firestore_write(path, document_id, payload):
+        writes.append((path, document_id, dict(payload)))
+        return "synced"
+
+    monkeypatch.setattr(api, "DEFAULT_MONITORING_INTERVAL_SECONDS", 3600)
+    monkeypatch.setattr(api, "MAX_SUMMARY_WINDOWS_PER_PASS", 10)
+    monkeypatch.setattr(api, "firestore_read_document", fake_firestore_read_document)
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(api, "firestore_write", fake_firestore_write)
+
+    created = api.create_due_summaries()
+    assert created == 2
+
+    with api.db_connection() as db:
+        summaries = [
+            dict(row) for row in db.execute(
+                """
+                SELECT * FROM summaries
+                WHERE user_id = ?
+                ORDER BY period_start ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        ]
+        checkpoint = db.execute(
+            """
+            SELECT last_period_end
+            FROM monitoring_summary_state
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+    assert len(summaries) == 2
+    first_summary = summaries[0]
+    assert first_summary["reading_count"] == 2
+    assert first_summary["reliable_reading_count"] == 2
+    assert first_summary["avg_heart_rate"] == 82.0
+    assert first_summary["avg_hrv"] == 33.0
+    assert first_summary["avg_gsr"] == 1850.0
+    assert first_summary["avg_stress_score"] == 75.0
+    assert first_summary["peak_stress_score"] == 80.0
+    assert first_summary["high_stress_event_count"] == 1
+    assert checkpoint is not None
+    assert any(path == ("users", user_id, "summaries") for path, _, _ in writes)
+    assert any(
+        path == ("users", user_id, "monitoring_summary_state")
+        for path, _, _ in writes
+    )
+
+    first_write_count = len(writes)
+    assert api.create_due_summaries() == 0
+    assert len(writes) == first_write_count
+
+
+def _seed_haptic_restart_state(client, user_id, device_id, now):
+    """Seed the one post-restart local reading and its paired device."""
+    current_at = now - timedelta(seconds=5)
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO devices (
+                device_id, user_id, device_name, token_hash,
+                created_at, last_seen, active
+            ) VALUES (?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                device_id, user_id, "Restart test ESP32", "a" * 64,
+                api.iso(now - timedelta(days=1)), api.iso(now),
+            ),
+        )
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "post-restart-local-reading", user_id, device_id,
+                current_at.isoformat(), current_at.isoformat(),
+                92.0, 20.0, 1800, 33.0, "good", "wearable",
+            ),
+        )
+    return {
+        "id": "post-restart-local-reading",
+        "source": "wearable",
+        "signal_quality": "good",
+        "timestamp": current_at.isoformat(),
+    }
+
+
+def _cloud_haptic_history(now):
+    return [
+        {
+            "id": "cloud-good-reading-1",
+            "timestamp": (now - timedelta(seconds=125)).isoformat(),
+            "heart_rate_bpm": 92.0,
+            "hrv_ms": 20.0,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+        {
+            "id": "cloud-good-reading-2",
+            "timestamp": (now - timedelta(seconds=65)).isoformat(),
+            "heart_rate_bpm": 94.0,
+            "hrv_ms": 19.0,
+            "signal_quality": "good",
+            "source": "wearable",
+        },
+    ]
+
+
+def _enable_haptic_test_guards(monkeypatch):
+    monkeypatch.setattr(
+        api, "get_settings",
+        lambda _user_id: {"haptic_enabled": True},
+    )
+    monkeypatch.setattr(
+        api, "baseline_for_user",
+        lambda _user_id: {"heart_rate_bpm": 70.0, "hrv_ms": 40.0},
+    )
+
+
+def test_haptic_nudge_restores_cloud_readings_and_cooldown_after_restart(client, monkeypatch):
+    """A cloud-only recent command must retain the 15-minute anti-repeat guard."""
+    user_id = "cloud-haptic-cooldown-user"
+    device_id = "cloud-haptic-cooldown-device"
+    now = datetime.now(timezone.utc)
+    current = _seed_haptic_restart_state(client, user_id, device_id, now)
+    cloud_readings = _cloud_haptic_history(now)
+    cloud_command = {
+        "command_id": "recent-cloud-haptic-command",
+        "created_at": (now - timedelta(minutes=10)).isoformat(),
+        "command_status": "acknowledged",
+    }
+    writes = []
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_readings
+        if path == ("users", user_id, "haptic_commands"):
+            return [cloud_command]
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(
+        api, "firestore_write",
+        lambda path, document_id, payload: writes.append((path, document_id, dict(payload))) or "synced",
+    )
+    _enable_haptic_test_guards(monkeypatch)
+
+    result = api.maybe_queue_personal_haptic_nudge(user_id, device_id, current)
+    assert result == {"queued": False, "reason": "cooldown"}
+    assert writes == []
+
+
+def test_haptic_nudge_restores_cloud_activity_label_after_restart(client, monkeypatch):
+    """A recent active label remains an override even after local SQLite is reset."""
+    user_id = "cloud-haptic-activity-user"
+    device_id = "cloud-haptic-activity-device"
+    now = datetime.now(timezone.utc)
+    current = _seed_haptic_restart_state(client, user_id, device_id, now)
+    cloud_readings = _cloud_haptic_history(now)
+    cloud_feedback = {
+        "reading_id": "cloud-good-reading-2",
+        "label": "active",
+        "created_at": (now - timedelta(minutes=5)).isoformat(),
+    }
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_readings
+        if path == ("users", user_id, "reading_feedback"):
+            return [cloud_feedback]
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(
+        api, "firestore_write",
+        lambda *_args, **_kwargs: "synced",
+    )
+    _enable_haptic_test_guards(monkeypatch)
+
+    result = api.maybe_queue_personal_haptic_nudge(user_id, device_id, current)
+    assert result == {"queued": False, "reason": "recent_activity_label"}
+
+
+def test_haptic_nudge_can_use_three_cloud_backed_readings_after_restart(client, monkeypatch):
+    """A restart does not permanently disable a valid haptic check-in sequence."""
+    user_id = "cloud-haptic-history-user"
+    device_id = "cloud-haptic-history-device"
+    now = datetime.now(timezone.utc)
+    current = _seed_haptic_restart_state(client, user_id, device_id, now)
+    cloud_readings = _cloud_haptic_history(now)
+    writes = []
+
+    def fake_firestore_read_collection(path, **kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_readings
+        return []
+
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(
+        api, "firestore_write",
+        lambda path, document_id, payload: writes.append((path, document_id, dict(payload))) or "synced",
+    )
+    _enable_haptic_test_guards(monkeypatch)
+
+    result = api.maybe_queue_personal_haptic_nudge(user_id, device_id, current)
+    assert result["queued"] is True
+    assert result["reason"] == "sustained_personal_hr_hrv_deviation"
+    assert len(writes) == 1
+    assert writes[0][0] == ("users", user_id, "haptic_commands")
+    assert writes[0][2]["command_id"] == result["command_id"]
+    assert writes[0][2]["duration_ms"] == 300
+
+
+def test_high_stress_prediction_uses_telegram_only(client, monkeypatch):
+    """High-probability wearable predictions use Telegram, never legacy FCM."""
+    user_id = "automatic-telegram-only-user"
+    telegram_calls = []
+
+    class HighStressModel:
+        classes_ = [0, 1]
+
+        def predict_proba(self, _matrix):
+            return api.np.asarray([[0.08, 0.92]], dtype=float)
+
+    monkeypatch.setattr(api, "STRESS_MODEL", HighStressModel())
+    monkeypatch.setattr(
+        api,
+        "baseline_for_user",
+        lambda _user_id: {
+            "heart_rate_bpm": 70.0,
+            "hrv_ms": 42.0,
+            "gsr_raw": 1500.0,
+            "skin_temperature_c": 33.0,
+        },
+    )
+    monkeypatch.setattr(api, "firestore_write", lambda *_args, **_kwargs: "synced")
+    monkeypatch.setattr(
+        api,
+        "maybe_send_emergency_telegram_alert",
+        lambda received_user, probability: (
+            telegram_calls.append((received_user, probability)) or "sent"
+        ),
+    )
+    reading = {
+        "id": "automatic-telegram-only-reading",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "heart_rate_bpm": 98.0,
+        "hrv_ms": 24.0,
+        "gsr_raw": 2200,
+        "skin_temperature_c": 33.8,
+        "signal_quality": "good",
+        "source": "wearable",
+    }
+
+    # The production prediction path receives readings after they have been
+    # persisted by sensor ingestion. Seed the parent row for the stress event.
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                reading["id"],
+                user_id,
+                "automatic-telegram-test-device",
+                reading["timestamp"],
+                reading["timestamp"],
+                reading["heart_rate_bpm"],
+                reading["hrv_ms"],
+                reading["gsr_raw"],
+                reading["skin_temperature_c"],
+                reading["signal_quality"],
+                reading["source"],
+            ),
+        )
+
+    result = api.predict_stress(user_id, reading)
+
+    assert result["status"] == "prediction_available"
+    assert result["stress_probability"] == 0.92
+    assert result["telegram_alert"] == "sent"
+    assert "push_alert" not in result
+    assert telegram_calls == [(user_id, 0.92)]
+    assert not hasattr(api, "maybe_send_emergency_push_alert")
+
+    with api.db_connection() as db:
+        event = db.execute(
+            """
+            SELECT reading_id, stress_probability
+            FROM high_stress_events
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    assert event is not None
+    assert event["reading_id"] == reading["id"]
+    assert event["stress_probability"] == 0.92
+
+def test_telegram_alert_recovers_cloud_history_and_cooldown_after_restart(client, monkeypatch):
+    """Telegram's repeated-reading alert remains deduplicated after SQLite is lost."""
+    user_id = "telegram-cloud-alert-recovery-user"
+    now = datetime.now(timezone.utc)
+    cloud_events = [
+        {
+            "event_id": f"telegram-cloud-event-{index}",
+            "reading_id": f"telegram-cloud-reading-{index}",
+            "stress_probability": 0.9,
+            "occurred_at": (now - timedelta(minutes=index + 1)).isoformat(),
+        }
+        for index in range(3)
+    ]
+    alert_state = {}
+    deliveries = []
+
+    class Snapshot:
+        def __init__(self, data, document_id=""):
+            self._data = dict(data) if data is not None else None
+            self.id = document_id
+            self.exists = data is not None
+
+        def to_dict(self):
+            return dict(self._data or {})
+
+    class Query:
+        def order_by(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, _value):
+            return self
+
+        def stream(self):
+            return [
+                Snapshot(item, str(item["event_id"]))
+                for item in cloud_events
+            ]
+
+    class Document:
+        def get(self):
+            return Snapshot(alert_state if alert_state else None, "current")
+
+        def set(self, payload):
+            alert_state.clear()
+            alert_state.update(dict(payload))
+
+    class Collection:
+        def __init__(self, name):
+            self.name = name
+
+        def order_by(self, *_args, **_kwargs):
+            return Query()
+
+        def document(self, _document_id):
+            return Document()
+
+    monkeypatch.setattr(api, "FIRESTORE_CLIENT", object())
+    monkeypatch.setattr(api, "telegram_configured", lambda: True)
+    monkeypatch.setattr(
+        api,
+        "telegram_user_collection",
+        lambda _user_id, name: Collection(name),
+    )
+    monkeypatch.setattr(
+        api,
+        "telegram_firestore_active_chat_ids",
+        lambda _user_id: ["telegram-chat-123"],
+    )
+    monkeypatch.setattr(
+        api,
+        "send_user_telegram_alert",
+        lambda received_user, title, body: (
+            deliveries.append((received_user, title)) or ("sent", 1)
+        ),
+    )
+
+    first = api.maybe_send_emergency_telegram_alert(user_id, 0.9)
+
+    assert first == "sent"
+    assert len(deliveries) == 1
+    assert alert_state["last_attempt_status"] == "sent"
+    assert alert_state["last_alert_at"]
+    assert alert_state["last_attempt_at"]
+
+    # A new invocation represents a Render restart with no usable SQLite
+    # history. The cloud history still qualifies, but the cloud cooldown wins.
+    second = api.maybe_send_emergency_telegram_alert(user_id, 0.9)
+
+    assert second == "cooldown"
+    assert len(deliveries) == 1
+
+def test_summary_scheduler_retries_after_cloud_summary_write_failure(client, monkeypatch):
+    """A failed Firestore summary write must not advance the durable checkpoint."""
+    user_id = "cloud-summary-retry-user"
+    now = datetime.now(timezone.utc)
+    first_at = now - timedelta(hours=2, minutes=20)
+    second_at = now - timedelta(hours=2, minutes=10)
+    third_at = now - timedelta(hours=1, minutes=10)
+    local_at = now - timedelta(minutes=2)
+
+    # A post-restart local reading discovers the UID; earlier readings exist only
+    # in Firestore, matching the ephemeral Render SQLite reset scenario.
+    with api.db_connection() as db:
+        db.execute(
+            """
+            INSERT INTO sensor_readings (
+                id, user_id, device_id, timestamp, received_at,
+                heart_rate_bpm, hrv_ms, gsr_raw, skin_temperature_c,
+                signal_quality, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "summary-retry-local", user_id, "device-summary-retry",
+                api.iso(local_at), api.iso(local_at),
+                72.0, 45.0, 1600, 33.0, "good", "wearable",
+            ),
+        )
+
+    cloud_sensor_rows = [
+        {
+            "id": "summary-retry-cloud-1",
+            "timestamp": api.iso(first_at),
+            "heart_rate_bpm": 80.0,
+            "hrv_ms": 35.0,
+            "gsr_raw": 1800,
+            "skin_temperature_c": 33.2,
+            "signal_quality": "good",
+            "source": "wearable",
+            "stress_score": 70.0,
+        },
+        {
+            "id": "summary-retry-cloud-2",
+            "timestamp": api.iso(second_at),
+            "heart_rate_bpm": 84.0,
+            "hrv_ms": 31.0,
+            "gsr_raw": 1900,
+            "skin_temperature_c": 33.3,
+            "signal_quality": "moderate",
+            "source": "wearable",
+            "stress_score": 80.0,
+        },
+        {
+            "id": "summary-retry-cloud-3",
+            "timestamp": api.iso(third_at),
+            "heart_rate_bpm": 76.0,
+            "hrv_ms": 42.0,
+            "gsr_raw": 1700,
+            "skin_temperature_c": 33.1,
+            "signal_quality": "good",
+            "source": "wearable",
+            "stress_score": 60.0,
+        },
+    ]
+    summary_attempts = []
+
+    def fake_firestore_read_document(_path, _document_id):
+        return None
+
+    def fake_firestore_read_collection(path, **_kwargs):
+        if path == ("users", user_id, "sensor_readings"):
+            return cloud_sensor_rows
+        return []
+
+    def fake_firestore_write(path, document_id, payload):
+        if path == ("users", user_id, "summaries"):
+            summary_attempts.append((document_id, dict(payload)))
+            return "failed" if len(summary_attempts) == 1 else "synced"
+        return "synced"
+
+    monkeypatch.setattr(api, "DEFAULT_MONITORING_INTERVAL_SECONDS", 3600)
+    monkeypatch.setattr(api, "MAX_SUMMARY_WINDOWS_PER_PASS", 10)
+    monkeypatch.setattr(api, "firestore_read_document", fake_firestore_read_document)
+    monkeypatch.setattr(api, "firestore_read_collection", fake_firestore_read_collection)
+    monkeypatch.setattr(api, "firestore_write", fake_firestore_write)
+
+    # First pass: no local summary is committed and the checkpoint stays at the
+    # start of the failed interval, allowing the following pass to retry it.
+    assert api.create_due_summaries() == 0
+    assert len(summary_attempts) == 1
+    with api.db_connection() as db:
+        summaries = db.execute(
+            "SELECT COUNT(*) FROM summaries WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+        checkpoint = db.execute(
+            "SELECT last_period_end FROM monitoring_summary_state WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+    assert summaries == 0
+    assert checkpoint is not None
+    assert api.parse_iso(checkpoint["last_period_end"]) == api.parse_iso(api.iso(first_at))
+
+    # Second pass: the cloud write succeeds, so both overdue windows are saved.
+    assert api.create_due_summaries() == 2
+    assert len(summary_attempts) == 3
+    with api.db_connection() as db:
+        summaries = db.execute(
+            "SELECT COUNT(*) FROM summaries WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+    assert summaries == 2
+

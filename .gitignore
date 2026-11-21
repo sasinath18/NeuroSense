@@ -45,10 +45,14 @@ data/local/
 data/wesad/
 data/stress_dataset.csv
 data/empathicschool/
+data/emowork/
+data/emowork_face_stress_windows.csv
 data/face_stress_windows.csv
 ml_model/assets/*.task
 ml_model/face_stress_model.joblib
 ml_model/face_stress_evaluation.json
+ml_model/emowork_face_stress_rf.joblib
+ml_model/emowork_face_stress_evaluation.json
 ml_model/face_valence/*.joblib
 ml_model/face_valence/*.download
 *.db
