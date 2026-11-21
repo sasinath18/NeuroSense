@@ -4415,13 +4415,47 @@ function applyStressResult(stress) {
 
     if (status === "prediction_available" && score !== null && score !== undefined) {
         const numericScore = Math.max(0, Math.min(100, Number(score)));
+        const coverage = stress?.model_input_coverage || null;
+        const imputedFeatures = Array.isArray(coverage?.imputed_features)
+            ? coverage.imputed_features
+            : [];
+        const featureLabels = {
+            heart_rate_bpm: "heart rate",
+            hrv_ms: "HRV",
+            gsr_raw: "EDA/GSR",
+            skin_temperature_c: "skin temperature",
+            heart_rate_delta: "heart-rate baseline change",
+            hrv_delta: "HRV baseline change",
+            gsr_delta: "EDA/GSR baseline change",
+            skin_temperature_delta: "temperature baseline change"
+        };
+        const imputedLabels = imputedFeatures
+            .map(feature => featureLabels[feature] || feature)
+            .join(", ");
+        const hasReducedInputs = imputedFeatures.length > 0;
+        const coverageText = coverage
+            ? "Available model inputs: " + coverage.available_count + "/" +
+                coverage.expected_count + " (" + coverage.coverage_percent + "%)."
+            : "Some physiological model inputs may be unavailable.";
+        const warningText = Array.isArray(stress?.model_input_warnings)
+            ? stress.model_input_warnings.join(" ")
+            : "";
+
         setText("stressScoreValue", displayValue(numericScore, 1));
-        setText("stressSummary", "Experimental model estimate");
+        setText(
+            "stressSummary",
+            hasReducedInputs ? "Limited-input estimate" : "Experimental model estimate"
+        );
         setText(
             "stressDescription",
-            "WESAD-trained experimental estimate. Raw ESP32 GSR ADC counts are excluded because WESAD training expects EDA in microsiemens; this model is not clinically validated and is not a diagnosis."
+            [
+                "WESAD-trained experimental estimate. Missing features are median-imputed, so reduced inputs can materially affect the result. This model is not clinically validated and is not a diagnosis.",
+                coverageText,
+                imputedLabels ? "Imputed features: " + imputedLabels + "." : "",
+                warningText
+            ].filter(Boolean).join(" ")
         );
-        setText("stressStatusBadge", "Experimental");
+        setText("stressStatusBadge", hasReducedInputs ? "Limited inputs" : "Experimental");
         if (ring) {
             const stressColor = numericScore < 34
                 ? "var(--green)"
