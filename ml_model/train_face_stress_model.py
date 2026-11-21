@@ -379,6 +379,35 @@ def audit_dataset(root: Path) -> dict[str, Any]:
         ),
     }
 
+def summarize_audit(report: dict[str, Any]) -> dict[str, Any]:
+    """Return aggregate-only audit metadata without participant/task identifiers."""
+    fields = (
+        "dataset",
+        "video_candidate_count",
+        "paired_task_count",
+        "valid_task_count",
+        "invalid_task_count",
+        "unpaired_video_task_count",
+        "participant_count",
+        "class_counts",
+        "class_count",
+        "ready_for_exploratory_training",
+        "warnings",
+    )
+    summary = {field: report.get(field) for field in fields}
+    summary.update({
+        "audit_only": True,
+        "summary_only": True,
+        "participant_identifiers_included": False,
+        "task_details_included": False,
+        "note": (
+            "Aggregate-only metadata report. Participant IDs, task IDs, file names, "
+            "video frames and per-task records are intentionally omitted."
+        ),
+    })
+    return summary
+
+
 def ensure_landmarker_model(path: Path) -> Path:
     """Download the same Face Landmarker task asset used by the browser client."""
     if path.exists() and path.stat().st_size > 1_000_000:
@@ -598,6 +627,17 @@ def evaluate_loso(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, 
 
 def run(args: argparse.Namespace) -> None:
     dataset_root = args.dataset_root.resolve()
+    if getattr(args, "audit_summary_only", False):
+        audit = audit_dataset(dataset_root)
+        print(json.dumps(summarize_audit(audit), indent=2))
+        if not audit["ready_for_exploratory_training"]:
+            print(
+                "Dataset audit completed with readiness warnings. "
+                "Resolve the listed issues before training.",
+                file=sys.stderr,
+            )
+        return
+
     if getattr(args, "audit_only", False):
         audit = audit_dataset(dataset_root)
         print(json.dumps(audit, indent=2))
@@ -741,10 +781,16 @@ def parse_args() -> argparse.Namespace:
         description="Train NeuroSense's camera-only facial stress model."
     )
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET)
-    parser.add_argument(
+    audit_group = parser.add_mutually_exclusive_group()
+    audit_group.add_argument(
         "--audit-only",
         action="store_true",
-        help="Validate local consented video/label pairs without downloading the model or extracting frames.",
+        help="Validate local consented video/label pairs and include per-task audit details.",
+    )
+    audit_group.add_argument(
+        "--audit-summary-only",
+        action="store_true",
+        help="Print aggregate audit counts only; omit participant IDs, task IDs, file names and per-task details.",
     )
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT)
