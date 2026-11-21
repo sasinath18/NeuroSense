@@ -612,12 +612,12 @@ def run(args: argparse.Namespace) -> None:
     # triggering unnecessary downloads or expensive video processing.
     audit = audit_dataset(dataset_root)
     if not audit["ready_for_exploratory_training"]:
-        warnings = "\\n".join(f"- {warning}" for warning in audit["warnings"])
+        warnings = "\n".join(f"- {warning}" for warning in audit["warnings"])
         raise ValueError(
             "Dataset is not ready for exploratory training. Run with "
             "--audit-only to inspect the metadata report. The MediaPipe asset "
             "was not downloaded and no video frames were extracted."
-            + (f"\\n{warnings}" if warnings else "")
+            + (f"\n{warnings}" if warnings else "")
         )
 
     tasks = discover_video_tasks(dataset_root)
