@@ -125,10 +125,13 @@ def timestamp_to_seconds(values: pd.Series, name: str) -> pd.Series:
             divisor = 1e3
         elif median >= 1e8:     # Unix seconds
             divisor = 1.0
-        elif median >= 1e4:     # relative milliseconds
-            divisor = 1e3
-        else:                   # relative seconds
-            divisor = 1.0
+        else:
+            # For relative clocks, infer the unit from frame-to-frame spacing,
+            # not absolute recording duration. A 6-hour recording in seconds
+            # can exceed 10,000 even though its frame deltas are still < 1 sec.
+            deltas = valid.sort_values().diff().abs().dropna()
+            median_delta = float(deltas[deltas > 0].median()) if (deltas > 0).any() else 0.0
+            divisor = 1e3 if median_delta > 1.0 else 1.0
         return numeric.astype(float) / divisor
 
     parsed = pd.to_datetime(values, utc=True, errors="coerce")
