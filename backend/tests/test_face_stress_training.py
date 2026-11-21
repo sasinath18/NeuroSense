@@ -83,7 +83,7 @@ def test_dataset_audit_reports_task_labels_and_loso_readiness(tmp_path: Path, mo
     task_dir.mkdir(parents=True)
     (task_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
     (task_dir / "Stress_level.csv").write_text(
-        "stress_level\\n0\\n1\\n2\\n1\\n0\\n",
+        "stress_level\n0\n1\n2\n1\n0\n",
         encoding="utf-8",
     )
     _make_fake_video_capture(monkeypatch, duration_seconds=540.0)
@@ -107,12 +107,12 @@ def test_dataset_audit_flags_unpaired_video_and_invalid_interval_layout(tmp_path
     invalid_dir.mkdir(parents=True)
     (valid_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
     (valid_dir / "Stress_level.csv").write_text(
-        "stress_level\\n0\\n1\\n2\\n",
+        "stress_level\n0\n1\n2\n",
         encoding="utf-8",
     )
     (invalid_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
     (invalid_dir / "Stress_level.csv").write_text(
-        "stress_level\\n0\\n1\\n",
+        "stress_level\n0\n1\n",
         encoding="utf-8",
     )
 
@@ -151,7 +151,7 @@ def test_audit_only_run_does_not_download_or_require_landmarker(tmp_path: Path, 
     task_dir.mkdir(parents=True)
     (task_dir / "V.mp4").write_bytes(b"synthetic video placeholder")
     (task_dir / "Stress_level.csv").write_text(
-        "stress_level\\n0\\n1\\n2\\n1\\n0\\n",
+        "stress_level\n0\n1\n2\n1\n0\n",
         encoding="utf-8",
     )
     _make_fake_video_capture(monkeypatch, duration_seconds=540.0)
