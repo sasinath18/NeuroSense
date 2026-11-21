@@ -69,6 +69,35 @@ def test_five_interval_labels_use_published_task_timing():
     ]
 
 
+def test_shortened_t3_labels_use_consecutive_two_minute_intervals():
+    intervals = build_label_intervals([0, 2, 1], 300, task_id="T3")
+
+    assert intervals == [
+        (0.0, 120.0, 0),
+        (120.0, 240.0, 2),
+        (240.0, 300.0, 1),
+    ]
+
+
+def test_shortened_t3_leaves_unlabelled_tail_unassigned():
+    intervals = build_label_intervals([0, 2], 420, task_id="T3")
+
+    assert intervals == [
+        (0.0, 120.0, 0),
+        (120.0, 240.0, 2),
+    ]
+
+
+def test_incomplete_non_t3_labels_fail_closed():
+    with pytest.raises(ValueError, match="Only shortened T3"):
+        build_label_intervals([0, 2, 1], 300, task_id="T2")
+
+
+def test_inconsistent_shortened_t3_duration_fails_closed():
+    with pytest.raises(ValueError, match="too short"):
+        build_label_intervals([0, 2, 1], 200, task_id="T3")
+
+
 def test_feature_window_is_skipped_when_it_crosses_label_boundary():
     intervals = [(0.0, 20.0, 0), (20.0, 40.0, 2)]
 
@@ -79,24 +108,24 @@ def test_feature_window_is_skipped_when_it_crosses_label_boundary():
 
 def test_blendshape_windows_are_grouped_and_labelled_without_wearable_features():
     samples = [
-        (float(second), {"jawOpen": second / 40.0, "eyeBlinkLeft": 0.1})
-        for second in range(40)
+        (float(second), {"jawOpen": second / 300.0, "eyeBlinkLeft": 0.1})
+        for second in range(300)
     ]
 
     rows = build_feature_windows(
         samples=samples,
-        duration_seconds=40.0,
-        labels=[0, 2],
+        duration_seconds=300.0,
+        labels=[0, 2, 1],
         subject_id="S7",
-        task_id="T2",
-        window_seconds=10.0,
-        step_seconds=10.0,
+        task_id="T3",
+        window_seconds=60.0,
+        step_seconds=60.0,
         sample_fps=1.0,
     )
 
-    assert [row["stress_label"] for row in rows] == [0, 0, 2, 2]
+    assert [row["stress_label"] for row in rows] == [0, 0, 2, 2, 1]
     assert {row["participant_id"] for row in rows} == {"S7"}
-    assert {row["task_id"] for row in rows} == {"T2"}
+    assert {row["task_id"] for row in rows} == {"T3"}
     assert "blendshape_jawOpen_mean" in rows[0]
     assert "heart_rate_bpm" not in rows[0]
     assert "gsr_raw" not in rows[0]

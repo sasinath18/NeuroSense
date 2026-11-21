@@ -167,8 +167,14 @@ browser frontend into ml_model/assets/face_landmarker.task if it is not already
 present. It samples face video at 5 frames per second and computes mean and
 standard deviation for each blendshape in 20-second windows with a 5-second step.
 A window is labelled only when it lies entirely inside one self-report interval.
-For the documented five-interval task format, the first and last intervals are
-treated as 90 seconds and the three middle intervals as 120 seconds.
+For standard five-label tasks, the first and last intervals are
+treated as 90 seconds and the three middle intervals as 120 seconds. The paper
+notes that some T3 presentation recordings ended early and therefore have fewer
+two-minute self-report intervals. For those shortened T3 tasks, each available
+label covers its consecutive 120-second segment; the final segment is clipped
+to the video end when needed, and any remaining footage without a label is left
+unlabelled. Other tasks with fewer than five labels are rejected instead of
+redistributing labels evenly across the video.
 
 Outputs are local and ignored by Git:
 

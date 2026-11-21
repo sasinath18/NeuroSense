@@ -108,21 +108,56 @@ def read_stress_labels(path: Path) -> list[int | None]:
 
 
 def build_label_intervals(
-    labels: list[int | None], duration_seconds: float
+    labels: list[int | None],
+    duration_seconds: float,
+    task_id: str | None = None,
 ) -> list[tuple[float, float, int | None]]:
-    """Use the paper's 90/120/120/120/90-second pattern when five labels exist."""
+    """Map EmpathicSchool's documented 2-minute self-report intervals.
+
+    Standard nine-minute tasks use 90/120/120/120/90-second intervals.
+    Shortened presentation tasks (T3) can have fewer 2-minute labels; their
+    final interval may be clipped to the video duration. Any footage after the
+    available labels remains unlabelled. Other incomplete label files fail
+    closed rather than being stretched evenly across the video.
+    """
     if not labels:
         return []
-    if len(labels) == 5 and duration_seconds >= 480:
-        boundaries = [0.0, 90.0, 210.0, 330.0, 450.0, float(duration_seconds)]
+    duration = float(duration_seconds)
+    if not np.isfinite(duration) or duration <= 0:
+        raise ValueError("Task duration must be a finite positive number.")
+
+    if len(labels) == 5:
+        if duration < 450.0:
+            raise ValueError(
+                "Five EmpathicSchool interval labels require at least 450 seconds "
+                "for the documented 90/120/120/120/90-second pattern."
+            )
+        boundaries = [0.0, 90.0, 210.0, 330.0, 450.0, duration]
+    elif 1 <= len(labels) < 5 and str(task_id or "").upper() == "T3":
+        if duration <= 120.0 * (len(labels) - 1):
+            raise ValueError(
+                f"T3 duration ({duration:.1f}s) is too short for "
+                f"{len(labels)} consecutive 2-minute stress labels."
+            )
+        boundaries = [
+            min(float(index * 120), duration)
+            for index in range(len(labels) + 1)
+        ]
     else:
-        boundaries = np.linspace(
-            0.0, float(duration_seconds), num=len(labels) + 1
-        ).tolist()
-    return [
-        (float(boundaries[i]), float(boundaries[i + 1]), labels[i])
-        for i in range(len(labels))
-    ]
+        raise ValueError(
+            f"Expected five interval labels for {task_id or 'this task'}; "
+            f"found {len(labels)}. Only shortened T3 tasks may contain fewer "
+            "labels, and their labels are never evenly redistributed."
+        )
+
+    intervals = []
+    for index, label in enumerate(labels):
+        start = float(boundaries[index])
+        end = float(boundaries[index + 1])
+        if end <= start:
+            raise ValueError("Stress-label interval has no video coverage.")
+        intervals.append((start, end, label))
+    return intervals
 
 
 def label_for_window(
@@ -295,7 +330,7 @@ def build_feature_windows(
 
     names = sorted({name for _, values in samples for name in values})
     times = np.asarray([timestamp for timestamp, _ in samples], dtype=float)
-    intervals = build_label_intervals(labels, duration_seconds)
+    intervals = build_label_intervals(labels, duration_seconds, task_id)
     minimum_samples = max(5, int(window_seconds * sample_fps * MIN_WINDOW_COVERAGE))
     rows = []
 
