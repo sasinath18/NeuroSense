@@ -24,6 +24,37 @@ The dataset agreement is for research use and includes privacy/security obligati
 Do not upload the downloaded archive, participant videos, labels or derived feature
 CSV to GitHub or a public service.
 
+## Required files for the Face-only stress experiment
+
+The EmpathicSchool paper lists these release files: `HR.csv`, `EDA.csv`,
+`TEMP.csv`, `Acc.csv`, `V.mp4`, `Stress_level.csv`, `Landmarks.csv`,
+`BVP.csv` and `IBI.csv`. The release includes synchronized facial video and
+physiological streams; the published file list does not identify a pupil-diameter
+CSV. If a local archive contains a pupil file, verify its source and metadata
+rather than assuming it belongs to EmpathicSchool.
+
+For this **Face-only** model, use only the following matching pair for each
+participant/task:
+
+- `V.mp4`: the participant's video, available only where video-sharing consent
+  was granted.
+- `Stress_level.csv`: the corresponding self-reported stress labels. Each label
+  covers a two-minute interval; documented values are 0 (no stress), 1 (low
+  stress), 2 (high stress), and unknown.
+
+`Landmarks.csv` is an optional video-derived alternative feature source, but the
+current EmpathicSchool trainer extracts MediaPipe blendshapes directly from
+`V.mp4`. It does not need or read `EDA.csv`, `BVP.csv`, `IBI.csv`,
+`HR.csv`, `TEMP.csv`, or `Acc.csv`; those streams belong to a separate
+multimodal experiment. Pupil measurements are not an input to this trainer.
+
+**Do not confuse the earlier AFFEC/DevEmo+ files with EmpathicSchool stress
+labels.** The previously reviewed AFFEC pack's pupil/GSR and video data are
+labelled for felt valence/arousal, not the self-reported EmpathicSchool stress
+classes. DevEmo+ labels are facial-expression categories. Neither can replace
+`Stress_level.csv` for stress training.
+
+
 ## Dataset audit — do not substitute emotion labels for stress labels
 
 The NeuroSense Library was audited on 2026-11-21. The available AFFEC pack contains
