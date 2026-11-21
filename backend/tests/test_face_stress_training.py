@@ -246,3 +246,18 @@ def test_emowork_pair_discovery_does_not_confuse_condition_with_participant(tmp_
 
     with pytest.raises(ValueError, match="Expected one video-feature CSV"):
         discover_dataset_pairs(tmp_path)
+
+
+def test_emowork_pair_discovery_accepts_labels_plural_directory(tmp_path: Path):
+    label_dir = tmp_path / "LABELS" / "2" / "c2"
+    video_dir = tmp_path / "CSV" / "VIDEO" / "2"
+    label_dir.mkdir(parents=True)
+    video_dir.mkdir(parents=True)
+    label_file = label_dir / "stress.csv"
+    video_file = video_dir / "c2.csv"
+    label_file.write_text("timestamp,stress\n0,9\n", encoding="utf-8")
+    video_file.write_text("timestamp,rotation_x\n0,0.2\n", encoding="utf-8")
+
+    pairs = discover_dataset_pairs(tmp_path)
+
+    assert pairs == [("2", "c2", video_file, label_file)]
