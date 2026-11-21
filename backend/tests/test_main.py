@@ -1043,6 +1043,7 @@ def test_stress_prediction_api_uses_baseline_and_records_high_stress_event(
     assert body["stress_score"] == 80.0
     assert body["stress_probability"] == 0.8
     assert body["model_validated"] is False
+    assert any("GSR was excluded" in warning for warning in body["model_input_warnings"])
 
     events = client.get(
         "/api/events/high-stress",
@@ -2150,8 +2151,8 @@ def test_model_features_preserve_missing_sensor_values_for_imputation():
     assert api.np.isnan(features["skin_temperature_delta"])
 
 
-def test_model_features_preserve_valid_zero_measurement():
-    """A supplied numeric zero is not confused with a missing value."""
+def test_model_features_preserve_valid_zero_measurement_and_exclude_raw_gsr():
+    """HRV zero is valid, but uncalibrated ADC counts must not enter the model."""
     features = api.build_model_features(
         {
             "heart_rate_bpm": 72.0,
@@ -2168,10 +2169,33 @@ def test_model_features_preserve_valid_zero_measurement():
     )
 
     assert features["hrv_ms"] == 0.0
-    assert features["gsr_raw"] == 0.0
     assert features["hrv_delta"] == -10.0
-    assert features["gsr_delta"] == -100.0
+    assert api.np.isnan(features["gsr_raw"])
+    assert api.np.isnan(features["gsr_delta"])
     assert api.np.isnan(features["skin_temperature_c"])
+
+
+def test_model_features_exclude_unscaled_esp32_gsr_adc_counts():
+    """0-4095 ADC counts are not WESAD EDA microsiemens."""
+    features = api.build_model_features(
+        {
+            "heart_rate_bpm": 82.0,
+            "hrv_ms": 38.0,
+            "gsr_raw": 2300,
+            "skin_temperature_c": 33.2,
+        },
+        {
+            "heart_rate_bpm": 70.0,
+            "hrv_ms": 45.0,
+            "gsr_raw": 1500,
+            "skin_temperature_c": 33.0,
+        },
+    )
+
+    assert features["heart_rate_bpm"] == 82.0
+    assert features["heart_rate_delta"] == 12.0
+    assert api.np.isnan(features["gsr_raw"])
+    assert api.np.isnan(features["gsr_delta"])
 
 
 def test_haptic_command_status_reports_pending_delivered_and_acknowledged(client):
