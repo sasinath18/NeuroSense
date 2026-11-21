@@ -125,7 +125,7 @@ def test_blendshape_windows_are_grouped_and_labelled_without_wearable_features()
 
     assert [row["stress_label"] for row in rows] == [0, 0, 2, 2, 1]
     assert {row["participant_id"] for row in rows} == {"S7"}
-    assert {row["task_id"] for row in rows} == {"T2"}
+    assert {row["task_id"] for row in rows} == {"T3"}
     assert "blendshape_jawOpen_mean" in rows[0]
     assert "heart_rate_bpm" not in rows[0]
     assert "gsr_raw" not in rows[0]
