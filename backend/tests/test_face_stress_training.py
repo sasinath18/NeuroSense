@@ -201,6 +201,24 @@ def test_five_interval_labels_use_published_task_timing():
     ]
 
 
+def test_five_interval_labels_reject_video_shorter_than_nine_minutes():
+    with pytest.raises(ValueError, match="at least 540 seconds"):
+        build_label_intervals([0, 1, 2, 1, 0], 539.99)
+
+
+def test_five_interval_labels_leave_recording_tail_unlabelled():
+    intervals = build_label_intervals([0, 1, 2, 1, 0], 600)
+
+    assert intervals == [
+        (0.0, 90.0, 0),
+        (90.0, 210.0, 1),
+        (210.0, 330.0, 2),
+        (330.0, 450.0, 1),
+        (450.0, 540.0, 0),
+    ]
+    assert label_for_window(540.0, 560.0, intervals) is None
+
+
 def test_shortened_t3_labels_use_consecutive_two_minute_intervals():
     intervals = build_label_intervals([0, 2, 1], 300, task_id="T3")
 
