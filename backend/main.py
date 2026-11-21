@@ -1370,6 +1370,8 @@ def maybe_send_emergency_telegram_alert(user_id: str, probability: float) -> str
     """Send a Telegram check-in using cloud-backed event history and cooldown."""
     if probability < HIGH_STRESS_THRESHOLD:
         return "not_triggered"
+    if not telegram_configured():
+        return "not_configured"
 
     now = utc_now()
     now_text = iso(now)
