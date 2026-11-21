@@ -161,6 +161,15 @@ authorised local dataset:
 
     python ml_model/train_face_stress_model.py --dataset-root data/empathicschool --audit-only
 
+For an aggregate-only report that omits participant IDs, task IDs, file names and
+per-task details, use:
+
+    python ml_model/train_face_stress_model.py --dataset-root data/empathicschool --audit-summary-only
+
+The summary still contains aggregate dataset counts and class distribution. Keep it
+within the permissions of the Research Use License; do not publish or share it unless
+the agreement permits that use. This mode does not download MediaPipe or decode video.
+
 The audit checks each consented MP4 against its task-level `Stress_level.csv`,
 validates the video duration and label-interval mapping (including shortened T3
 tasks), and reports participant count and the 0/1/2 class distribution. It
