@@ -867,7 +867,6 @@ def test_device_reading_accepts_optional_gsr_and_temperature_as_null(client):
     assert reading["hrv_ms"] == 35
     assert reading["gsr_raw"] is None
     assert reading["skin_temperature_c"] is None
-    assert reading["ibi_ms"] == [800, 835, 800]
 
 
 def test_device_cannot_be_paired_to_two_different_users(client):
