@@ -156,6 +156,10 @@ unless the product architecture is deliberately changed and the rules are review
 - The free Render service currently uses SQLite and local music storage under `/tmp`; this filesystem is ephemeral. Configure Firebase Storage for durable per-user music uploads and cloud data backup.
 - Telegram emergency alerts require a configured Telegram bot token and a contact who explicitly accepts the invite. This is a check-in feature, not an emergency-response service.
 
+## Face Scan manual QA
+
+Use the [Face Scan Manual QA Checklist](docs/FACESCAN_MANUAL_QA.md) to verify camera permission, the 120-second browser-local scan, blink tracking, the model-pending stress state and stop/privacy behaviour before a prototype demonstration.
+
 ## Local development
 
 Install dependencies from `requirements.txt`, then run:
