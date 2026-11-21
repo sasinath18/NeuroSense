@@ -127,12 +127,14 @@ def build_label_intervals(
         raise ValueError("Task duration must be a finite positive number.")
 
     if len(labels) == 5:
-        if duration < 450.0:
+        if duration < 540.0:
             raise ValueError(
-                "Five EmpathicSchool interval labels require at least 450 seconds "
+                "Five EmpathicSchool interval labels require at least 540 seconds "
                 "for the documented 90/120/120/120/90-second pattern."
             )
-        boundaries = [0.0, 90.0, 210.0, 330.0, 450.0, duration]
+        # The standard task is exactly nine minutes. Do not stretch the fifth
+        # label over any recording tail beyond the documented 540-second task.
+        boundaries = [0.0, 90.0, 210.0, 330.0, 450.0, 540.0]
     elif 1 <= len(labels) < 5 and str(task_id or "").upper() == "T3":
         if duration <= 120.0 * (len(labels) - 1):
             raise ValueError(
