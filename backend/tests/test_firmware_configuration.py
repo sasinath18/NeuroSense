@@ -562,6 +562,11 @@ def test_mpu6050_detects_default_and_alternate_i2c_addresses_and_configures_rang
         def scan(self):
             return self.addresses
 
+        def readfrom_mem(self, address, register, count):
+            assert register == 0x75
+            assert count == 1
+            return bytes([0x68])
+
         def writeto_mem(self, address, register, data):
             self.writes.append((address, register, data[0]))
 
@@ -606,6 +611,9 @@ def test_mpu6050_converts_signed_accelerometer_and_gyroscope_samples():
 
         def readfrom_mem(self, address, register, count):
             assert address == 0x68
+            if register == 0x75:
+                assert count == 1
+                return bytes([0x68])
             assert register == 0x3B
             assert count == 14
             return sample
@@ -752,3 +760,28 @@ def test_mpu6050_firmware_payload_contains_all_six_motion_axes():
         "accel_x_g", "accel_y_g", "accel_z_g",
         "gyro_x_dps", "gyro_y_dps", "gyro_z_dps",
     }.issubset(payload_keys)
+
+
+
+def test_mpu6050_rejects_an_unexpected_who_am_i_chip_identity():
+    tree = _firmware_tree()
+
+    class WrongI2CDevice:
+        def scan(self):
+            return [0x68]
+
+        def readfrom_mem(self, _address, register, _count):
+            assert register == 0x75
+            return bytes([0x70])
+
+        def writeto_mem(self, _address, _register, _data):
+            raise AssertionError("Do not configure an unverified I2C device.")
+
+    class FakeTime:
+        @staticmethod
+        def sleep_ms(_duration):
+            pass
+
+    MPU6050 = _load_class(tree, "MPU6050", {"time": FakeTime()})
+    with pytest.raises(RuntimeError, match="Unexpected I2C identity"):
+        MPU6050(WrongI2CDevice())
