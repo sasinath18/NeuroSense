@@ -42,6 +42,11 @@ from backend.face_valence import (
     load_face_valence_model,
     predict_from_video_bytes,
 )
+from backend.face_arousal import (
+    MAX_VIDEO_BYTES as FACE_AROUSAL_MAX_VIDEO_BYTES,
+    load_face_arousal_model,
+    predict_from_video_bytes as predict_face_arousal_from_video_bytes,
+)
 from fastapi import (
     Depends, FastAPI, Header, HTTPException, Query, status
 )
@@ -151,6 +156,7 @@ FIREBASE_APP = None
 FIRESTORE_CLIENT = None
 STRESS_MODEL = None
 FACE_VALENCE_MODEL = None
+FACE_AROUSAL_MODEL = None
 # This AFFEC model was trained on stimulus-locked video-phase windows, not
 # arbitrary webcam selfies. Keep live webcam inference disabled until
 # numerical parity and new-user validation have been completed.
@@ -741,6 +747,40 @@ def initialize_face_valence_model() -> None:
     except Exception:
         FACE_VALENCE_MODEL = None
         logger.exception("Could not load the AFFEC felt-valence model.")
+
+
+def initialize_face_arousal_model() -> None:
+    """Load the AFFEC face-only felt-arousal model bundle."""
+    global FACE_AROUSAL_MODEL
+
+    model_path = Path(os.getenv(
+        "NEUROSENSE_FACE_AROUSAL_MODEL_PATH",
+        str(BASE_DIR / "ml_model" / "face_arousal" / "neurosense_face_arousal_gb_v2.joblib")
+    ))
+    model_url = os.getenv("NEUROSENSE_FACE_AROUSAL_MODEL_URL", "").strip() or None
+    expected_sha256 = os.getenv(
+        "NEUROSENSE_FACE_AROUSAL_MODEL_SHA256", ""
+    ).strip() or None
+
+    try:
+        FACE_AROUSAL_MODEL = load_face_arousal_model(
+            model_path=model_path,
+            model_url=model_url,
+            expected_sha256=expected_sha256,
+        )
+        logger.info(
+            "Experimental face-arousal model loaded from %s",
+            model_path,
+        )
+    except FileNotFoundError:
+        FACE_AROUSAL_MODEL = None
+        logger.warning(
+            "Face-arousal model is not configured. Set "
+            "NEUROSENSE_FACE_AROUSAL_MODEL_URL in Render."
+        )
+    except Exception:
+        FACE_AROUSAL_MODEL = None
+        logger.exception("Could not load the experimental face-arousal model.")
 
 
 # ============================================================
@@ -3203,6 +3243,7 @@ async def lifespan(app: FastAPI):
     initialize_firebase()
     initialize_ml_model()
     initialize_face_valence_model()
+    initialize_face_arousal_model()
     configure_telegram_webhook()
 
     task = asyncio.create_task(
@@ -6214,6 +6255,11 @@ def face_scan_status():
         "valence_clip_retained": False,
         "openface_available": openface_executable.is_file(),
         "face_valence_model_loaded": FACE_VALENCE_MODEL is not None,
+        "face_arousal_model_loaded": FACE_AROUSAL_MODEL is not None,
+        "face_arousal_inference_available": bool(
+            FACE_AROUSAL_MODEL is not None and openface_executable.is_file()
+        ),
+        "face_arousal_target": "f_emotion_a",
         "blink_count_available": True,
         "derived_blink_metrics_can_be_saved_per_user": True,
         "felt_valence_inference": webcam_inference_available,
@@ -6361,6 +6407,127 @@ async def predict_face_valence(
             "Experimental felt-valence estimate only; not a stress score, "
             "diagnosis, or validated emotion classification. CV mean-fold "
             "R2 is approximately 0.08; new-user validation has not been performed."
+        ),
+    }
+
+
+@app.get("/api/face/arousal/status")
+def face_arousal_status():
+    """Return availability and research limitations for face-only arousal."""
+    openface_executable = Path(os.getenv(
+        "OPENFACE_FEATURE_EXTRACTION_PATH",
+        "/opt/OpenFace/build/bin/FeatureExtraction",
+    ))
+    available = bool(
+        FACE_AROUSAL_MODEL is not None and openface_executable.is_file()
+    )
+    return {
+        "model_loaded": FACE_AROUSAL_MODEL is not None,
+        "openface_available": openface_executable.is_file(),
+        "inference_available": available,
+        "target": "f_emotion_a",
+        "label": "self_reported_felt_arousal",
+        "scale_min": 1,
+        "scale_max": 9,
+        "features_used": 44,
+        "model_type": "GradientBoostingRegressor",
+        "validation": {
+            "method": "5-fold GroupKFold by participant",
+            "participants": 20,
+            "trials": 1386,
+            "mae": 1.560525,
+            "rmse": 1.873222,
+            "r2": -0.041741,
+        },
+        "validation_warning": (
+            "Negative held-out R2 means this experimental model has not "
+            "demonstrated reliable generalization to unseen participants."
+        ),
+        "interpretation": (
+            "Experimental felt-arousal estimate only. This is not a stress "
+            "score, diagnosis, medical assessment, or alert trigger."
+        ),
+        "upload_policy": (
+            "Only short clips from an explicitly started Face Scan with "
+            "arousal-upload consent are sent for temporary OpenFace processing."
+        ),
+    }
+
+
+@app.post("/api/face/arousal/predict")
+async def predict_face_arousal(
+    video: UploadFile = File(...),
+    user_id: str = Depends(current_user_id),
+):
+    """Run one explicitly consented short webcam clip through OpenFace."""
+    del user_id  # Authentication gates use; no clip, prediction, or identity is persisted.
+
+    if FACE_AROUSAL_MODEL is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The experimental face-arousal model is not loaded. "
+                "Configure NEUROSENSE_FACE_AROUSAL_MODEL_URL in Render."
+            ),
+        )
+
+    content_type = (video.content_type or "").lower()
+    if not content_type.startswith("video/"):
+        raise HTTPException(
+            status_code=415,
+            detail="Upload a browser-recorded video clip.",
+        )
+
+    payload = await video.read(FACE_AROUSAL_MAX_VIDEO_BYTES + 1)
+    await video.close()
+    if len(payload) > FACE_AROUSAL_MAX_VIDEO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="The camera clip exceeds the 12 MB upload limit.",
+        )
+
+    openface_executable = Path(os.getenv(
+        "OPENFACE_FEATURE_EXTRACTION_PATH",
+        "/opt/OpenFace/build/bin/FeatureExtraction",
+    ))
+    openface_root = Path(os.getenv("OPENFACE_ROOT", "/opt/OpenFace"))
+
+    if not openface_executable.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail="OpenFace FeatureExtraction is unavailable on this backend.",
+        )
+
+    try:
+        result = await asyncio.to_thread(
+            predict_face_arousal_from_video_bytes,
+            FACE_AROUSAL_MODEL,
+            payload,
+            openface_executable,
+            openface_root,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except subprocess.TimeoutExpired as error:
+        raise HTTPException(
+            status_code=504,
+            detail="OpenFace processing timed out. Please retry with a clear, short clip.",
+        ) from error
+    except Exception as error:
+        logger.exception("Experimental face-arousal inference failed.")
+        raise HTTPException(
+            status_code=502,
+            detail="Face-arousal feature extraction or inference failed.",
+        ) from error
+
+    return {
+        **result,
+        "model_warning": (
+            "Research-only felt-arousal estimate (1-9). The held-out "
+            "participant R2 was negative (-0.042); this result is not a "
+            "stress score and must not drive alerts or recovery actions."
         ),
     }
 
