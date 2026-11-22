@@ -154,6 +154,10 @@ def test_face_arousal_upload_requires_explicit_consent_and_uses_short_clips():
     assert "FACE_AROUSAL_INTERVAL_MS = 15000" in script
     assert "if (!consent || !consent.checked)" in script
     assert 'apiRequest("/api/face/arousal/predict"' in script
+    assert 'new AbortController()' in script
+    assert 'faceArousalAbortController.abort()' in script
+    assert '$("enableFaceArousalCheckbox").addEventListener("change"' in script
+    assert "Experimental arousal uploads stopped because consent was withdrawn" in script
     assert 'apiRequest("/api/face/arousal/status")' in script
     assert "faceArousalCameraStatus" in section
     assert "stress_inference" not in script
