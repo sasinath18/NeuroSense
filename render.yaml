@@ -40,6 +40,12 @@ services:
         sync: false
       - key: NEUROSENSE_FACE_VALENCE_MODEL_SHA256
         sync: false
+      - key: NEUROSENSE_FACE_AROUSAL_MODEL_URL
+        sync: false
+      - key: NEUROSENSE_FACE_AROUSAL_MODEL_SHA256
+        sync: false
+      - key: NEUROSENSE_FACE_AROUSAL_MODEL_PATH
+        value: /app/ml_model/face_arousal/neurosense_face_arousal_gb_v2.joblib
       - key: NEUROSENSE_FACE_VALENCE_MODEL_PATH
         value: /app/ml_model/face_valence/neurosense_face_valence_rf.joblib
       - key: NEUROSENSE_FACE_VALENCE_WEBCAM_EXPERIMENT_ENABLED
