@@ -532,3 +532,223 @@ def test_main_attempts_wifi_reconnect_only_from_oserror_recovery_path():
         for handler in oserror_handlers
         for node in ast.walk(handler)
     ), "An OSError must trigger a Wi-Fi link-state check and reconnect attempt."
+
+
+
+def _load_class(tree: ast.Module, name: str, namespace: dict):
+    cls = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == name
+    )
+    isolated_module = ast.Module(body=[cls], type_ignores=[])
+    code = compile(ast.fix_missing_locations(isolated_module), str(FIRMWARE_PATH), "exec")
+    exec(code, namespace)
+    return namespace[name]
+
+
+def test_mpu6050_is_enabled_as_an_optional_shared_i2c_sensor():
+    tree = _firmware_tree()
+    assert _module_constant(tree, "MPU6050_SENSOR_ENABLED") is True
+
+
+def test_mpu6050_detects_default_and_alternate_i2c_addresses_and_configures_ranges():
+    tree = _firmware_tree()
+
+    class FakeBus:
+        def __init__(self, addresses):
+            self.addresses = addresses
+            self.writes = []
+
+        def scan(self):
+            return self.addresses
+
+        def writeto_mem(self, address, register, data):
+            self.writes.append((address, register, data[0]))
+
+    class FakeTime:
+        @staticmethod
+        def sleep_ms(_duration):
+            pass
+
+    MPU6050 = _load_class(tree, "MPU6050", {"time": FakeTime()})
+    for address in (0x68, 0x69):
+        bus = FakeBus([0x57, address])
+        sensor = MPU6050(bus)
+        assert sensor.address == address
+        assert bus.writes == [
+            (address, 0x6B, 0x00),
+            (address, 0x1A, 0x03),
+            (address, 0x1B, 0x00),
+            (address, 0x1C, 0x00),
+        ]
+
+
+def test_mpu6050_converts_signed_accelerometer_and_gyroscope_samples():
+    tree = _firmware_tree()
+
+    def word(value):
+        return int(value & 0xFFFF).to_bytes(2, "big")
+
+    sample = b"".join(
+        word(value)
+        for value in (
+            16384, -8192, 0, 0,  # acceleration + unused temperature
+            131, -262, 393,      # gyroscope
+        )
+    )
+
+    class FakeBus:
+        def scan(self):
+            return [0x68]
+
+        def writeto_mem(self, _address, _register, _data):
+            pass
+
+        def readfrom_mem(self, address, register, count):
+            assert address == 0x68
+            assert register == 0x3B
+            assert count == 14
+            return sample
+
+    class FakeTime:
+        @staticmethod
+        def sleep_ms(_duration):
+            pass
+
+    MPU6050 = _load_class(tree, "MPU6050", {"time": FakeTime()})
+    reading = MPU6050(FakeBus()).read()
+
+    assert reading == {
+        "accel_x_g": 1.0,
+        "accel_y_g": -0.5,
+        "accel_z_g": 0.0,
+        "gyro_x_dps": 1.0,
+        "gyro_y_dps": -2.0,
+        "gyro_z_dps": 3.0,
+    }
+
+
+def test_absent_mpu6050_does_not_block_firmware_startup():
+    tree = _firmware_tree()
+
+    class FakeBus:
+        def scan(self):
+            return [0x57]  # MAX30102 only; no MPU6050 address
+
+    class FakeTime:
+        @staticmethod
+        def sleep_ms(_duration):
+            pass
+
+    MPU6050 = _load_class(tree, "MPU6050", {"time": FakeTime()})
+    initialise = _load_function(
+        tree,
+        "initialize_optional_mpu6050",
+        {
+            "MPU6050_SENSOR_ENABLED": True,
+            "MPU6050": MPU6050,
+        },
+    )
+
+    assert initialise(FakeBus()) is None
+
+
+def test_optional_motion_read_returns_none_when_sensor_is_unavailable_or_errors():
+    tree = _firmware_tree()
+
+    class FailedSensor:
+        def read(self):
+            raise OSError("I2C read failed")
+
+    read_motion = _load_function(
+        tree,
+        "read_optional_motion",
+        {},
+    )
+
+    assert read_motion(None) is None
+    assert read_motion(FailedSensor()) is None
+
+
+def test_motion_only_firmware_upload_includes_axes_and_keeps_ppg_fields_null():
+    tree = _firmware_tree()
+    captured = {}
+
+    def fake_http_request(method, path, payload):
+        captured.update(method=method, path=path, payload=payload)
+        return 201, "created"
+
+    upload = _load_function(
+        tree,
+        "upload_sensor_reading",
+        {
+            "API_PATH": "/api/devices/test/readings",
+            "http_request": fake_http_request,
+        },
+    )
+    motion = {
+        "accel_x_g": 0.1,
+        "accel_y_g": -0.2,
+        "accel_z_g": 0.98,
+        "gyro_x_dps": 2.5,
+        "gyro_y_dps": -1.5,
+        "gyro_z_dps": 0.0,
+    }
+
+    assert upload(None, None, motion) == 201
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/devices/test/readings"
+    assert captured["payload"]["heart_rate_bpm"] is None
+    assert captured["payload"]["hrv_ms"] is None
+    assert captured["payload"]["ibi_ms"] is None
+    assert captured["payload"]["signal_quality"] == "poor"
+    for axis, value in motion.items():
+        assert captured["payload"][axis] == value
+
+
+def test_main_initializes_optional_mpu6050_and_uploads_motion_without_ppg():
+    tree = _firmware_tree()
+    main = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+
+    calls = [
+        node.func.id
+        for node in ast.walk(main)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    assert "initialize_optional_mpu6050" in calls
+    assert "read_optional_motion" in calls
+
+    upload_calls = [
+        node for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "upload_sensor_reading"
+    ]
+    assert upload_calls
+    assert any(
+        isinstance(node, ast.Name) and node.id == "motion_values"
+        for node in ast.walk(upload_calls[0])
+    )
+
+
+def test_mpu6050_data_is_stored_outside_the_wearable_model_feature_set():
+    tree = _firmware_tree()
+    upload = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "upload_sensor_reading"
+    )
+    payload_keys = {
+        item.value.value
+        for node in ast.walk(upload)
+        if isinstance(node, ast.Dict)
+        for item in node.keys
+        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+    }
+    assert {
+        "accel_x_g", "accel_y_g", "accel_z_g",
+        "gyro_x_dps", "gyro_y_dps", "gyro_z_dps",
+    }.issubset(payload_keys)
