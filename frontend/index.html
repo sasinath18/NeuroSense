@@ -759,6 +759,35 @@
             min-height: 143px;
         }
 
+        .motion-card {
+            grid-column: span 2;
+        }
+
+        .motion-axis-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 9px 12px;
+            margin-top: 13px;
+        }
+
+        .motion-axis-grid span {
+            display: block;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .motion-axis-grid strong {
+            display: inline-block;
+            margin-top: 2px;
+            font-size: 17px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .motion-card .metric-foot {
+            margin-top: 12px;
+        }
+
         .metric-top {
             display: flex;
             justify-content: space-between;
@@ -2666,6 +2695,24 @@
 
                 </article>
 
+                <article class="card metric-card motion-card">
+                    <div class="metric-top">
+                        <span class="muted small">Motion Sensor · MPU6050</span>
+                        <span class="metric-icon">⌁</span>
+                    </div>
+                    <div class="motion-axis-grid">
+                        <div><span>Accel X</span><strong id="motionAccelXValue">--</strong><small> g</small></div>
+                        <div><span>Accel Y</span><strong id="motionAccelYValue">--</strong><small> g</small></div>
+                        <div><span>Accel Z</span><strong id="motionAccelZValue">--</strong><small> g</small></div>
+                        <div><span>Gyro X</span><strong id="motionGyroXValue">--</strong><small> °/s</small></div>
+                        <div><span>Gyro Y</span><strong id="motionGyroYValue">--</strong><small> °/s</small></div>
+                        <div><span>Gyro Z</span><strong id="motionGyroZValue">--</strong><small> °/s</small></div>
+                    </div>
+                    <div id="motionSensorFoot" class="metric-foot">
+                        No MPU6050 data received yet.
+                    </div>
+                </article>
+
             </div>
 
 
@@ -4397,6 +4444,42 @@ async function refreshPublicSystemStatus() {
     }
 }
 
+function updateMotionSensorDisplay(reading) {
+    const fields = [
+        ["motionAccelXValue", "accel_x_g", 3],
+        ["motionAccelYValue", "accel_y_g", 3],
+        ["motionAccelZValue", "accel_z_g", 3],
+        ["motionGyroXValue", "gyro_x_dps", 2],
+        ["motionGyroYValue", "gyro_y_dps", 2],
+        ["motionGyroZValue", "gyro_z_dps", 2]
+    ];
+    let hasMotionData = false;
+
+    fields.forEach(([elementId, field, decimals]) => {
+        const value = reading?.[field];
+        const valid = value !== null && value !== undefined &&
+            Number.isFinite(Number(value));
+        if (valid) hasMotionData = true;
+        setText(elementId, valid ? Number(value).toFixed(decimals) : "--");
+    });
+
+    if (!hasMotionData) {
+        setText(
+            "motionSensorFoot",
+            "MPU6050 not detected or no motion data received."
+        );
+        return;
+    }
+
+    const updatedAt = reading?.timestamp || reading?.received_at;
+    setText(
+        "motionSensorFoot",
+        "Motion telemetry only · excluded from stress score" +
+            (updatedAt ? " · Updated " + formatReadingTime(updatedAt) : "")
+    );
+}
+
+
 function clearLiveSensorDisplay(message = "No authenticated wearable readings available.") {
     setText("heartRateValue", "--");
     setText("hrvValue", "--");
@@ -4419,6 +4502,7 @@ function clearLiveSensorDisplay(message = "No authenticated wearable readings av
     setText("deviceConnectionStatus", "Unknown");
     setText("deviceCommunicationStatus", "Not checked");
     setText("lastReadingAt", "None");
+    updateMotionSensorDisplay(null);
     setText("signalQualityStatus", "No reading");
     setText("stressScoreValue", "--");
     setText("stressSummary", "No stress estimate");
@@ -4617,6 +4701,7 @@ function applyDashboardData(overview, history, settings, recovery) {
     } else {
         setText("heartRateValue", displayValue(latest.heart_rate_bpm));
         setText("hrvValue", displayValue(latest.hrv_ms, 1));
+        updateMotionSensorDisplay(latest);
         const ageText = `Updated ${formatReadingTime(latest.timestamp)}`;
         setText("heartRateFoot", ageText);
         setText("hrvFoot", ageText);
