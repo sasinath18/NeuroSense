@@ -2182,6 +2182,28 @@
             margin-bottom: 16px;
         }
         .monitoring-grid > .card { min-width: 0; }
+        .motion-chart-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 9px;
+        }
+        .motion-chart-key {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+        .motion-chart-key::before {
+            content: "";
+            width: 15px;
+            height: 3px;
+            border-radius: 2px;
+            background: var(--chart-1);
+        }
+        .motion-chart-key.axis-y::before { background: var(--chart-2); }
+        .motion-chart-key.axis-z::before { background: var(--chart-3); }
         .monitoring-secondary-grid { align-items: stretch; }
         .monitoring-learning-stat {
             display: flex;
@@ -3046,6 +3068,33 @@
                         <span class="badge" id="monitorBlinkBadge">No data</span>
                     </div>
                     <div class="chart-wrap"><canvas id="monitorBlinkChart" role="img" aria-label="My blink rate history"></canvas></div>
+                </article>
+            </div>
+
+            <div class="monitoring-grid">
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>Acceleration History</h3><p>MPU6050 X/Y/Z acceleration · g</p></div>
+                        <span class="badge" id="monitorAccelBadge">No data</span>
+                    </div>
+                    <div class="chart-wrap"><canvas id="monitorAccelChart" role="img" aria-label="MPU6050 acceleration history across X, Y and Z axes"></canvas></div>
+                    <div class="motion-chart-legend">
+                        <span class="motion-chart-key">X axis</span>
+                        <span class="motion-chart-key axis-y">Y axis</span>
+                        <span class="motion-chart-key axis-z">Z axis</span>
+                    </div>
+                </article>
+                <article class="card">
+                    <div class="card-header">
+                        <div><h3>Gyroscope History</h3><p>MPU6050 X/Y/Z angular velocity · °/s</p></div>
+                        <span class="badge" id="monitorGyroBadge">No data</span>
+                    </div>
+                    <div class="chart-wrap"><canvas id="monitorGyroChart" role="img" aria-label="MPU6050 gyroscope history across X, Y and Z axes"></canvas></div>
+                    <div class="motion-chart-legend">
+                        <span class="motion-chart-key">X axis</span>
+                        <span class="motion-chart-key axis-y">Y axis</span>
+                        <span class="motion-chart-key axis-z">Z axis</span>
+                    </div>
                 </article>
             </div>
 
@@ -5111,6 +5160,25 @@ function renderMonitoringTimeline() {
     });
 }
 
+function motionChartSeries(readings, fields) {
+    const completeRows = readings.filter(reading =>
+        fields.every(field =>
+            reading[field] !== null &&
+            reading[field] !== undefined &&
+            Number.isFinite(Number(reading[field]))
+        )
+    );
+
+    return {
+        labels: completeRows.map(item => formatReadingTime(item.timestamp)),
+        series: fields.map(field => ({
+            data: completeRows.map(item => Number(item[field]))
+        })),
+        count: completeRows.length
+    };
+}
+
+
 function drawIndividualMonitoringCharts() {
     const readings = getMonitoringReadings()
         .sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -5131,6 +5199,33 @@ function drawIndividualMonitoringCharts() {
         });
         setText(badgeId, pairs.length ? pairs.length + " readings" : "No data");
     });
+
+    const acceleration = motionChartSeries(
+        readings,
+        ["accel_x_g", "accel_y_g", "accel_z_g"]
+    );
+    drawLineChart("monitorAccelChart", acceleration.series, {
+        labels: acceleration.labels,
+        decimals: 3
+    });
+    setText(
+        "monitorAccelBadge",
+        acceleration.count ? acceleration.count + " readings" : "No data"
+    );
+
+    const gyroscope = motionChartSeries(
+        readings,
+        ["gyro_x_dps", "gyro_y_dps", "gyro_z_dps"]
+    );
+    drawLineChart("monitorGyroChart", gyroscope.series, {
+        labels: gyroscope.labels,
+        decimals: 2
+    });
+    setText(
+        "monitorGyroBadge",
+        gyroscope.count ? gyroscope.count + " readings" : "No data"
+    );
+
     const cutoff = Date.now() - monitoringRangeDays * 24 * 60 * 60 * 1000;
     const blinkItems = monitoringBlinkSummaries.filter(item =>
         item.recorded_at && new Date(item.recorded_at).getTime() >= cutoff &&
