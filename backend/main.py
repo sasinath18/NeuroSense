@@ -328,6 +328,12 @@ def initialize_database() -> None:
             hrv_ms REAL,
             gsr_raw INTEGER,
             skin_temperature_c REAL,
+            accel_x_g REAL,
+            accel_y_g REAL,
+            accel_z_g REAL,
+            gyro_x_dps REAL,
+            gyro_y_dps REAL,
+            gyro_z_dps REAL,
             signal_quality TEXT NOT NULL,
             source TEXT NOT NULL,
             ibi_ms_json TEXT,
@@ -539,6 +545,12 @@ def initialize_database() -> None:
             "stress_score": "REAL",
             "stress_probability": "REAL",
             "stress_status": "TEXT",
+            "accel_x_g": "REAL",
+            "accel_y_g": "REAL",
+            "accel_z_g": "REAL",
+            "gyro_x_dps": "REAL",
+            "gyro_y_dps": "REAL",
+            "gyro_z_dps": "REAL",
         }
         for column, definition in reading_migrations.items():
             if column not in reading_columns:
@@ -1341,6 +1353,13 @@ class SensorReadingIn(StrictModel):
         default=None, ge=20, le=45
     )
 
+    accel_x_g: float | None = Field(default=None, ge=-16, le=16)
+    accel_y_g: float | None = Field(default=None, ge=-16, le=16)
+    accel_z_g: float | None = Field(default=None, ge=-16, le=16)
+    gyro_x_dps: float | None = Field(default=None, ge=-2000, le=2000)
+    gyro_y_dps: float | None = Field(default=None, ge=-2000, le=2000)
+    gyro_z_dps: float | None = Field(default=None, ge=-2000, le=2000)
+
     signal_quality: Literal[
         "good", "moderate", "poor"
     ] = "poor"
@@ -1369,6 +1388,12 @@ class SensorReadingIn(StrictModel):
             self.hrv_ms,
             self.gsr_raw,
             self.skin_temperature_c,
+            self.accel_x_g,
+            self.accel_y_g,
+            self.accel_z_g,
+            self.gyro_x_dps,
+            self.gyro_y_dps,
+            self.gyro_z_dps,
             self.ibi_ms,
             self.ppg_samples
         )):
@@ -1937,6 +1962,33 @@ def prepare_sensor_payload(
             round(reading.skin_temperature_c, 2)
             if reading.skin_temperature_c is not None
             else None
+        ),
+
+        # MPU6050 motion telemetry is persisted separately from the
+        # wearable stress model until its use is independently validated.
+        "accel_x_g": (
+            round(reading.accel_x_g, 4)
+            if reading.accel_x_g is not None else None
+        ),
+        "accel_y_g": (
+            round(reading.accel_y_g, 4)
+            if reading.accel_y_g is not None else None
+        ),
+        "accel_z_g": (
+            round(reading.accel_z_g, 4)
+            if reading.accel_z_g is not None else None
+        ),
+        "gyro_x_dps": (
+            round(reading.gyro_x_dps, 2)
+            if reading.gyro_x_dps is not None else None
+        ),
+        "gyro_y_dps": (
+            round(reading.gyro_y_dps, 2)
+            if reading.gyro_y_dps is not None else None
+        ),
+        "gyro_z_dps": (
+            round(reading.gyro_z_dps, 2)
+            if reading.gyro_z_dps is not None else None
         ),
 
         "signal_quality": quality,
@@ -2631,11 +2683,17 @@ def store_sensor_reading(
                 hrv_ms,
                 gsr_raw,
                 skin_temperature_c,
+                accel_x_g,
+                accel_y_g,
+                accel_z_g,
+                gyro_x_dps,
+                gyro_y_dps,
+                gyro_z_dps,
                 signal_quality,
                 source,
                 ibi_ms_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 reading_id,
@@ -2647,6 +2705,12 @@ def store_sensor_reading(
                 payload["hrv_ms"],
                 payload["gsr_raw"],
                 payload["skin_temperature_c"],
+                payload["accel_x_g"],
+                payload["accel_y_g"],
+                payload["accel_z_g"],
+                payload["gyro_x_dps"],
+                payload["gyro_y_dps"],
+                payload["gyro_z_dps"],
                 payload["signal_quality"],
                 payload["source"],
                 ibi_json
