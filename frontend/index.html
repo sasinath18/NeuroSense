@@ -3366,6 +3366,10 @@
                        style="margin-top:12px">
                         No camera access has been requested.
                     </p>
+                    <p id="faceArousalCameraStatus" class="muted small"
+                       role="status" aria-live="polite" style="margin-top:8px">
+                        Experimental arousal: waiting for a Face Scan.
+                    </p>
 
                 </article>
                 </div>
@@ -3382,8 +3386,8 @@
                     </div>
 
                     <div class="notice face-stress-notice">
-                        <strong>Face-only stress estimate: not available yet.</strong>
-                        This 120-second scan currently measures blink behaviour and an experimental camera pulse estimate (rPPG). A dedicated face-stress model still needs licensed-dataset training, participant-held-out evaluation and live feature validation. Blink rate and pulse alone are not treated as a stress score.
+                        <strong>Face stress estimate: not available.</strong>
+                        This scan does not calculate stress. An optional research-only felt-arousal estimate (1–9) can be sampled during the scan. Its participant-held-out R² was -0.042, so it has not demonstrated reliable generalization to unseen users and must not be treated as a stress score.
                     </div>
 
                     <div class="face-scan-metrics">
@@ -3404,9 +3408,9 @@
                             <strong id="blinkRateValue">0 <small>/ min</small></strong>
                         </div>
                         <div class="face-scan-metric">
-                            <span class="muted small">Face stress estimate</span>
-                            <strong id="faceStressValue">Not available</strong>
-                            <span id="faceStressStatus" class="muted small">Dedicated face-stress model pending</span>
+                            <span class="muted small">Face arousal estimate</span>
+                            <strong id="faceArousalValue">-- / 9</strong>
+                            <span id="faceArousalStatus" class="muted small">Optional model · not stress</span>
                         </div>
                         <div class="face-scan-metric">
                             <span class="muted small">Scan duration</span>
@@ -3438,6 +3442,16 @@
                         <canvas id="facePulseChart" role="img" aria-label="Extracted remote photoplethysmography pulse waveform"></canvas>
                     </div>
 
+                    <label class="face-arousal-consent"
+                           style="display:flex;align-items:flex-start;gap:9px;margin:14px 0 8px;line-height:1.45">
+                        <input id="enableFaceArousalCheckbox" type="checkbox"
+                               style="margin-top:3px;accent-color:var(--accent)">
+                        <span><strong>Enable experimental arousal estimate</strong> (optional)</span>
+                    </label>
+                    <p id="faceArousalConsentNote" class="muted small" style="margin-bottom:12px">
+                        When enabled, a 3.8-second camera clip is uploaded about every 15 seconds during this 120-second scan for OpenFace processing. The temporary clip and extracted CSV are deleted after each request. The rest of the scan remains browser-local.
+                    </p>
+
                     <div class="face-actions">
                         <button id="startFaceOnlyScanBtn" class="primary-btn" type="button">
                             Start 120-second Face Scan
@@ -3465,7 +3479,7 @@
 
                     <div class="privacy-list" style="margin-top:14px">
                         <div class="privacy-item"><span class="check">✓</span><span>Face landmarks and blink measurements are processed in this browser.</span></div>
-                        <div class="privacy-item"><span class="check">✓</span><span>The 120-second rPPG/blink scan stays in this browser. Only the separate, explicitly started 4.8-second felt-valence test uploads a clip; its temporary video and OpenFace CSV are deleted after processing.</span></div>
+                        <div class="privacy-item"><span class="check">✓</span><span>The 120-second rPPG/blink scan stays in this browser. If you enable the optional arousal estimate, 3.8-second camera clips are uploaded about every 15 seconds; the backend deletes each temporary video and OpenFace CSV after processing. The separate AFFEC felt-valence test remains a different opt-in experiment.</span></div>
                         <div class="privacy-item"><span class="check">✓</span><span>Stop Analysis ends the 120-second measurement; Stop Camera switches the webcam off.</span></div>
                     </div>
 
@@ -6353,6 +6367,12 @@ let faceStressFeatureWindows = [];
 let faceStressLastSampleAt = 0;
 let faceValenceBusy = false;
 let faceValenceBackendReady = false;
+let faceArousalBusy = false;
+let faceArousalBackendReady = false;
+let faceArousalTimer = null;
+let faceArousalRunId = 0;
+const FACE_AROUSAL_CAPTURE_SECONDS = 3.8;
+const FACE_AROUSAL_INTERVAL_MS = 15000;
 
 
 const FACE_LANDMARKER_VERSION = "1.2.2";
@@ -7393,8 +7413,9 @@ function resetFaceOnlyScanUI() {
     $("faceSignalQuality").textContent = "Not measured";
     $("blinkCountValue").textContent = "0";
     $("blinkRateValue").innerHTML = '0 <small>/ min</small>';
-    setText("faceStressValue", "Not available");
-    setText("faceStressStatus", "Dedicated face-stress model pending");
+    setText("faceArousalValue", "-- / 9");
+    setText("faceArousalStatus", "Optional model · not stress");
+    setText("faceArousalCameraStatus", "Experimental arousal: waiting for a Face Scan.");
     setText("eyeTrackingQualityValue", "--");
     $("faceScanElapsed").textContent = "0 / 120 sec";
     $("faceScanProgressBar").style.width = "0%";
@@ -7557,6 +7578,7 @@ function beginFaceOnlyScan() {
     faceOnlyScanActive = true;
     faceOnlyScanStartedAt = performance.now();
     faceLastRppgEstimateAt = 0;
+    beginFaceArousalSampling();
     $("startFaceOnlyScanBtn").disabled = true;
     $("stopFaceOnlyScanBtn").disabled = false;
     $("facePulseWindowBadge").textContent = "Collecting";
@@ -7588,6 +7610,7 @@ async function startFaceOnlyScan() {
     }
 
     resetFaceOnlyScanUI();
+    await refreshFaceArousalBackendStatus();
     beginFaceOnlyScan();
 }
 
@@ -7600,6 +7623,7 @@ function finishFaceOnlyScan() {
         clearInterval(faceOnlyScanTimer);
         faceOnlyScanTimer = null;
     }
+    stopFaceArousalSampling(false);
 
     $("startFaceOnlyScanBtn").disabled = false;
     $("stopFaceOnlyScanBtn").disabled = true;
@@ -7666,6 +7690,7 @@ function stopFaceOnlyScan() {
         clearInterval(faceOnlyScanTimer);
         faceOnlyScanTimer = null;
     }
+    stopFaceArousalSampling(true);
     faceStressSamples = [];
     faceStressFeatureWindows = [];
     faceStressLastSampleAt = 0;
@@ -7675,6 +7700,218 @@ function stopFaceOnlyScan() {
     $("faceRppgMessage").textContent = "Analysis stopped. The camera preview can remain on.";
     setFaceRppgStatus("Stopped", "neutral");
 }
+
+function setFaceArousalDisplay(value, status, cameraStatus) {
+    setText("faceArousalValue", value);
+    setText("faceArousalStatus", status);
+    setText("faceArousalCameraStatus", cameraStatus);
+}
+
+async function refreshFaceArousalBackendStatus() {
+    try {
+        const status = await apiRequest("/api/face/arousal/status");
+        faceArousalBackendReady = Boolean(
+            status.inference_available &&
+            status.model_loaded &&
+            status.openface_available
+        );
+
+        if (!faceArousalBackendReady) {
+            const reason = !status.model_loaded
+                ? "Arousal model not configured on server"
+                : (!status.openface_available
+                    ? "OpenFace unavailable on server"
+                    : "Arousal inference unavailable");
+            setFaceArousalDisplay(
+                "-- / 9",
+                reason,
+                "Experimental arousal unavailable: " + reason + "."
+            );
+        } else {
+            setFaceArousalDisplay(
+                "-- / 9",
+                "Ready · research-only model",
+                "Experimental arousal model ready. Opt in on the Face Scan page to sample."
+            );
+        }
+        return faceArousalBackendReady;
+    } catch (error) {
+        faceArousalBackendReady = false;
+        setFaceArousalDisplay(
+            "-- / 9",
+            "Backend unavailable",
+            "Experimental arousal backend unavailable: " + error.message
+        );
+        return false;
+    }
+}
+
+function stopFaceArousalSampling(invalidateRun) {
+    if (faceArousalTimer !== null) {
+        clearInterval(faceArousalTimer);
+        faceArousalTimer = null;
+    }
+    if (invalidateRun) faceArousalRunId += 1;
+}
+
+function beginFaceArousalSampling() {
+    stopFaceArousalSampling(true);
+
+    const consent = $("enableFaceArousalCheckbox");
+    if (!consent || !consent.checked) {
+        setFaceArousalDisplay(
+            "-- / 9",
+            "Not enabled",
+            "Experimental arousal estimate is OFF. No camera clips will be uploaded."
+        );
+        return;
+    }
+
+    if (!faceArousalBackendReady) {
+        setFaceArousalDisplay(
+            "-- / 9",
+            "Model unavailable",
+            "Arousal model is not ready on the backend. Blink and pulse analysis will continue locally."
+        );
+        return;
+    }
+
+    const runId = faceArousalRunId;
+    setFaceArousalDisplay(
+        "Collecting…",
+        "First 3.8-second sample",
+        "Experimental arousal: collecting the first short face sample…"
+    );
+
+    void captureFaceArousalSample(runId);
+    faceArousalTimer = setInterval(() => {
+        void captureFaceArousalSample(runId);
+    }, FACE_AROUSAL_INTERVAL_MS);
+}
+
+async function captureFaceArousalSample(runId) {
+    if (
+        !faceOnlyScanActive ||
+        runId !== faceArousalRunId ||
+        faceArousalBusy ||
+        !faceArousalBackendReady ||
+        !cameraStream
+    ) {
+        return;
+    }
+
+    if (!hasPrivateApiAccess()) {
+        setFaceArousalDisplay(
+            "-- / 9",
+            "Sign-in required",
+            "Arousal estimate needs an authenticated account. Local blink and pulse analysis continues."
+        );
+        return;
+    }
+
+    if (typeof MediaRecorder === "undefined") {
+        setFaceArousalDisplay(
+            "-- / 9",
+            "Recording unsupported",
+            "This browser cannot create the short video clips needed for OpenFace."
+        );
+        return;
+    }
+
+    const mimeType = [
+        "video/webm;codecs=vp9",
+        "video/webm;codecs=vp8",
+        "video/webm"
+    ].find(type => MediaRecorder.isTypeSupported(type));
+
+    if (!mimeType) {
+        setFaceArousalDisplay(
+            "-- / 9",
+            "Recording unsupported",
+            "This browser cannot create a supported WebM clip."
+        );
+        return;
+    }
+
+    faceArousalBusy = true;
+    setFaceArousalDisplay(
+        $("faceArousalValue")?.textContent || "-- / 9",
+        "Capturing / analyzing",
+        "Experimental arousal: capturing a short clip and extracting face features…"
+    );
+
+    try {
+        const chunks = [];
+        const recorder = new MediaRecorder(cameraStream, { mimeType });
+
+        const recordingStopped = new Promise((resolve, reject) => {
+            recorder.ondataavailable = event => {
+                if (event.data && event.data.size > 0) chunks.push(event.data);
+            };
+            recorder.onerror = event => reject(
+                event.error || new Error("Camera recording failed.")
+            );
+            recorder.onstop = resolve;
+        });
+
+        recorder.start();
+        await new Promise(resolve => setTimeout(
+            resolve, FACE_AROUSAL_CAPTURE_SECONDS * 1000
+        ));
+        if (recorder.state !== "inactive") recorder.stop();
+        await recordingStopped;
+
+        if (runId !== faceArousalRunId) return;
+
+        const clip = new Blob(chunks, { type: mimeType });
+        if (!clip.size) {
+            throw new Error("The camera did not produce a video clip.");
+        }
+
+        const form = new FormData();
+        form.append("video", clip, "neurosense-face-arousal.webm");
+
+        const result = await apiRequest("/api/face/arousal/predict", {
+            method: "POST",
+            body: form
+        });
+
+        if (runId !== faceArousalRunId) return;
+
+        if (result.status !== "prediction_available") {
+            setFaceArousalDisplay(
+                "-- / 9",
+                "No estimate",
+                result.reason || "Not enough valid face frames for an estimate."
+            );
+            return;
+        }
+
+        const estimate = Number(result.estimated_arousal);
+        if (!Number.isFinite(estimate)) {
+            throw new Error("The backend returned an invalid arousal estimate.");
+        }
+
+        const formatted = estimate.toFixed(1) + " / 9";
+        setFaceArousalDisplay(
+            formatted,
+            "Experimental · " + result.valid_frames + " valid frames",
+            "Felt-arousal estimate: " + formatted + " · research-only, not stress."
+        );
+    } catch (error) {
+        if (runId === faceArousalRunId) {
+            setFaceArousalDisplay(
+                "-- / 9",
+                "Estimate failed",
+                "Experimental arousal estimate failed: " + (error.message || "Unknown error")
+            );
+        }
+        console.error("Face-arousal sample failed:", error);
+    } finally {
+        faceArousalBusy = false;
+    }
+}
+
 
 async function refreshFaceValenceBackendStatus() {
     const button = $("runFaceValenceBtn");
@@ -7956,6 +8193,11 @@ function stopCamera() {
     faceValenceBackendReady = false;
     if ($("runFaceValenceBtn")) $("runFaceValenceBtn").disabled = true;
     if ($("faceValenceStatus")) $("faceValenceStatus").textContent = "Camera off";
+    setFaceArousalDisplay(
+        "-- / 9",
+        "Camera off",
+        "Experimental arousal: camera is OFF."
+    );
     cameraRequestId += 1;
     faceProcessingActive = false;
     resetFaceLightingCheck();
