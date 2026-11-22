@@ -336,6 +336,7 @@ class MPU6050:
     REG_ACCEL_CONFIG = 0x1C
     REG_ACCEL_XOUT_H = 0x3B
     REG_PWR_MGMT_1 = 0x6B
+    REG_WHO_AM_I = 0x75
     ACCEL_LSB_PER_G = 16384.0
     GYRO_LSB_PER_DPS = 131.0
 
@@ -348,6 +349,16 @@ class MPU6050:
         )
         if self.address is None:
             raise RuntimeError("MPU6050 not detected at I2C address 0x68/0x69")
+
+        identity = self.i2c.readfrom_mem(
+            self.address,
+            self.REG_WHO_AM_I,
+            1,
+        )[0]
+        if (identity & 0x7E) != 0x68:
+            raise RuntimeError(
+                "Unexpected I2C identity 0x{:02X}; MPU6050 WHO_AM_I must be 0x68".format(identity)
+            )
 
         # Wake the device and select known, conservative measurement ranges.
         self.i2c.writeto_mem(self.address, self.REG_PWR_MGMT_1, bytes([0x00]))
