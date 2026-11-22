@@ -2731,3 +2731,91 @@ def test_personal_haptic_nudge_rejects_poor_quality_and_haptic_opt_out(client, m
     )
     assert opted_out == {"queued": False, "reason": "haptic_opt_out"}
 
+
+
+
+def test_device_motion_telemetry_is_validated_and_persisted_without_ppg(client):
+    """MPU6050 samples remain useful telemetry even when no pulse estimate is available."""
+    user_id = "neurosense-mpu6050-telemetry-user"
+    device_id = "neurosense-mpu6050-telemetry-device"
+    paired = pair_test_device(client, user_id, device_id)
+    path = f"/api/devices/{device_id}/readings"
+    token_headers = {"X-Device-Token": paired["device_token"]}
+
+    payload = {
+        "accel_x_g": 0.125,
+        "accel_y_g": -0.25,
+        "accel_z_g": 0.9844,
+        "gyro_x_dps": 1.5,
+        "gyro_y_dps": -2.25,
+        "gyro_z_dps": 0.0,
+        "signal_quality": "poor",
+        "source": "wearable",
+    }
+
+    response = client.post(path, json=payload, headers=token_headers)
+
+    assert response.status_code == 201
+    reading = response.json()["reading"]
+    assert reading["heart_rate_bpm"] is None
+    assert reading["hrv_ms"] is None
+    assert reading["ibi_features"] is None
+    for axis, value in payload.items():
+        if axis in {
+            "accel_x_g", "accel_y_g", "accel_z_g",
+            "gyro_x_dps", "gyro_y_dps", "gyro_z_dps",
+        }:
+            assert reading[axis] == value
+
+    latest = client.get(
+        "/api/sensors/latest",
+        headers={"X-Demo-User": user_id},
+    )
+    assert latest.status_code == 200
+    latest_reading = latest.json()["data"]
+    assert latest_reading["accel_x_g"] == 0.125
+    assert latest_reading["gyro_y_dps"] == -2.25
+
+    history = client.get(
+        "/api/sensors/history?limit=10",
+        headers={"X-Demo-User": user_id},
+    )
+    assert history.status_code == 200
+    assert history.json()["readings"][0]["accel_z_g"] == 0.9844
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("accel_x_g", 16.01),
+        ("accel_y_g", -16.01),
+        ("gyro_x_dps", 2000.01),
+        ("gyro_z_dps", -2000.01),
+    ],
+)
+def test_device_motion_telemetry_rejects_values_outside_sensor_ranges(
+    client,
+    field,
+    value,
+):
+    user_id = "neurosense-mpu6050-range-user-" + field
+    device_id = "neurosense-mpu6050-range-" + field
+    paired = pair_test_device(client, user_id, device_id)
+    payload = {
+        "accel_x_g": 0.0,
+        "accel_y_g": 0.0,
+        "accel_z_g": 1.0,
+        "gyro_x_dps": 0.0,
+        "gyro_y_dps": 0.0,
+        "gyro_z_dps": 0.0,
+        field: value,
+        "source": "wearable",
+    }
+
+    response = client.post(
+        f"/api/devices/{device_id}/readings",
+        json=payload,
+        headers={"X-Device-Token": paired["device_token"]},
+    )
+
+    assert response.status_code == 422
