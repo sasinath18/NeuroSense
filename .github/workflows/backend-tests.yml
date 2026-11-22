@@ -46,7 +46,7 @@ jobs:
             run_openface=true
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
-            if printf '%s\n' "$changed_files" | grep -Eq '^(Dockerfile|\.dockerignore|requirements-render\.txt|requirements-affec-worker\.txt|backend/face_valence\.py|backend/face_valence_worker\.py|ml_model/face_valence/|ml_model/neurosense_stress_model\.joblib)'; then
+            if printf '%s\n' "$changed_files" | grep -Eq '^(Dockerfile|\.dockerignore|requirements-render\.txt|requirements-affec-worker\.txt|backend/face_valence\.py|backend/face_valence_worker\.py|backend/face_arousal\.py|ml_model/face_valence/|ml_model/face_arousal/|ml_model/neurosense_stress_model\.joblib)'; then
               run_openface=true
             fi
           elif [[ "$EVENT_NAME" == "push" && ( "$REF_NAME" == "feature/affec-face-valence" || "$REF_NAME" == "fix/affec-openface-smoke" ) ]]; then
@@ -83,7 +83,7 @@ jobs:
 
       - name: Validate firmware Python syntax
         run: |
-          python -m py_compile firmware/esp32_firmware.py ml_model/train_face_stress_model.py backend/face_valence.py
+          python -m py_compile firmware/esp32_firmware.py ml_model/train_face_stress_model.py backend/face_valence.py backend/face_arousal.py
 
       - name: Validate frontend JavaScript syntax
         run: |
@@ -104,7 +104,7 @@ jobs:
 
       - name: Run backend tests
         run: |
-          python -m pytest backend/tests/test_main.py backend/tests/test_face_stress_training.py backend/tests/test_recovery_features.py backend/tests/test_face_valence.py backend/tests/test_frontend_face_scan.py backend/tests/test_firmware_configuration.py -v
+          python -m pytest backend/tests/test_main.py backend/tests/test_face_stress_training.py backend/tests/test_recovery_features.py backend/tests/test_face_valence.py backend/tests/test_face_arousal.py backend/tests/test_frontend_face_scan.py backend/tests/test_firmware_configuration.py -v
 
   openface-docker-smoke:
     name: Build OpenFace image and run sample extraction
