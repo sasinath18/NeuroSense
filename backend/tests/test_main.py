@@ -2819,3 +2819,89 @@ def test_device_motion_telemetry_rejects_values_outside_sensor_ranges(
     )
 
     assert response.status_code == 422
+
+
+
+def test_mpu6050_motion_axes_are_excluded_from_wearable_stress_features():
+    reading = {
+        "heart_rate_bpm": 76.0,
+        "hrv_ms": 42.0,
+        "gsr_raw": 2000,
+        "skin_temperature_c": 33.1,
+        "accel_x_g": 0.1,
+        "accel_y_g": -0.2,
+        "accel_z_g": 0.98,
+        "gyro_x_dps": 5.0,
+        "gyro_y_dps": -3.0,
+        "gyro_z_dps": 1.0,
+    }
+    baseline = {
+        "heart_rate_bpm": 70.0,
+        "hrv_ms": 45.0,
+        "gsr_raw": 1900,
+        "skin_temperature_c": 33.0,
+    }
+
+    features = api.build_model_features(reading, baseline)
+
+    assert set(features) == {
+        "heart_rate_bpm",
+        "hrv_ms",
+        "gsr_raw",
+        "skin_temperature_c",
+        "heart_rate_delta",
+        "hrv_delta",
+        "gsr_delta",
+        "skin_temperature_delta",
+    }
+    assert not any(
+        field.startswith("accel_") or field.startswith("gyro_")
+        for field in features
+    )
+    assert features["heart_rate_bpm"] == 76.0
+    assert features["heart_rate_delta"] == 6.0
+
+
+def test_existing_sqlite_sensor_table_gets_additive_mpu6050_columns(
+    tmp_path,
+    monkeypatch,
+):
+    import sqlite3
+
+    legacy_path = tmp_path / "legacy-neurosense.sqlite3"
+    with sqlite3.connect(legacy_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE sensor_readings (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                heart_rate_bpm REAL,
+                hrv_ms REAL,
+                gsr_raw INTEGER,
+                skin_temperature_c REAL,
+                signal_quality TEXT NOT NULL,
+                source TEXT NOT NULL,
+                ibi_ms_json TEXT,
+                stress_score REAL,
+                stress_probability REAL,
+                stress_status TEXT
+            )
+            """
+        )
+
+    monkeypatch.setattr(api, "DB_PATH", legacy_path)
+    api.initialize_database()
+
+    with sqlite3.connect(legacy_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(sensor_readings)")
+        }
+
+    assert {
+        "accel_x_g", "accel_y_g", "accel_z_g",
+        "gyro_x_dps", "gyro_y_dps", "gyro_z_dps",
+    }.issubset(columns)
