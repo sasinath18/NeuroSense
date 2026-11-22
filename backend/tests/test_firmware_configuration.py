@@ -734,7 +734,7 @@ def test_main_initializes_optional_mpu6050_and_uploads_motion_without_ppg():
     )
 
 
-def test_mpu6050_data_is_stored_outside_the_wearable_model_feature_set():
+def test_mpu6050_firmware_payload_contains_all_six_motion_axes():
     tree = _firmware_tree()
     upload = next(
         node for node in tree.body
@@ -742,11 +742,11 @@ def test_mpu6050_data_is_stored_outside_the_wearable_model_feature_set():
         and node.name == "upload_sensor_reading"
     )
     payload_keys = {
-        item.value.value
+        key.value
         for node in ast.walk(upload)
         if isinstance(node, ast.Dict)
-        for item in node.keys
-        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        for key in node.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
     }
     assert {
         "accel_x_g", "accel_y_g", "accel_z_g",
