@@ -47,14 +47,16 @@ def metric_card_texts(section: str) -> list[str]:
     ]
 
 
-def test_face_scan_shows_explicit_unavailable_stress_state_until_model_is_ready():
+def test_face_scan_labels_arousal_as_experimental_and_keeps_stress_unavailable():
     section, _ = face_scan_source()
     cards = metric_card_texts(section)
 
-    stress_cards = [card for card in cards if "Face stress estimate" in card]
-    assert len(stress_cards) == 1
-    assert "Not available" in stress_cards[0]
-    assert "Dedicated face-stress model pending" in stress_cards[0]
+    arousal_cards = [card for card in cards if "Face arousal estimate" in card]
+    assert len(arousal_cards) == 1
+    assert "-- / 9" in arousal_cards[0]
+    assert "Optional model" in arousal_cards[0]
+    assert "Face stress estimate: not available." in section
+    assert "R² was -0.042" in section
 
 
 def test_face_scan_hides_separate_ear_numbers_but_keeps_tracking_quality():
@@ -142,3 +144,17 @@ def test_face_stress_feature_preparation_never_uploads_frames_or_feature_payload
 
     assert "faceStressSamples = []" in script
     assert "faceStressFeatureWindows = []" in script
+
+def test_face_arousal_upload_requires_explicit_consent_and_uses_short_clips():
+    section, script = face_scan_source()
+
+    assert 'id="enableFaceArousalCheckbox" type="checkbox"' in section
+    assert "3.8-second camera clip is uploaded about every 15 seconds" in section
+    assert "FACE_AROUSAL_CAPTURE_SECONDS = 3.8" in script
+    assert "FACE_AROUSAL_INTERVAL_MS = 15000" in script
+    assert "if (!consent || !consent.checked)" in script
+    assert 'apiRequest("/api/face/arousal/predict"' in script
+    assert 'apiRequest("/api/face/arousal/status")' in script
+    assert "faceArousalCameraStatus" in section
+    assert "stress_inference" not in script
+
