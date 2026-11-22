@@ -6371,6 +6371,7 @@ let faceArousalBusy = false;
 let faceArousalBackendReady = false;
 let faceArousalTimer = null;
 let faceArousalRunId = 0;
+let faceArousalAbortController = null;
 const FACE_AROUSAL_CAPTURE_SECONDS = 3.8;
 const FACE_AROUSAL_INTERVAL_MS = 15000;
 
@@ -7751,7 +7752,13 @@ function stopFaceArousalSampling(invalidateRun) {
         clearInterval(faceArousalTimer);
         faceArousalTimer = null;
     }
-    if (invalidateRun) faceArousalRunId += 1;
+    if (invalidateRun) {
+        faceArousalRunId += 1;
+        if (faceArousalAbortController) {
+            faceArousalAbortController.abort();
+            faceArousalAbortController = null;
+        }
+    }
 }
 
 function beginFaceArousalSampling() {
@@ -7790,12 +7797,15 @@ function beginFaceArousalSampling() {
 }
 
 async function captureFaceArousalSample(runId) {
+    const consent = $("enableFaceArousalCheckbox");
     if (
         !faceOnlyScanActive ||
         runId !== faceArousalRunId ||
         faceArousalBusy ||
         !faceArousalBackendReady ||
-        !cameraStream
+        !cameraStream ||
+        !consent ||
+        !consent.checked
     ) {
         return;
     }
@@ -7861,7 +7871,13 @@ async function captureFaceArousalSample(runId) {
         if (recorder.state !== "inactive") recorder.stop();
         await recordingStopped;
 
-        if (runId !== faceArousalRunId) return;
+        if (
+            runId !== faceArousalRunId ||
+            !faceOnlyScanActive ||
+            !$("enableFaceArousalCheckbox")?.checked
+        ) {
+            return;
+        }
 
         const clip = new Blob(chunks, { type: mimeType });
         if (!clip.size) {
@@ -7870,10 +7886,13 @@ async function captureFaceArousalSample(runId) {
 
         const form = new FormData();
         form.append("video", clip, "neurosense-face-arousal.webm");
+        const controller = new AbortController();
+        faceArousalAbortController = controller;
 
         const result = await apiRequest("/api/face/arousal/predict", {
             method: "POST",
-            body: form
+            body: form,
+            signal: controller.signal
         });
 
         if (runId !== faceArousalRunId) return;
@@ -7909,6 +7928,7 @@ async function captureFaceArousalSample(runId) {
         console.error("Face-arousal sample failed:", error);
     } finally {
         faceArousalBusy = false;
+        faceArousalAbortController = null;
     }
 }
 
@@ -8247,6 +8267,19 @@ function stopCamera() {
 
 $("startCameraBtn").addEventListener("click", startCamera);
 $("runFaceValenceBtn").addEventListener("click", runFaceValenceScan);
+$("enableFaceArousalCheckbox").addEventListener("change", () => {
+    const consent = $("enableFaceArousalCheckbox");
+    if (!consent.checked) {
+        stopFaceArousalSampling(true);
+        setFaceArousalDisplay(
+            "-- / 9",
+            "Not enabled",
+            "Experimental arousal uploads stopped because consent was withdrawn. Local blink and pulse analysis continues."
+        );
+        return;
+    }
+    if (faceOnlyScanActive) beginFaceArousalSampling();
+});
 $("startFaceOnlyScanBtn").addEventListener("click", startFaceOnlyScan);
 $("stopFaceOnlyScanBtn").addEventListener("click", stopFaceOnlyScan);
 
