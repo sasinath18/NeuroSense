@@ -33,6 +33,11 @@ const optionalSensorFunction = sourceBetween(
     "function setOptionalSensorDisplay(",
     "function setSystemInformation("
 );
+const motionDisplayFunction = sourceBetween(
+    script,
+    "function updateMotionSensorDisplay(",
+    "function clearLiveSensorDisplay("
+);
 
 function createOptionalSensorContext() {
     const values = new Map();
@@ -213,4 +218,70 @@ test("dashboard routes missing GSR and temperature fields through optional senso
     assert.match(script, /latest\.skin_temperature_c/);
     assert.match(script, /GSR module not fitted in the current hardware BOM/);
     assert.match(script, /Temperature sensor interface is not configured yet/);
+});
+
+
+
+function createMotionDisplayContext() {
+    const values = new Map();
+    const context = {
+        values,
+        setText: (id, value) => values.set(id, value),
+        formatReadingTime: (value) => value ? "formatted " + value : "None",
+    };
+    vm.createContext(context);
+    vm.runInContext(motionDisplayFunction, context);
+    return context;
+}
+
+
+test("MPU6050 dashboard shows all six values with the correct precision", () => {
+    const context = createMotionDisplayContext();
+    context.updateMotionSensorDisplay({
+        accel_x_g: 0.12549,
+        accel_y_g: -0.25,
+        accel_z_g: 0.9844,
+        gyro_x_dps: 1.5,
+        gyro_y_dps: -2.25,
+        gyro_z_dps: 0,
+        timestamp: "2026-11-22T10:00:00Z",
+    });
+
+    assert.equal(context.values.get("motionAccelXValue"), "0.125");
+    assert.equal(context.values.get("motionAccelYValue"), "-0.250");
+    assert.equal(context.values.get("motionAccelZValue"), "0.984");
+    assert.equal(context.values.get("motionGyroXValue"), "1.50");
+    assert.equal(context.values.get("motionGyroYValue"), "-2.25");
+    assert.equal(context.values.get("motionGyroZValue"), "0.00");
+    assert.match(context.values.get("motionSensorFoot"), /excluded from stress score/);
+    assert.match(context.values.get("motionSensorFoot"), /formatted 2026-11-22/);
+});
+
+
+test("missing MPU6050 readings show unavailable status without stale values", () => {
+    const context = createMotionDisplayContext();
+    context.updateMotionSensorDisplay({
+        accel_x_g: 0.1,
+        gyro_x_dps: 1.2,
+    });
+    context.updateMotionSensorDisplay(null);
+
+    for (const id of [
+        "motionAccelXValue", "motionAccelYValue", "motionAccelZValue",
+        "motionGyroXValue", "motionGyroYValue", "motionGyroZValue",
+    ]) {
+        assert.equal(context.values.get(id), "--");
+    }
+    assert.equal(
+        context.values.get("motionSensorFoot"),
+        "MPU6050 not detected or no motion data received."
+    );
+});
+
+
+test("dashboard renders MPU6050 data as telemetry, not a stress-model input", () => {
+    assert.match(html, /id="motionAccelXValue"/);
+    assert.match(html, /id="motionGyroZValue"/);
+    assert.match(script, /updateMotionSensorDisplay\(latest\)/);
+    assert.match(script, /excluded from stress score/);
 });
