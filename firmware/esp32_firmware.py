@@ -77,6 +77,10 @@ GSR_SENSOR_ENABLED = False
 # interface have not yet been confirmed. Do not probe or report it yet.
 TEMP_SENSOR_ENABLED = False
 
+# MPU6050 shares the ESP32 I2C bus with the MAX30102. It is optional at boot:
+# an absent/unwired module must not stop the PPG wearable from starting.
+MPU6050_SENSOR_ENABLED = True
+
 # Enable only after the Wi-Fi, TLS CA bundle and device token are configured.
 SEND_SENSOR_DATA = True
 
@@ -316,7 +320,103 @@ class MAX30102:
 
 
 # ============================================================
-# 5. WIFI CONNECTION
+# 5. MPU6050 MOTION SENSOR
+# ============================================================
+
+class MPU6050:
+    """Optional 6-axis motion sensor on the shared I2C bus.
+
+    The default ranges are ±2 g and ±250 degrees/second. Values are
+    telemetry only; they are deliberately excluded from stress inference.
+    """
+
+    ADDRESS_CANDIDATES = (0x68, 0x69)
+    REG_CONFIG = 0x1A
+    REG_GYRO_CONFIG = 0x1B
+    REG_ACCEL_CONFIG = 0x1C
+    REG_ACCEL_XOUT_H = 0x3B
+    REG_PWR_MGMT_1 = 0x6B
+    ACCEL_LSB_PER_G = 16384.0
+    GYRO_LSB_PER_DPS = 131.0
+
+    def __init__(self, bus):
+        self.i2c = bus
+        devices = bus.scan()
+        self.address = next(
+            (address for address in self.ADDRESS_CANDIDATES if address in devices),
+            None,
+        )
+        if self.address is None:
+            raise RuntimeError("MPU6050 not detected at I2C address 0x68/0x69")
+
+        # Wake the device and select known, conservative measurement ranges.
+        self.i2c.writeto_mem(self.address, self.REG_PWR_MGMT_1, bytes([0x00]))
+        self.i2c.writeto_mem(self.address, self.REG_CONFIG, bytes([0x03]))
+        self.i2c.writeto_mem(self.address, self.REG_GYRO_CONFIG, bytes([0x00]))
+        self.i2c.writeto_mem(self.address, self.REG_ACCEL_CONFIG, bytes([0x00]))
+        time.sleep_ms(100)
+        print("MPU6050 detected at I2C address 0x{:02X}.".format(self.address))
+
+    @staticmethod
+    def _signed_word(high, low):
+        value = (high << 8) | low
+        return value - 65536 if value & 0x8000 else value
+
+    def read(self):
+        raw = self.i2c.readfrom_mem(
+            self.address,
+            self.REG_ACCEL_XOUT_H,
+            14,
+        )
+        if len(raw) != 14:
+            raise OSError("MPU6050 returned an incomplete 14-byte sample")
+
+        accel = [
+            self._signed_word(raw[0], raw[1]),
+            self._signed_word(raw[2], raw[3]),
+            self._signed_word(raw[4], raw[5]),
+        ]
+        gyro = [
+            self._signed_word(raw[8], raw[9]),
+            self._signed_word(raw[10], raw[11]),
+            self._signed_word(raw[12], raw[13]),
+        ]
+
+        return {
+            "accel_x_g": round(accel[0] / self.ACCEL_LSB_PER_G, 4),
+            "accel_y_g": round(accel[1] / self.ACCEL_LSB_PER_G, 4),
+            "accel_z_g": round(accel[2] / self.ACCEL_LSB_PER_G, 4),
+            "gyro_x_dps": round(gyro[0] / self.GYRO_LSB_PER_DPS, 2),
+            "gyro_y_dps": round(gyro[1] / self.GYRO_LSB_PER_DPS, 2),
+            "gyro_z_dps": round(gyro[2] / self.GYRO_LSB_PER_DPS, 2),
+        }
+
+
+def initialize_optional_mpu6050(bus):
+    """Start MPU6050 when present; keep the main PPG sensor usable if absent."""
+    if not MPU6050_SENSOR_ENABLED:
+        print("MPU6050 acquisition is disabled.")
+        return None
+
+    try:
+        return MPU6050(bus)
+    except Exception as error:
+        print("MPU6050 unavailable; continuing without motion telemetry:", error)
+        return None
+
+
+def read_optional_motion(motion_sensor):
+    if motion_sensor is None:
+        return None
+    try:
+        return motion_sensor.read()
+    except OSError as error:
+        print("MPU6050 sample unavailable:", error)
+        return None
+
+
+# ============================================================
+# 6. WIFI CONNECTION
 # ============================================================
 
 def initialize_tls():
@@ -739,30 +839,41 @@ def http_request(
 
 def upload_sensor_reading(
     metrics,
-    gsr_value
+    gsr_value,
+    motion_values=None
 ):
+
+    metrics = metrics or {}
+    motion_values = motion_values or {}
 
     payload = {
 
         "heart_rate_bpm":
-            metrics["heart_rate_bpm"],
+            metrics.get("heart_rate_bpm"),
 
         "hrv_ms":
-            metrics["hrv_ms"],
+            metrics.get("hrv_ms"),
 
         "gsr_raw":
             gsr_value,
+
+        "accel_x_g": motion_values.get("accel_x_g"),
+        "accel_y_g": motion_values.get("accel_y_g"),
+        "accel_z_g": motion_values.get("accel_z_g"),
+        "gyro_x_dps": motion_values.get("gyro_x_dps"),
+        "gyro_y_dps": motion_values.get("gyro_y_dps"),
+        "gyro_z_dps": motion_values.get("gyro_z_dps"),
 
         # Temperature module is not selected yet.
         # Backend schema must allow null for this field.
 
         "skin_temperature_c": None,
 
-        "signal_quality": "moderate",
+        "signal_quality": "moderate" if metrics else "poor",
 
         "source": "wearable",
 
-        "ibi_ms": metrics["ibi_ms"]
+        "ibi_ms": metrics.get("ibi_ms")
     }
 
     status_code, response = http_request(
@@ -893,6 +1004,7 @@ def main():
     wlan = connect_wifi()
 
     sensor = MAX30102(i2c)
+    motion_sensor = initialize_optional_mpu6050(i2c)
 
     print("\nNeuroSense wearable is ready.")
 
@@ -951,6 +1063,7 @@ def main():
                 )
 
                 gsr_value = read_gsr()
+                motion_values = read_optional_motion(motion_sensor)
 
                 print("\n------------------------------")
 
@@ -965,34 +1078,49 @@ def main():
                 )
 
                 if metrics is None:
-
+                    print("PPG signal not ready or insufficient quality.")
+                else:
                     print(
-                        "PPG signal not ready or insufficient quality."
+                        "Heart rate:",
+                        metrics["heart_rate_bpm"],
+                        "BPM"
+                    )
+                    print(
+                        "Exploratory HRV:",
+                        metrics["hrv_ms"],
+                        "ms"
                     )
 
+                if motion_values is not None:
                     print(
-                        "No sensor record uploaded."
+                        "MPU6050 acceleration (g):",
+                        motion_values["accel_x_g"],
+                        motion_values["accel_y_g"],
+                        motion_values["accel_z_g"]
+                    )
+                    print(
+                        "MPU6050 gyroscope (deg/s):",
+                        motion_values["gyro_x_dps"],
+                        motion_values["gyro_y_dps"],
+                        motion_values["gyro_z_dps"]
                     )
 
+                has_measurement = (
+                    metrics is not None
+                    or gsr_value is not None
+                    or motion_values is not None
+                )
+
+                if not has_measurement:
+                    print("No valid sensor measurement available to upload.")
                     continue
-
-                print(
-                    "Heart rate:",
-                    metrics["heart_rate_bpm"],
-                    "BPM"
-                )
-
-                print(
-                    "Exploratory HRV:",
-                    metrics["hrv_ms"],
-                    "ms"
-                )
 
                 if SEND_SENSOR_DATA:
 
                     upload_sensor_reading(
                         metrics,
-                        gsr_value
+                        gsr_value,
+                        motion_values
                     )
 
                 else:
