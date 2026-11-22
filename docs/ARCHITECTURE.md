@@ -119,14 +119,16 @@ The EmoWork trainer is a separate face-derived feature experiment with a differe
 
 The application is deployed as a Docker-based Render web service from the repository's `main` branch. The configured health-check path is `/health`; the application also documents `/dashboard` and `/docs`.
 
-**Operational verification (2026-11-22, 20:46 IST):**
-- Render service `neurosense-app` is linked to `main`, uses the root Dockerfile and has the `/health` check configured.
-- MPU6050 dashboard/API release commit `b6e090d4906d214bc76addbdf1c80dca84323380` reached Render status `live` at 2026-11-22 15:14:36 UTC (20:44:36 IST). The following identity-guard firmware commit `ae96449d7092f7005f321bc0b6d9a2a9f44fae1b` built successfully; its Render deployment was still `update_in_progress` at the time of this review. Do not assume the WHO_AM_I addition is live until Render marks that deployment live.
-- GitHub Actions backend run `45037127955` completed successfully on `ae96449d`: ESP32 firmware syntax and frontend JavaScript syntax passed; browser-local Node tests **12 passed, 0 failed**; backend pytest **248 passed in 17.06s**; Firebase Firestore/Storage Rules Emulator passed.
+**Operational verification (2026-11-22, 20:47 IST):**
+- Render service `neurosense-app` is linked to `main`, uses the root Dockerfile and has `/health` configured.
+- Latest firmware/API/dashboard source commit `ae96449d7092f7005f321bc0b6d9a2a9f44fae1b` is **live**. Render deploy `dep-dc1gd4h7kd5s73e38oj0` emitted `deploy_ended / succeeded` at 2026-11-22 15:16:52 UTC (20:46:52 IST).
+- New instance `srv-dbo4uarrjlhs73ae4p8g-77lfb` logged application startup complete and `Uvicorn running on http://0.0.0.0:10000`; Render logged `GET /health 200 OK` and reported “Your service is live”.
+- GitHub Actions backend run `45037127955` completed successfully on `ae96449d`: firmware/frontend syntax checks passed; browser-local Node tests **12 passed, 0 failed**; backend pytest **248 passed in 17.06s**; Firebase Firestore/Storage Rules Emulator passed.
 - Secret Scan run `45037127910` completed successfully on the same source commit. The conditional OpenFace Docker smoke job was skipped because its build inputs were unchanged.
-- The source-level test suite covers MPU6050 address detection and WHO_AM_I validation, signed six-axis conversion, absent-sensor fallback, motion-only device uploads, API bounds, SQLite additive migration, model-feature isolation and dashboard unavailable states.
+- Source-level tests cover MPU6050 address detection and WHO_AM_I validation, signed six-axis conversion, absent-sensor fallback, motion-only device uploads, API bounds, SQLite additive migration, model-feature isolation and dashboard unavailable states.
+- Subsequent documentation-only commits `631dea3` and `3636d47` are tagged `[skip render]`; they do not alter the live application.
 
-Automated CI/deployment checks do not replace acceptance on the physical board or signed-in browser. The MPU6050 firmware, API, persistence and dashboard paths are implemented, but sensor wiring/orientation/real-world readings still need bench validation. Google login/UID persistence, Telegram delivery, browser camera permission and user-facing dashboard flows have not been manually confirmed in this run. ESP32 firmware still must be flashed to the board and supplied with local secrets and the CA bundle.
+Automated CI/deployment checks do not replace acceptance on the physical board or signed-in browser. The MPU6050 firmware, API, persistence and dashboard paths are implemented and live, but sensor wiring/orientation/real-world readings still need bench validation. Google login/UID persistence, Telegram delivery, browser camera permission and user-facing dashboard flows have not been manually confirmed in this run. ESP32 firmware still must be flashed to the board and supplied with local secrets and the CA bundle.
 
 ## 8. Remaining acceptance checks
 
