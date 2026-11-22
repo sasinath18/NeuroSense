@@ -10,6 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OPENFACE_ROOT=/opt/OpenFace \
     OPENFACE_FEATURE_EXTRACTION_PATH=/opt/OpenFace/build/bin/FeatureExtraction \
     NEUROSENSE_FACE_VALENCE_MODEL_PATH=/app/ml_model/face_valence/neurosense_face_valence_rf.joblib \
+    NEUROSENSE_FACE_AROUSAL_MODEL_PATH=/app/ml_model/face_arousal/neurosense_face_arousal_gb_v2.joblib \
     NEUROSENSE_AFFEC_PYTHON=/opt/affec-venv/bin/python
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
