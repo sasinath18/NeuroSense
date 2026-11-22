@@ -38,6 +38,11 @@ const motionDisplayFunction = sourceBetween(
     "function updateMotionSensorDisplay(",
     "function clearLiveSensorDisplay("
 );
+const motionChartSeriesFunction = sourceBetween(
+    script,
+    "function motionChartSeries(",
+    "function drawIndividualMonitoringCharts("
+);
 
 function createOptionalSensorContext() {
     const values = new Map();
@@ -284,4 +289,91 @@ test("dashboard renders MPU6050 data as telemetry, not a stress-model input", ()
     assert.match(html, /id="motionGyroZValue"/);
     assert.match(script, /updateMotionSensorDisplay\(latest\)/);
     assert.match(script, /excluded from stress score/);
+});
+
+
+
+function createMotionChartContext() {
+    const context = {
+        formatReadingTime: (value) => value ? "t:" + value : "None",
+    };
+    vm.createContext(context);
+    vm.runInContext(motionChartSeriesFunction, context);
+    return context;
+}
+
+
+test("MPU6050 motion chart series keeps X/Y/Z values aligned by complete reading", () => {
+    const context = createMotionChartContext();
+    const readings = [
+        {
+            timestamp: "2026-11-22T10:00:00Z",
+            accel_x_g: 0.1, accel_y_g: -0.2, accel_z_g: 0.98,
+        },
+        {
+            timestamp: "2026-11-22T10:01:00Z",
+            accel_x_g: 0.2, accel_y_g: null, accel_z_g: 0.97,
+        },
+        {
+            timestamp: "2026-11-22T10:02:00Z",
+            accel_x_g: 0.3, accel_y_g: -0.4, accel_z_g: 0.96,
+        },
+    ];
+
+    const result = context.motionChartSeries(
+        readings,
+        ["accel_x_g", "accel_y_g", "accel_z_g"]
+    );
+
+    assert.equal(result.count, 2);
+    assert.deepEqual(Array.from(result.labels), [
+        "t:2026-11-22T10:00:00Z",
+        "t:2026-11-22T10:02:00Z",
+    ]);
+    assert.deepEqual(
+        Array.from(result.series, item => Array.from(item.data)),
+        [
+            [0.1, 0.3],
+            [-0.2, -0.4],
+            [0.98, 0.96],
+        ]
+    );
+});
+
+
+test("MPU6050 motion chart ignores missing and non-finite axis values", () => {
+    const context = createMotionChartContext();
+    const result = context.motionChartSeries(
+        [
+            {
+                timestamp: "2026-11-22T10:00:00Z",
+                gyro_x_dps: 1, gyro_y_dps: 2, gyro_z_dps: 3,
+            },
+            {
+                timestamp: "2026-11-22T10:01:00Z",
+                gyro_x_dps: 1, gyro_y_dps: Number.NaN, gyro_z_dps: 3,
+            },
+            {
+                timestamp: "2026-11-22T10:02:00Z",
+                gyro_x_dps: null, gyro_y_dps: 2, gyro_z_dps: 3,
+            },
+        ],
+        ["gyro_x_dps", "gyro_y_dps", "gyro_z_dps"]
+    );
+
+    assert.equal(result.count, 1);
+    assert.deepEqual(
+        Array.from(result.series, item => Array.from(item.data)),
+        [[1], [2], [3]]
+    );
+});
+
+
+test("motion history chart renders separate acceleration and gyroscope trends", () => {
+    assert.match(html, /id="monitorAccelChart"/);
+    assert.match(html, /id="monitorGyroChart"/);
+    assert.match(script, /motionChartSeries\([\s\S]*?\["accel_x_g", "accel_y_g", "accel_z_g"\]/);
+    assert.match(script, /motionChartSeries\([\s\S]*?\["gyro_x_dps", "gyro_y_dps", "gyro_z_dps"\]/);
+    assert.match(script, /monitorAccelBadge/);
+    assert.match(script, /monitorGyroBadge/);
 });
